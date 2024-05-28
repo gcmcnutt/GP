@@ -38,7 +38,7 @@ WWW:    http://www.emk.e-technik.th-darmstadt/~thomasw
 
 #include <iostream>
 #include <fstream>
-#include <strstream>
+#include <sstream>
 
 #include <stdlib.h>
 #include <new>    // For the new-handler
@@ -233,7 +233,7 @@ int main ()
   // Open the main output file for data, trail and statistics file.
   // First set up names for data file.  Remember we should delete the
   // string we got from the stream, well, just a few wasted bytes
-  ostrstream strOutFile, strStatFile, strAntFile;
+  ostringstream strOutFile, strStatFile, strAntFile;
   strOutFile  << InfoFileName << ".dat" << ends;
   strStatFile << InfoFileName << ".stc" << ends;
   strAntFile << InfoFileName << ".ant" << ends;

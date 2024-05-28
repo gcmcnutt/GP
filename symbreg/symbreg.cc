@@ -36,7 +36,7 @@ WWW:    http://www.emk.e-technik.th-darmstadt/~thomasw
 
 #include <iostream>
 #include <fstream>
-#include <strstream>
+#include <sstream>
 
 #include <stdlib.h>
 #include <new>    // For the new-handler
@@ -506,7 +506,7 @@ int main ()
   // equations are written to in TeX-style. Very nice to look at!
   // Remember we should delete the string from the stream, well just a
   // few bytes
-  ostrstream strOutFile, strStatFile, strTeXFile;
+  ostringstream strOutFile, strStatFile, strTeXFile;
   strOutFile  << InfoFileName << ".dat" << ends;
   strStatFile << InfoFileName << ".stc" << ends;
   strTeXFile  << InfoFileName << ".tex" << ends;

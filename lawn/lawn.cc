@@ -76,7 +76,7 @@ better to decrease tree length or to mow all the grass.
 
 #include <iostream>
 #include <fstream>
-#include <strstream>
+#include <sstream>
 
 #include <stdlib.h>
 #include <new>    // For the new-handler
@@ -333,7 +333,7 @@ int main ()
   // Open the main output file for data, lawn and statistics file.
   // First set up names for data file.  Remember we should delete the
   // string from the stream, well just a few bytes
-  ostrstream strOutFile, strStatFile, strLawnFile;
+  ostringstream strOutFile, strStatFile, strLawnFile;
   strOutFile  << InfoFileName << ".dat" << ends;
   strStatFile << InfoFileName << ".stc" << ends;
   strLawnFile << InfoFileName << ".lwn" << ends;

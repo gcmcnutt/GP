@@ -48,7 +48,7 @@ Fax:    (UK) 061 745 5999
 #include <stdlib.h>
 #include <new>
 #include <fstream>
-#include <strstream>
+#include <sstream>
 
 #include "gp.h"
 #include "gpconfig.h"
@@ -291,7 +291,7 @@ int main ()
   // Open the main output file for the data and statistics file.
   // First set up names for data file.  Remember we should delete the
   // string from the stream, well just a few bytes
-  ostrstream strOutFile, strStatFile;
+  ostringstream strOutFile, strStatFile;
   strOutFile  << "data.dat" << ends;
   strStatFile << "data.stc" << ends;
   ofstream fout (strOutFile.str());
