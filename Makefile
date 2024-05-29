@@ -5,6 +5,7 @@ include		./Makefile.ini
 
 all: lib
 	cd src; make
+	cd autoc; make
 	cd symbreg; make
 	cd lawn; make
 	cd skeleton; make
@@ -17,6 +18,7 @@ clean:
 	rm -f *~
 	rm -rf lib
 	cd src; make clean
+	cd autoc; make clean
 	cd symbreg; make clean
 	cd lawn; make clean
 	cd skeleton; make clean
@@ -25,6 +27,7 @@ clean:
 superclean: 
 	rm -f *~
 	cd src; make superclean
+	cd autoc; make superclean
 	cd symbreg; make superclean
 	cd lawn; make superclean
 	cd skeleton; make superclean
@@ -33,6 +36,7 @@ superclean:
 # Strip debug information (if there is any). 
 strip:
 	cd src; make strip
+	cd autoc; make strip
 	cd lawn; make strip
 	cd skeleton; make strip
 	cd ant; make strip

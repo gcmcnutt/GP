@@ -1,59 +1,23 @@
 
-// skeleton.cc
+// autoc.cc
 
 /* -------------------------------------------------------------------
-
-This is the skeleton for a new problem the user wants to tackle using
-genetic programming techniques.
-
-gpc++ - The Genetic Programming Kernel
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation; either version 1, or (at your option)
-any later version.
-
-This program is distributed in the hope that it will be useful, but
-WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-General Public License for more details.
-
-You should have received a copy of the GNU General Public License
-along with this program; if not, write to the Free Software
-Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
-
-
-Copyright 1993, 1994 Adam P. Fraser and 1996, 1997 Thomas Weinbrenner
-
-For comments, improvements, additions (or even money) contact:
-
-Thomas Weinbrenner
-Grauensteinstr. 26
-35789 Laimbach
-Germany
-E-mail: thomasw@emk.e-technik.th-darmstadt.de
-WWW:    http://www.emk.e-technik.th-darmstadt/~thomasw
-
-  or 
-
-(Address may be out of date)
-Adam Fraser, Postgraduate Section, Dept of Elec & Elec Eng,
-Maxwell Building, University Of Salford, Salford, M5 4WT, United Kingdom.
-E-mail: a.fraser@eee.salford.ac.uk
-Tel:    (UK) 061 745 5000 x3633
-Fax:    (UK) 061 745 5999
-
+From skeleton/skeleton.cc
 ------------------------------------------------------------------- */
 
 #include <stdlib.h>
+#include <math.h>
 #include <new>
 #include <fstream>
-#include <strstream>
+#include <sstream>
+#include <random>
 
 #include "gp.h"
 #include "gpconfig.h"
 
 using namespace std;
+
+double inputVar;
 
 // Define configuration parameters and the neccessary array to
 // read/write the configuration to a file.  If you need more
@@ -84,11 +48,8 @@ struct GPConfigVarInformation configArray[]=
 
 
 // Define function and terminal identifiers
-const int FUNCTION1=0;
-const int FUNCTION2=1;
-const int TERMINAL1=2;
-const int TERMINAL2=3;
-
+enum Operators {ADD=0, SUB, MUL, DIV, MOD, ABS, NEG, MAX, MIN, IF, GT, LT, EQ/*, AND, OR, NOT/*, SET,*/, GET, X, Y, Z};
+const int OPERATORS_NR_ITEM=17;
 
 
 // Define class identifiers
@@ -203,22 +164,33 @@ double MyGene::evaluate ()
 
   switch (node->value ())
     {
-    case FUNCTION1: 
-      returnValue=NthMyChild(0)->evaluate ();
-      break;
-
-    case FUNCTION2: 
-      returnValue=NthMyChild(0)->evaluate ();
-      break;
-      
-    case TERMINAL1:
-      returnValue=0.0;
-      break;
-      
-    case TERMINAL2:
-      returnValue=0.0;
-      break;
-
+      case ADD: returnValue=NthMyChild(0)->evaluate ()+NthMyChild(1)->evaluate (); break;
+      case SUB: returnValue=NthMyChild(0)->evaluate ()-NthMyChild(1)->evaluate (); break;
+      case MUL: returnValue=NthMyChild(0)->evaluate ()*NthMyChild(1)->evaluate (); break;
+      case DIV: { double divisor = NthMyChild(1)->evaluate ();
+                  divisor == 0 ? 0 : returnValue=NthMyChild(0)->evaluate ()/divisor; 
+                  break;
+      }
+      case MOD: { double divisor = NthMyChild(1)->evaluate ();
+                  divisor == 0 ? 0 : returnValue=remainder(NthMyChild(0)->evaluate (), divisor); 
+                  break;
+      }
+      case ABS: returnValue=abs (NthMyChild(0)->evaluate ()); break;
+      case NEG: returnValue=-NthMyChild(0)->evaluate (); break;
+      case MAX: returnValue=max (NthMyChild(0)->evaluate (), NthMyChild(1)->evaluate ()); break;
+      case MIN: returnValue=min (NthMyChild(0)->evaluate (), NthMyChild(1)->evaluate ()); break;
+      case IF: returnValue=NthMyChild(0)->evaluate () ? NthMyChild(1)->evaluate () : NthMyChild(2)->evaluate (); break;
+      case GT: returnValue=NthMyChild(0)->evaluate () > NthMyChild(1)->evaluate (); break;
+      case LT: returnValue=NthMyChild(0)->evaluate () < NthMyChild(1)->evaluate (); break;
+      case EQ: returnValue=NthMyChild(0)->evaluate () == NthMyChild(1)->evaluate (); break;
+      // case AND: returnValue=NthMyChild(0)->evaluate () & NthMyChild(1)->evaluate (); break;
+      // case OR: returnValue=NthMyChild(0)->evaluate () | NthMyChild(1)->evaluate (); break;
+      // case NOT: returnValue=!NthMyChild(0)->evaluate (); break;
+      // case SET: returnValue=memory[min(MEM_SIZE-1, max(0, NthMyChild(0)->evaluate ()))] = NthMyChild(1)->evaluate(); break;
+      case GET: returnValue=inputVar; break;
+      case X: returnValue=0; break;
+      case Y: returnValue=1; break;
+      case Z: returnValue=2; break;
     default: 
       GPExitSystem ("MyGene::evaluate", "Undefined node value");
     }
@@ -233,7 +205,24 @@ double MyGene::evaluate ()
 void MyGP::evaluate ()
 {
   // Evaluate main tree
-  stdFitness=NthMyGene (0)->evaluate ();
+  std::uniform_real_distribution<double> dist(-1, 1);  //(min, max)
+  //Mersenne Twister: Good quality random number generator
+  std::mt19937 rng; 
+  //Initialize with non-deterministic seeds
+  rng.seed(std::random_device{}()); 
+
+  stdFitness = 0;
+  for (int i = 0; i < 1000; i++) {
+    inputVar = dist(rng); // TODO Thread instance
+    double actual = sin(inputVar * M_PI);
+    double found = NthMyGene (0)->evaluate ();
+    double delta = abs(actual - found);
+    if (!isnan(delta) && !isinf(delta)) {
+      stdFitness += (delta * delta);
+    } else {
+      stdFitness += 1000000;
+    }
+  } 
 }
 
 
@@ -246,16 +235,33 @@ void createNodeSet (GPAdfNodeSet& adfNs)
   
   // Now define the function and terminal set for each ADF and place
   // function/terminal sets into overall ADF container
-  GPNodeSet& ns=*new GPNodeSet (4);
+  GPNodeSet& ns=*new GPNodeSet (OPERATORS_NR_ITEM);
   adfNs.put (0, ns);
   
   // Define functions/terminals and place them into the appropriate
   // sets.  Terminals take two arguments, functions three (the third
   // parameter is the number of arguments the function has)
-  ns.putNode (*new GPNode (FUNCTION1, "FUNCTION1", 1));
-  ns.putNode (*new GPNode (FUNCTION2, "FUNCTION2", 1));
-  ns.putNode (*new GPNode (TERMINAL1, "TERMINAL1"));
-  ns.putNode (*new GPNode (TERMINAL2, "TERMINAL2"));
+  ns.putNode (*new GPNode (ADD, "ADD", 2));
+  ns.putNode (*new GPNode (SUB, "SUB", 2));
+  ns.putNode (*new GPNode (MUL, "MUL", 2));
+  ns.putNode (*new GPNode (DIV, "DIV", 2));
+  ns.putNode (*new GPNode (MOD, "MOD", 2));
+  ns.putNode (*new GPNode (ABS, "ABS", 1));
+  ns.putNode (*new GPNode (NEG, "NEG", 1));
+  ns.putNode (*new GPNode (MAX, "MAX", 2));
+  ns.putNode (*new GPNode (MIN, "MIN", 2));
+  ns.putNode (*new GPNode (IF, "IF", 3));
+  ns.putNode (*new GPNode (GT, "GT", 2));
+  ns.putNode (*new GPNode (LT, "LT", 2));
+  ns.putNode (*new GPNode (EQ, "EQ", 2));
+  // ns.putNode (*new GPNode (AND, "AND", 2));
+  // ns.putNode (*new GPNode (OR, "OR", 2));
+  // ns.putNode (*new GPNode (NOT, "NOT", 1));
+  // ns.putNode (*new GPNode (SET, "SET", 2));
+  ns.putNode (*new GPNode (GET, "GET"));
+  ns.putNode (*new GPNode (X, "X"));
+  ns.putNode (*new GPNode (Y, "Y"));
+  ns.putNode (*new GPNode (Z, "Z"));
 }
 
 
@@ -278,7 +284,7 @@ int main ()
   GPInit (1, -1);
   
   // Read configuration file.
-  GPConfiguration config (cout, "skeleton.ini", configArray);
+  GPConfiguration config (cout, "autoc.ini", configArray);
   
   // Print the configuration
   cout << cfg << endl;
@@ -291,7 +297,7 @@ int main ()
   // Open the main output file for the data and statistics file.
   // First set up names for data file.  Remember we should delete the
   // string from the stream, well just a few bytes
-  ostrstream strOutFile, strStatFile;
+  ostringstream strOutFile, strStatFile;
   strOutFile  << "data.dat" << ends;
   strStatFile << "data.stc" << ends;
   ofstream fout (strOutFile.str());
@@ -313,15 +319,15 @@ int main ()
       // Create a new generation from the old one by applying the
       // genetic operators
       if (!cfg.SteadyState)
-	newPop=new MyPopulation (cfg, adfNs);
+	      newPop=new MyPopulation (cfg, adfNs);
       pop->generate (*newPop);
       
       // Delete the old generation and make the new the old one
       if (!cfg.SteadyState)
-	{
-	  delete pop;
-	  pop=newPop;
-	}
+	    {
+	      delete pop;
+	      pop=newPop;
+	    }
 
       // Create a report of this generation and how well it is doing
       pop->createGenerationReport (0, gen, fout, bout);

@@ -35,7 +35,7 @@ strip:
 
 
 # File dependencies
-autoc.o: skeleton.cc ../include/gpconfig.h ../include/gp.h
+autoc.o: autoc.cc ../include/gpconfig.h ../include/gp.h
 
 
 
