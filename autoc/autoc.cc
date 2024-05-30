@@ -200,8 +200,7 @@ double MyGene::evaluate ()
       case FAST: payload->throttle = min(100.0, payload->throttle + 1); break;
       case SLOW: payload->throttle = max(-100.0, payload->throttle - 1); break;
       case GET: { double index = (fmod(fabs(NthMyChild(0)->evaluate ()), (double)(INPUT_SIZE)));
-                  if (isnan(index) || isinf(index) || index < 0 || index >= INPUT_SIZE) index = 0;
-                  returnValue = payload->inputVar[(int) index]; 
+                  returnValue =  (isnan(index) || isinf(index)) ? 0 : payload->inputVar[(int) index];
                   break;
       }
 
