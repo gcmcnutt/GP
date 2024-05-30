@@ -17,8 +17,6 @@ From skeleton/skeleton.cc
 
 using namespace std;
 
-double inputVar;
-
 // Define configuration parameters and the neccessary array to
 // read/write the configuration to a file.  If you need more
 // variables, just add them below and insert an entry in the
@@ -48,7 +46,7 @@ struct GPConfigVarInformation configArray[]=
 
 
 // Define function and terminal identifiers
-enum Operators {ADD=0, SUB, MUL, DIV, MOD, ABS, NEG, MAX, MIN, IF, GT, LT, EQ/*, AND, OR, NOT/*, SET,*/, GET, X, Y, Z};
+enum Operators {ADD=0, SUB, MUL, DIV, MOD, ABS, NEG, MAX, MIN, IF, GT, LT, EQ/*, AND, OR, NOT*/, SET, GET, ZERO, ONE};
 const int OPERATORS_NR_ITEM=17;
 
 
@@ -57,7 +55,15 @@ const int MyGeneID=GPUserID;
 const int MyGPID=GPUserID+1;
 const int MyPopulationID=GPUserID+2;
 
-
+// temporary buffers
+#define INPUT_SIZE 1
+#define OUTPUT_SIZE 1
+class Payload {
+public:
+  double inputVar[INPUT_SIZE];
+  double outputVar[OUTPUT_SIZE];
+};
+Payload *payload = new Payload();
 
 // Inherit the three GP classes GPGene, GP and GPPopulation
 class MyGene : public GPGene
@@ -186,11 +192,16 @@ double MyGene::evaluate ()
       // case AND: returnValue=NthMyChild(0)->evaluate () & NthMyChild(1)->evaluate (); break;
       // case OR: returnValue=NthMyChild(0)->evaluate () | NthMyChild(1)->evaluate (); break;
       // case NOT: returnValue=!NthMyChild(0)->evaluate (); break;
-      // case SET: returnValue=memory[min(MEM_SIZE-1, max(0, NthMyChild(0)->evaluate ()))] = NthMyChild(1)->evaluate(); break;
-      case GET: returnValue=inputVar; break;
-      case X: returnValue=0; break;
-      case Y: returnValue=1; break;
-      case Z: returnValue=2; break;
+      case SET: { int index = max(0.0, min((double)(OUTPUT_SIZE-1), NthMyChild(0)->evaluate ()));
+                  returnValue = payload->outputVar[index] = NthMyChild(1)->evaluate (); 
+                  break;
+      }
+      case GET: { int index = max(0.0, min((double)(INPUT_SIZE-1), NthMyChild(0)->evaluate ()));
+                  returnValue = payload->inputVar[index]; 
+                  break;
+      }
+      case ZERO: returnValue=0; break;
+      case ONE: returnValue=1; break;
     default: 
       GPExitSystem ("MyGene::evaluate", "Undefined node value");
     }
@@ -213,9 +224,16 @@ void MyGP::evaluate ()
 
   stdFitness = 0;
   for (int i = 0; i < 1000; i++) {
-    inputVar = dist(rng); // TODO Thread instance
-    double actual = sin(inputVar * M_PI);
-    double found = NthMyGene (0)->evaluate ();
+    // what we should get
+    double actual = sin(payload->inputVar[0] * M_PI);
+
+    // eval
+    payload->inputVar[0] = dist(rng); // TODO Thread instance
+    payload->outputVar[0] = NAN;
+    NthMyGene (0)->evaluate ();
+    double found = payload->outputVar[0];
+
+    // how did we do?
     double delta = abs(actual - found);
     if (!isnan(delta) && !isinf(delta)) {
       stdFitness += (delta * delta);
@@ -257,11 +275,10 @@ void createNodeSet (GPAdfNodeSet& adfNs)
   // ns.putNode (*new GPNode (AND, "AND", 2));
   // ns.putNode (*new GPNode (OR, "OR", 2));
   // ns.putNode (*new GPNode (NOT, "NOT", 1));
-  // ns.putNode (*new GPNode (SET, "SET", 2));
-  ns.putNode (*new GPNode (GET, "GET"));
-  ns.putNode (*new GPNode (X, "X"));
-  ns.putNode (*new GPNode (Y, "Y"));
-  ns.putNode (*new GPNode (Z, "Z"));
+  ns.putNode (*new GPNode (SET, "SET", 2));
+  ns.putNode (*new GPNode (GET, "GET", 1));
+  ns.putNode (*new GPNode (ZERO, "ZERO"));
+  ns.putNode (*new GPNode (ONE, "ONE"));
 }
 
 
