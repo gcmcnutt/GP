@@ -46,8 +46,8 @@ struct GPConfigVarInformation configArray[]=
 
 
 // Define function and terminal identifiers
-enum Operators {ADD=0, SUB, MUL, DIV, MOD, ABS, NEG, MAX, MIN, IF, GT, LT, EQ/*, AND, OR, NOT*/, SET, GET, ZERO, ONE};
-const int OPERATORS_NR_ITEM=17;
+enum Operators {ADD=0, SUB, MUL, DIV, REM, ABS, NEG, MAX, MIN, IF, GT, LT, EQ, ZERO, ONE, LEFT, RIGHT, UP, DOWN, FAST, SLOW, GET};
+const int OPERATORS_NR_ITEM=22;
 
 
 // Define class identifiers
@@ -57,12 +57,14 @@ const int MyPopulationID=GPUserID+2;
 
 // temporary buffers
 #define INPUT_SIZE 1
-#define OUTPUT_SIZE 1
 class Payload {
 public:
   double inputVar[INPUT_SIZE];
-  double outputVar[OUTPUT_SIZE];
+  double roll;
+  double pitch;
+  double throttle;
 };
+
 Payload *payload = new Payload();
 
 // Inherit the three GP classes GPGene, GP and GPPopulation
@@ -166,7 +168,7 @@ public:
 // freedom to define this function in any way we like.  
 double MyGene::evaluate ()
 {
-  double returnValue;
+  double returnValue = 0.0;
 
   switch (node->value ())
     {
@@ -177,7 +179,7 @@ double MyGene::evaluate ()
                   divisor == 0 ? 0 : returnValue=NthMyChild(0)->evaluate ()/divisor; 
                   break;
       }
-      case MOD: { double divisor = NthMyChild(1)->evaluate ();
+      case REM: { double divisor = NthMyChild(1)->evaluate ();
                   divisor == 0 ? 0 : returnValue=remainder(NthMyChild(0)->evaluate (), divisor); 
                   break;
       }
@@ -189,19 +191,20 @@ double MyGene::evaluate ()
       case GT: returnValue=NthMyChild(0)->evaluate () > NthMyChild(1)->evaluate (); break;
       case LT: returnValue=NthMyChild(0)->evaluate () < NthMyChild(1)->evaluate (); break;
       case EQ: returnValue=NthMyChild(0)->evaluate () == NthMyChild(1)->evaluate (); break;
-      // case AND: returnValue=NthMyChild(0)->evaluate () & NthMyChild(1)->evaluate (); break;
-      // case OR: returnValue=NthMyChild(0)->evaluate () | NthMyChild(1)->evaluate (); break;
-      // case NOT: returnValue=!NthMyChild(0)->evaluate (); break;
-      case SET: { int index = max(0.0, min((double)(OUTPUT_SIZE-1), NthMyChild(0)->evaluate ()));
-                  returnValue = payload->outputVar[index] = NthMyChild(1)->evaluate (); 
-                  break;
-      }
-      case GET: { int index = max(0.0, min((double)(INPUT_SIZE-1), NthMyChild(0)->evaluate ()));
-                  returnValue = payload->inputVar[index]; 
-                  break;
-      }
       case ZERO: returnValue=0; break;
       case ONE: returnValue=1; break;
+      case LEFT: payload->roll = max(-100.0, payload->roll - 1); break;
+      case RIGHT: payload->roll = min(100.0, payload->roll + 1); break;
+      case UP: payload->pitch = min(100.0, payload->pitch + 1); break; // TODO: polarity?
+      case DOWN: payload->pitch = max(-100.0, payload->pitch - 1); break;
+      case FAST: payload->throttle = min(100.0, payload->throttle + 1); break;
+      case SLOW: payload->throttle = max(-100.0, payload->throttle - 1); break;
+      case GET: { double index = (fmod(fabs(NthMyChild(0)->evaluate ()), (double)(INPUT_SIZE)));
+                  if (isnan(index) || isinf(index) || index < 0 || index >= INPUT_SIZE) index = 0;
+                  returnValue = payload->inputVar[(int) index]; 
+                  break;
+      }
+
     default: 
       GPExitSystem ("MyGene::evaluate", "Undefined node value");
     }
@@ -224,19 +227,20 @@ void MyGP::evaluate ()
 
   stdFitness = 0;
   for (int i = 0; i < 1000; i++) {
+    payload->inputVar[0] = dist(rng); // TODO Thread instance
+
     // what we should get
     double actual = sin(payload->inputVar[0] * M_PI);
 
     // eval
-    payload->inputVar[0] = dist(rng); // TODO Thread instance
-    payload->outputVar[0] = NAN;
+    payload->roll = 0;
     NthMyGene (0)->evaluate ();
-    double found = payload->outputVar[0];
+    double found = payload->roll / 100.0;
 
     // how did we do?
     double delta = abs(actual - found);
     if (!isnan(delta) && !isinf(delta)) {
-      stdFitness += (delta * delta);
+      stdFitness += (delta);
     } else {
       stdFitness += 1000000;
     }
@@ -263,7 +267,7 @@ void createNodeSet (GPAdfNodeSet& adfNs)
   ns.putNode (*new GPNode (SUB, "SUB", 2));
   ns.putNode (*new GPNode (MUL, "MUL", 2));
   ns.putNode (*new GPNode (DIV, "DIV", 2));
-  ns.putNode (*new GPNode (MOD, "MOD", 2));
+  ns.putNode (*new GPNode (REM, "REM", 2));
   ns.putNode (*new GPNode (ABS, "ABS", 1));
   ns.putNode (*new GPNode (NEG, "NEG", 1));
   ns.putNode (*new GPNode (MAX, "MAX", 2));
@@ -272,13 +276,15 @@ void createNodeSet (GPAdfNodeSet& adfNs)
   ns.putNode (*new GPNode (GT, "GT", 2));
   ns.putNode (*new GPNode (LT, "LT", 2));
   ns.putNode (*new GPNode (EQ, "EQ", 2));
-  // ns.putNode (*new GPNode (AND, "AND", 2));
-  // ns.putNode (*new GPNode (OR, "OR", 2));
-  // ns.putNode (*new GPNode (NOT, "NOT", 1));
-  ns.putNode (*new GPNode (SET, "SET", 2));
-  ns.putNode (*new GPNode (GET, "GET", 1));
   ns.putNode (*new GPNode (ZERO, "ZERO"));
   ns.putNode (*new GPNode (ONE, "ONE"));
+  ns.putNode (*new GPNode (LEFT, "LEFT", 0));
+  ns.putNode (*new GPNode (RIGHT, "RIGHT", 0));
+  ns.putNode (*new GPNode (UP, "UP", 0));
+  ns.putNode (*new GPNode (DOWN, "DOWN", 0));
+  ns.putNode (*new GPNode (FAST, "FAST", 0));
+  ns.putNode (*new GPNode (SLOW, "SLOW", 0)); 
+  ns.putNode (*new GPNode (GET, "GET", 1));
 }
 
 
