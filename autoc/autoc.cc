@@ -176,11 +176,11 @@ double MyGene::evaluate ()
       case SUB: returnValue=NthMyChild(0)->evaluate ()-NthMyChild(1)->evaluate (); break;
       case MUL: returnValue=NthMyChild(0)->evaluate ()*NthMyChild(1)->evaluate (); break;
       case DIV: { double divisor = NthMyChild(1)->evaluate ();
-                  divisor == 0 ? 0 : returnValue=NthMyChild(0)->evaluate ()/divisor; 
+                  returnValue = (divisor == 0) ? 0 : NthMyChild(0)->evaluate ()/divisor; 
                   break;
       }
       case REM: { double divisor = NthMyChild(1)->evaluate ();
-                  divisor == 0 ? 0 : returnValue=remainder(NthMyChild(0)->evaluate (), divisor); 
+                  returnValue = (divisor == 0) ? 0 : remainder(NthMyChild(0)->evaluate (), divisor); 
                   break;
       }
       case ABS: returnValue=abs (NthMyChild(0)->evaluate ()); break;
@@ -193,12 +193,12 @@ double MyGene::evaluate ()
       case EQ: returnValue=NthMyChild(0)->evaluate () == NthMyChild(1)->evaluate (); break;
       case ZERO: returnValue=0; break;
       case ONE: returnValue=1; break;
-      case LEFT: payload->roll = max(-100.0, payload->roll - 1); break;
-      case RIGHT: payload->roll = min(100.0, payload->roll + 1); break;
-      case UP: payload->pitch = min(100.0, payload->pitch + 1); break; // TODO: polarity?
-      case DOWN: payload->pitch = max(-100.0, payload->pitch - 1); break;
-      case FAST: payload->throttle = min(100.0, payload->throttle + 1); break;
-      case SLOW: payload->throttle = max(-100.0, payload->throttle - 1); break;
+      case LEFT: returnValue = payload->roll = max(-100.0, payload->roll - 1); break;
+      case RIGHT: returnValue = payload->roll = min(100.0, payload->roll + 1); break;
+      case UP: returnValue = payload->pitch = min(100.0, payload->pitch + 1); break; // TODO: polarity?
+      case DOWN: returnValue = payload->pitch = max(-100.0, payload->pitch - 1); break;
+      case FAST: returnValue = payload->throttle = min(100.0, payload->throttle + 1); break;
+      case SLOW: returnValue = payload->throttle = max(-100.0, payload->throttle - 1); break;
       case GET: { double index = (fmod(fabs(NthMyChild(0)->evaluate ()), (double)(INPUT_SIZE)));
                   returnValue =  (isnan(index) || isinf(index)) ? 0 : payload->inputVar[(int) index];
                   break;
