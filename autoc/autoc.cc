@@ -47,10 +47,10 @@ struct GPConfigVarInformation configArray[]=
 
 
 // Define function and terminal identifiers
-enum Operators {ADD=0, SUB, MUL, DIV, ABS, IF, GT, EQ, ROLL, PITCH, THROTTLE, GET, ADF0, ADF1, ADF2};
-const int OPERATORS_NR_ITEM=15;
-enum ADF0 {A_ADD=OPERATORS_NR_ITEM, A_MUL, A_NEG, A_INV, A_SIN, A_PI, A_UNITY, A_CROSS};
-const int ADF0_NR_ITEM=8;
+enum Operators {ADD=0, SUB, MUL, DIV, ABS, IF, GT, EQ, ROLL, PITCH, THROTTLE, ADF0, ADF1, ADF2};
+const int OPERATORS_NR_ITEM=14;
+enum ADF0 {A_ADD=OPERATORS_NR_ITEM, A_MUL, A_NEG, A_INV, A_SIN, A_GET, A_CROSS};
+const int ADF0_NR_ITEM=7;
 
 
 // Define class identifiers
@@ -58,7 +58,7 @@ const int MyGeneID=GPUserID;
 const int MyGPID=GPUserID+1;
 const int MyPopulationID=GPUserID+2;
 
-Aircraft *aircraft = new Aircraft(new AircraftState());
+Aircraft *aircraftSim = new Aircraft(new AircraftState());
 
 // Inherit the three GP classes GPGene, GP and GPPopulation
 class MyGene : public GPGene
@@ -75,7 +75,7 @@ public:
 
   // Tree evaluation (not mandatory, but somehow the trees must be
   // parsed to evaluate the fitness)
-  double evaluate ();
+  double evaluate (Aircraft *aircraft);
 
   // Load and save (not mandatory)
   MyGene () {}
@@ -159,43 +159,41 @@ public:
 
 // This function evaluates the fitness of a genetic tree.  We have the
 // freedom to define this function in any way we like.  
-double MyGene::evaluate ()
+double MyGene::evaluate (Aircraft *aircraft)
 {
   double returnValue = 0.0;
 
   switch (node->value ())
     {
-      case ADD: returnValue=NthMyChild(0)->evaluate ()+NthMyChild(1)->evaluate (); break;
-      case SUB: returnValue=NthMyChild(0)->evaluate ()-NthMyChild(1)->evaluate (); break;
-      case MUL: returnValue=NthMyChild(0)->evaluate ()*NthMyChild(1)->evaluate (); break;
-      case DIV: { double divisor = NthMyChild(1)->evaluate ();
-                  returnValue = (divisor == 0) ? 0 : NthMyChild(0)->evaluate ()/divisor; 
+      case ADD: returnValue=NthMyChild(0)->evaluate (aircraft)+NthMyChild(1)->evaluate (aircraft); break;
+      case SUB: returnValue=NthMyChild(0)->evaluate (aircraft)-NthMyChild(1)->evaluate (aircraft); break;
+      case MUL: returnValue=NthMyChild(0)->evaluate (aircraft)*NthMyChild(1)->evaluate (aircraft); break;
+      case DIV: { double divisor = NthMyChild(1)->evaluate (aircraft);
+                  returnValue = (divisor == 0) ? 0 : NthMyChild(0)->evaluate (aircraft)/divisor; 
                   break;
       }
-      case ABS: returnValue=abs (NthMyChild(0)->evaluate ()); break;
-      case IF: returnValue=NthMyChild(0)->evaluate () ? NthMyChild(1)->evaluate () : NthMyChild(2)->evaluate (); break;
-      case GT: returnValue=NthMyChild(0)->evaluate () > NthMyChild(1)->evaluate (); break;
-      case EQ: returnValue=NthMyChild(0)->evaluate () == NthMyChild(1)->evaluate (); break;
-      case ROLL: returnValue = aircraft->setRollCommand(NthMyChild(0)->evaluate ()); break;
-      case PITCH: returnValue = aircraft->setRollCommand(NthMyChild(0)->evaluate ()); break;
-      case THROTTLE: returnValue = aircraft->setThrottleCommand(NthMyChild(0)->evaluate ()); break;
-      case GET: returnValue = aircraft->getState()->dRelVel; break;
-      case ADF0: returnValue = NthMyChild(0)->evaluate (); break;
-      case ADF1: returnValue = NthMyChild(0)->evaluate (); break;
-      case ADF2: returnValue = NthMyChild(0)->evaluate (); break;
+      case ABS: returnValue=abs (NthMyChild(0)->evaluate (aircraft)); break;
+      case IF: returnValue=NthMyChild(0)->evaluate (aircraft) ? NthMyChild(1)->evaluate (aircraft) : NthMyChild(2)->evaluate (aircraft); break;
+      case GT: returnValue=NthMyChild(0)->evaluate (aircraft) > NthMyChild(1)->evaluate (aircraft); break;
+      case EQ: returnValue=NthMyChild(0)->evaluate (aircraft) == NthMyChild(1)->evaluate (aircraft); break;
+      case ROLL: returnValue = aircraft->setRollCommand(NthMyChild(0)->evaluate (aircraft)); break;
+      case PITCH: returnValue = aircraft->setRollCommand(NthMyChild(0)->evaluate (aircraft)); break;
+      case THROTTLE: returnValue = aircraft->setThrottleCommand(NthMyChild(0)->evaluate (aircraft)); break;
+      case ADF0: returnValue = NthMyChild(0)->evaluate (aircraft); break;
+      case ADF1: returnValue = M_PI; break;
+      case ADF2: returnValue = 1.0; break;
       
-      case A_ADD: returnValue=NthMyChild(0)->evaluate ()+NthMyChild(1)->evaluate (); break;
-      case A_MUL: returnValue=NthMyChild(0)->evaluate ()*NthMyChild(1)->evaluate (); break;
+      case A_ADD: returnValue=NthMyChild(0)->evaluate (aircraft)+NthMyChild(1)->evaluate (aircraft); break;
+      case A_MUL: returnValue=NthMyChild(0)->evaluate (aircraft)*NthMyChild(1)->evaluate (aircraft); break;
       case A_INV: {
-              double value = NthMyChild(0)->evaluate ();
+              double value = NthMyChild(0)->evaluate (aircraft);
               returnValue = value != 0 ? 1.0/value : 0;
               break;
       }
-      case A_NEG: returnValue=-NthMyChild(0)->evaluate (); break;
-      case A_SIN: returnValue=sin (NthMyChild(0)->evaluate ()); break;
-      case A_PI: returnValue=M_PI; break;
-      case A_UNITY: returnValue=1.0; break;
-      case A_CROSS: returnValue=NthMyChild(0)->evaluate ()*NthMyChild(1)->evaluate (); break;
+      case A_NEG: returnValue=-NthMyChild(0)->evaluate (aircraft); break;
+      case A_SIN: returnValue=sin (NthMyChild(0)->evaluate (aircraft)); break;
+      case A_GET: returnValue = aircraft->getState()->dRelVel; break;
+      case A_CROSS: returnValue=NthMyChild(0)->evaluate (aircraft)*NthMyChild(1)->evaluate (aircraft); break;
 
     default: 
       GPExitSystem ("MyGene::evaluate", "Undefined node value");
@@ -241,9 +239,9 @@ void MyGP::evaluate ()
     double actual = sin(input);
 
     // eval
-    aircraft->getState()->dRelVel = input;
-    NthMyGene (0)->evaluate ();
-    double found = aircraft->getRollCommand();
+    aircraftSim->getState()->dRelVel = input;
+    NthMyGene (0)->evaluate (aircraftSim);
+    double found = aircraftSim->getRollCommand();
 
     // how did we do?
     double delta = abs(actual - found);
@@ -289,18 +287,16 @@ void createNodeSet (GPAdfNodeSet& adfNs)
   ns.putNode (*new GPNode (ROLL, "ROLL", 1));
   ns.putNode (*new GPNode (PITCH, "PITCH", 1));
   ns.putNode (*new GPNode (THROTTLE, "THROTTLE", 1));
-  ns.putNode (*new GPNode (GET, "GET"));
   ns.putNode (*new GPNode (ADF0, "ADF0", 1));
-  ns.putNode (*new GPNode (ADF1, "ADF1", 1));
-  ns.putNode (*new GPNode (ADF2, "ADF2", 1));
+  ns.putNode (*new GPNode (ADF1, "ADF1"));
+  ns.putNode (*new GPNode (ADF2, "ADF2"));
 
   adf0.putNode (*new GPNode (A_ADD, "A_ADD", 2));
   adf0.putNode (*new GPNode (A_MUL, "A_MUL", 2));
   adf0.putNode (*new GPNode (A_INV, "A_INV", 1));
   adf0.putNode (*new GPNode (A_NEG, "A_NEG", 1));
   adf0.putNode (*new GPNode (A_SIN, "A_SIN", 1));
-  adf0.putNode (*new GPNode (A_PI, "A_PI"));
-  adf0.putNode (*new GPNode (A_UNITY, "A_UNITY"));
+  adf0.putNode (*new GPNode (A_GET, "A_GET"));
   adf0.putNode (*new GPNode (A_CROSS, "A_CROSS", 2));
 
   adf1.putNode (*new GPNode (A_ADD, "A_ADD", 2));
@@ -308,8 +304,7 @@ void createNodeSet (GPAdfNodeSet& adfNs)
   adf1.putNode (*new GPNode (A_INV, "A_INV", 1));
   adf1.putNode (*new GPNode (A_NEG, "A_NEG", 1));
   adf1.putNode (*new GPNode (A_SIN, "A_SIN", 1));
-  adf1.putNode (*new GPNode (A_PI, "A_PI"));
-  adf1.putNode (*new GPNode (A_UNITY, "A_UNITY"));
+  adf1.putNode (*new GPNode (A_GET, "A_GET"));
   adf1.putNode (*new GPNode (A_CROSS, "A_CROSS", 2));
 
   adf2.putNode (*new GPNode (A_ADD, "A_ADD", 2));
@@ -317,8 +312,7 @@ void createNodeSet (GPAdfNodeSet& adfNs)
   adf2.putNode (*new GPNode (A_INV, "A_INV", 1));
   adf2.putNode (*new GPNode (A_NEG, "A_NEG", 1));
   adf2.putNode (*new GPNode (A_SIN, "A_SIN", 1));
-  adf2.putNode (*new GPNode (A_PI, "A_PI"));
-  adf2.putNode (*new GPNode (A_UNITY, "A_UNITY"));
+  adf2.putNode (*new GPNode (A_GET, "A_GET"));
   adf2.putNode (*new GPNode (A_CROSS, "A_CROSS", 2));
 }
 
