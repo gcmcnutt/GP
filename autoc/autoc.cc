@@ -14,6 +14,7 @@ From skeleton/skeleton.cc
 
 #include "gp.h"
 #include "gpconfig.h"
+#include "minisim.h"
 
 using namespace std;
 
@@ -46,8 +47,10 @@ struct GPConfigVarInformation configArray[]=
 
 
 // Define function and terminal identifiers
-enum Operators {ADD=0, SUB, MUL, DIV, REM, ABS, NEG, MAX, MIN, IF, GT, LT, EQ, ZERO, ONE, LEFT, RIGHT, UP, DOWN, FAST, SLOW, GET};
-const int OPERATORS_NR_ITEM=22;
+enum Operators {ADD=0, SUB, MUL, DIV, ABS, IF, GT, EQ, ROLL, PITCH, THROTTLE, GET, ADF0, ADF1, ADF2};
+const int OPERATORS_NR_ITEM=15;
+enum ADF0 {A_ADD=OPERATORS_NR_ITEM, A_MUL, A_NEG, A_INV, A_SIN, A_PI, A_UNITY, A_CROSS};
+const int ADF0_NR_ITEM=8;
 
 
 // Define class identifiers
@@ -55,17 +58,7 @@ const int MyGeneID=GPUserID;
 const int MyGPID=GPUserID+1;
 const int MyPopulationID=GPUserID+2;
 
-// temporary buffers
-#define INPUT_SIZE 1
-class Payload {
-public:
-  double inputVar[INPUT_SIZE];
-  double roll;
-  double pitch;
-  double throttle;
-};
-
-Payload *payload = new Payload();
+Aircraft *aircraft = new Aircraft(new AircraftState());
 
 // Inherit the three GP classes GPGene, GP and GPPopulation
 class MyGene : public GPGene
@@ -179,35 +172,40 @@ double MyGene::evaluate ()
                   returnValue = (divisor == 0) ? 0 : NthMyChild(0)->evaluate ()/divisor; 
                   break;
       }
-      case REM: { double divisor = NthMyChild(1)->evaluate ();
-                  returnValue = (divisor == 0) ? 0 : remainder(NthMyChild(0)->evaluate (), divisor); 
-                  break;
-      }
       case ABS: returnValue=abs (NthMyChild(0)->evaluate ()); break;
-      case NEG: returnValue=-NthMyChild(0)->evaluate (); break;
-      case MAX: returnValue=max (NthMyChild(0)->evaluate (), NthMyChild(1)->evaluate ()); break;
-      case MIN: returnValue=min (NthMyChild(0)->evaluate (), NthMyChild(1)->evaluate ()); break;
       case IF: returnValue=NthMyChild(0)->evaluate () ? NthMyChild(1)->evaluate () : NthMyChild(2)->evaluate (); break;
       case GT: returnValue=NthMyChild(0)->evaluate () > NthMyChild(1)->evaluate (); break;
-      case LT: returnValue=NthMyChild(0)->evaluate () < NthMyChild(1)->evaluate (); break;
       case EQ: returnValue=NthMyChild(0)->evaluate () == NthMyChild(1)->evaluate (); break;
-      case ZERO: returnValue=0; break;
-      case ONE: returnValue=1; break;
-      case LEFT: returnValue = payload->roll = max(-100.0, payload->roll - 1); break;
-      case RIGHT: returnValue = payload->roll = min(100.0, payload->roll + 1); break;
-      case UP: returnValue = payload->pitch = min(100.0, payload->pitch + 1); break; // TODO: polarity?
-      case DOWN: returnValue = payload->pitch = max(-100.0, payload->pitch - 1); break;
-      case FAST: returnValue = payload->throttle = min(100.0, payload->throttle + 1); break;
-      case SLOW: returnValue = payload->throttle = max(-100.0, payload->throttle - 1); break;
-      case GET: { double index = (fmod(fabs(NthMyChild(0)->evaluate ()), (double)(INPUT_SIZE)));
-                  returnValue =  (isnan(index) || isinf(index)) ? 0 : payload->inputVar[(int) index];
-                  break;
+      case ROLL: returnValue = aircraft->setRollCommand(NthMyChild(0)->evaluate ()); break;
+      case PITCH: returnValue = aircraft->setRollCommand(NthMyChild(0)->evaluate ()); break;
+      case THROTTLE: returnValue = aircraft->setThrottleCommand(NthMyChild(0)->evaluate ()); break;
+      case GET: returnValue = aircraft->getState()->dRelVel; break;
+      case ADF0: returnValue = NthMyChild(0)->evaluate (); break;
+      case ADF1: returnValue = NthMyChild(0)->evaluate (); break;
+      case ADF2: returnValue = NthMyChild(0)->evaluate (); break;
+      
+      case A_ADD: returnValue=NthMyChild(0)->evaluate ()+NthMyChild(1)->evaluate (); break;
+      case A_MUL: returnValue=NthMyChild(0)->evaluate ()*NthMyChild(1)->evaluate (); break;
+      case A_INV: {
+              double value = NthMyChild(0)->evaluate ();
+              returnValue = value != 0 ? 1.0/value : 0;
+              break;
       }
+      case A_NEG: returnValue=-NthMyChild(0)->evaluate (); break;
+      case A_SIN: returnValue=sin (NthMyChild(0)->evaluate ()); break;
+      case A_PI: returnValue=M_PI; break;
+      case A_UNITY: returnValue=1.0; break;
+      case A_CROSS: returnValue=NthMyChild(0)->evaluate ()*NthMyChild(1)->evaluate (); break;
 
     default: 
       GPExitSystem ("MyGene::evaluate", "Undefined node value");
     }
   
+  #define RANGELIMIT 1000000
+  if (returnValue < -RANGELIMIT)
+    return -RANGELIMIT;
+  if (returnValue > RANGELIMIT)
+    return RANGELIMIT;
   return returnValue;
 }
 
@@ -218,7 +216,7 @@ double MyGene::evaluate ()
 void MyGP::evaluate ()
 {
   // Evaluate main tree
-  std::uniform_real_distribution<double> dist(-1, 1);  //(min, max)
+  std::uniform_real_distribution<double> dist(-M_PI, M_PI);  //(min, max)
   //Mersenne Twister: Good quality random number generator
   std::mt19937 rng; 
   //Initialize with non-deterministic seeds
@@ -226,15 +224,26 @@ void MyGP::evaluate ()
 
   stdFitness = 0;
   for (int i = 0; i < 1000; i++) {
-    payload->inputVar[0] = dist(rng); // TODO Thread instance
+
+    // AircraftState state = AircraftState(0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0);
+    // Aircraft aircraft = Aircraft(state);
+    // aircraft.setPitchCommand(20);
+    // aircraft.setRollCommand(30);
+    // aircraft.setThrottleCommand(40);
+    // char output[200];
+    // aircraft.toString(output);
+    // cout << output << endl;
+
+
+    double input = dist(rng); // TODO Thread instance
 
     // what we should get
-    double actual = sin(payload->inputVar[0] * M_PI);
+    double actual = sin(input);
 
     // eval
-    payload->roll = 0;
+    aircraft->getState()->dRelVel = input;
     NthMyGene (0)->evaluate ();
-    double found = payload->roll / 100.0;
+    double found = aircraft->getRollCommand();
 
     // how did we do?
     double delta = abs(actual - found);
@@ -252,12 +261,19 @@ void MyGP::evaluate ()
 void createNodeSet (GPAdfNodeSet& adfNs)
 {
   // Reserve space for the node sets
-  adfNs.reserveSpace (1);
+  adfNs.reserveSpace (4);
   
   // Now define the function and terminal set for each ADF and place
   // function/terminal sets into overall ADF container
   GPNodeSet& ns=*new GPNodeSet (OPERATORS_NR_ITEM);
+  GPNodeSet& adf0=*new GPNodeSet (ADF0_NR_ITEM);
+  GPNodeSet& adf1=*new GPNodeSet (ADF0_NR_ITEM);
+  GPNodeSet& adf2=*new GPNodeSet (ADF0_NR_ITEM);
+
   adfNs.put (0, ns);
+  adfNs.put (1, adf0);
+  adfNs.put (2, adf1);
+  adfNs.put (3, adf2);
   
   // Define functions/terminals and place them into the appropriate
   // sets.  Terminals take two arguments, functions three (the third
@@ -266,24 +282,44 @@ void createNodeSet (GPAdfNodeSet& adfNs)
   ns.putNode (*new GPNode (SUB, "SUB", 2));
   ns.putNode (*new GPNode (MUL, "MUL", 2));
   ns.putNode (*new GPNode (DIV, "DIV", 2));
-  ns.putNode (*new GPNode (REM, "REM", 2));
   ns.putNode (*new GPNode (ABS, "ABS", 1));
-  ns.putNode (*new GPNode (NEG, "NEG", 1));
-  ns.putNode (*new GPNode (MAX, "MAX", 2));
-  ns.putNode (*new GPNode (MIN, "MIN", 2));
   ns.putNode (*new GPNode (IF, "IF", 3));
   ns.putNode (*new GPNode (GT, "GT", 2));
-  ns.putNode (*new GPNode (LT, "LT", 2));
   ns.putNode (*new GPNode (EQ, "EQ", 2));
-  ns.putNode (*new GPNode (ZERO, "ZERO"));
-  ns.putNode (*new GPNode (ONE, "ONE"));
-  ns.putNode (*new GPNode (LEFT, "LEFT", 0));
-  ns.putNode (*new GPNode (RIGHT, "RIGHT", 0));
-  ns.putNode (*new GPNode (UP, "UP", 0));
-  ns.putNode (*new GPNode (DOWN, "DOWN", 0));
-  ns.putNode (*new GPNode (FAST, "FAST", 0));
-  ns.putNode (*new GPNode (SLOW, "SLOW", 0)); 
-  ns.putNode (*new GPNode (GET, "GET", 1));
+  ns.putNode (*new GPNode (ROLL, "ROLL", 1));
+  ns.putNode (*new GPNode (PITCH, "PITCH", 1));
+  ns.putNode (*new GPNode (THROTTLE, "THROTTLE", 1));
+  ns.putNode (*new GPNode (GET, "GET"));
+  ns.putNode (*new GPNode (ADF0, "ADF0", 1));
+  ns.putNode (*new GPNode (ADF1, "ADF1", 1));
+  ns.putNode (*new GPNode (ADF2, "ADF2", 1));
+
+  adf0.putNode (*new GPNode (A_ADD, "A_ADD", 2));
+  adf0.putNode (*new GPNode (A_MUL, "A_MUL", 2));
+  adf0.putNode (*new GPNode (A_INV, "A_INV", 1));
+  adf0.putNode (*new GPNode (A_NEG, "A_NEG", 1));
+  adf0.putNode (*new GPNode (A_SIN, "A_SIN", 1));
+  adf0.putNode (*new GPNode (A_PI, "A_PI"));
+  adf0.putNode (*new GPNode (A_UNITY, "A_UNITY"));
+  adf0.putNode (*new GPNode (A_CROSS, "A_CROSS", 2));
+
+  adf1.putNode (*new GPNode (A_ADD, "A_ADD", 2));
+  adf1.putNode (*new GPNode (A_MUL, "A_MUL", 2));
+  adf1.putNode (*new GPNode (A_INV, "A_INV", 1));
+  adf1.putNode (*new GPNode (A_NEG, "A_NEG", 1));
+  adf1.putNode (*new GPNode (A_SIN, "A_SIN", 1));
+  adf1.putNode (*new GPNode (A_PI, "A_PI"));
+  adf1.putNode (*new GPNode (A_UNITY, "A_UNITY"));
+  adf1.putNode (*new GPNode (A_CROSS, "A_CROSS", 2));
+
+  adf2.putNode (*new GPNode (A_ADD, "A_ADD", 2));
+  adf2.putNode (*new GPNode (A_MUL, "A_MUL", 2));
+  adf2.putNode (*new GPNode (A_INV, "A_INV", 1));
+  adf2.putNode (*new GPNode (A_NEG, "A_NEG", 1));
+  adf2.putNode (*new GPNode (A_SIN, "A_SIN", 1));
+  adf2.putNode (*new GPNode (A_PI, "A_PI"));
+  adf2.putNode (*new GPNode (A_UNITY, "A_UNITY"));
+  adf2.putNode (*new GPNode (A_CROSS, "A_CROSS", 2));
 }
 
 

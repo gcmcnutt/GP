@@ -5,7 +5,7 @@ include		../Makefile.ini
 
 TARGET		= autoc
 
-OBJS		= autoc.o
+OBJS		= autoc.o minisim.o
 
 CPPFLAGS	= $(OVERALLCPPFLAGS) -I$(GPINCLUDE)
 LDFLAGS		= $(OVERALLLDFLAGS) -L$(GPLIB) -lgp -lm
@@ -35,7 +35,7 @@ strip:
 
 
 # File dependencies
-autoc.o: autoc.cc ../include/gpconfig.h ../include/gp.h
+autoc.o: autoc.cc minisim.h minisim.cc ../include/gpconfig.h ../include/gp.h
 
 
 
