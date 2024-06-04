@@ -56,7 +56,7 @@ const int MyGeneID=GPUserID;
 const int MyGPID=GPUserID+1;
 const int MyPopulationID=GPUserID+2;
 
-Aircraft *aircraftSim = new Aircraft(new AircraftState());
+Aircraft *aircraft = new Aircraft(new AircraftState());
 
 // Inherit the three GP classes GPGene, GP and GPPopulation
 class MyGene : public GPGene
@@ -73,7 +73,7 @@ public:
 
   // Tree evaluation (not mandatory, but somehow the trees must be
   // parsed to evaluate the fitness)
-  double evaluate (Aircraft *aircraft);
+  double evaluate (double arg);
 
   // Load and save (not mandatory)
   MyGene () {}
@@ -157,25 +157,25 @@ public:
 
 // This function evaluates the fitness of a genetic tree.  We have the
 // freedom to define this function in any way we like.  
-double MyGene::evaluate (Aircraft *aircraft)
+double MyGene::evaluate (double arg)
 {
   double returnValue = 0.0;
 
   switch (node->value ())
     {
-      case ADD: returnValue=NthMyChild(0)->evaluate (aircraft)+NthMyChild(1)->evaluate (aircraft); break;
-      case NEG: returnValue=-NthMyChild(0)->evaluate (aircraft); break;
-      case MUL: returnValue=NthMyChild(0)->evaluate (aircraft)*NthMyChild(1)->evaluate (aircraft); break;
+      case ADD: returnValue=NthMyChild(0)->evaluate (arg)+NthMyChild(1)->evaluate (arg); break;
+      case NEG: returnValue=-NthMyChild(0)->evaluate (arg); break;
+      case MUL: returnValue=NthMyChild(0)->evaluate (arg)*NthMyChild(1)->evaluate (arg); break;
       case INV: {
-                double div = NthMyChild(0)->evaluate (aircraft);
+                double div = NthMyChild(0)->evaluate (arg);
                 returnValue = div == 0 ? 0 : 1 / div;
                 break;
       }
-      case ROLL: returnValue = aircraft->setRollCommand(NthMyChild(0)->evaluate (aircraft)); break;
-      case PITCH: returnValue = aircraft->setPitchCommand(NthMyChild(0)->evaluate (aircraft)); break;
-      case THROTTLE: returnValue = aircraft->setThrottleCommand(NthMyChild(0)->evaluate (aircraft)); break;
+      case ROLL: returnValue = aircraft->setRollCommand(NthMyChild(0)->evaluate (arg)); break;
+      case PITCH: returnValue = aircraft->setPitchCommand(NthMyChild(0)->evaluate (arg)); break;
+      case THROTTLE: returnValue = aircraft->setThrottleCommand(NthMyChild(0)->evaluate (arg)); break;
       case GET: returnValue = aircraft->getState()->dRelVel; break;
-      case SIN: returnValue = sin(NthMyChild(0)->evaluate (aircraft)); break;
+      case SIN: returnValue = sin(NthMyChild(0)->evaluate (arg)); break;
       case PI: returnValue = M_PI; break;
       case ZERO: returnValue = 0; break;
       case ONE: returnValue = 1; break;
@@ -228,14 +228,14 @@ void MyGP::evaluate ()
     double throttle = tan(input / M_PI);
 
     // eval
-    aircraftSim->getState()->dRelVel = input;
-    NthMyGene (0)->evaluate (aircraftSim);
-    double pitch_found = aircraftSim->getPitchCommand();
-    double roll_found = aircraftSim->getRollCommand();
-    double throttle_found = aircraftSim->getThrottleCommand();
+    aircraft->getState()->dRelVel = input;
+    NthMyGene (0)->evaluate (0);
+    double pitch_found = aircraft->getPitchCommand();
+    double roll_found = aircraft->getRollCommand();
+    double throttle_found = aircraft->getThrottleCommand();
 
     // how did we do?
-    double delta = abs(pitch_found - pitch) + abs(roll_found - roll);// + abs(throttle_found - throttle);
+    double delta = abs(pitch_found - pitch) + abs(roll_found - roll); // + abs(throttle_found - throttle);
     if (!isnan(delta) && !isinf(delta)) {
       stdFitness += (delta);
     } else {
