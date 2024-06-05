@@ -15,6 +15,7 @@ From skeleton/skeleton.cc
 #include "gp.h"
 #include "gpconfig.h"
 #include "minisim.h"
+#include "pathgen.h"
 
 using namespace std;
 
@@ -56,7 +57,13 @@ const int MyGeneID=GPUserID;
 const int MyGPID=GPUserID+1;
 const int MyPopulationID=GPUserID+2;
 
+std::uniform_real_distribution<double> dist(-M_PI, M_PI);  //(min, max)
+//Mersenne Twister: Good quality random number generator
+std::mt19937 rng; 
+
 Aircraft *aircraft = new Aircraft(new AircraftState());
+std::vector<Point3D> path = std::vector<Point3D>();
+std::vector<double> input = std::vector<double>();
 
 // Inherit the three GP classes GPGene, GP and GPPopulation
 class MyGene : public GPGene
@@ -200,15 +207,12 @@ double MyGene::evaluate (double arg)
 // fitness.
 void MyGP::evaluate ()
 {
-  // Evaluate main tree
-  std::uniform_real_distribution<double> dist(-M_PI, M_PI);  //(min, max)
-  //Mersenne Twister: Good quality random number generator
-  std::mt19937 rng; 
-  //Initialize with non-deterministic seeds
-  rng.seed(std::random_device{}()); 
+  // deal with pre.path on the initial eval..
+  if (path.size() == 0) {
+    stdFitness = 1000001;
+  }
 
-  stdFitness = 0;
-  for (int i = 0; i < 1000; i++) {
+  for (int i = 0; i < path.size(); i++) {
 
     // AircraftState state = AircraftState(0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0);
     // Aircraft aircraft = Aircraft(state);
@@ -219,29 +223,26 @@ void MyGP::evaluate ()
     // aircraft.toString(output);
     // cout << output << endl;
 
-
-    double input = dist(rng); // TODO Thread instance
-
-    // what we should get
-    double pitch = sin(input);
-    double roll = cos(input);
-    double throttle = tan(input / M_PI);
-
     // eval
-    aircraft->getState()->dRelVel = input;
-    NthMyGene (0)->evaluate (0);
+    aircraft->getState()->dRelVel = input.at(i);
+    aircraft->setPitchCommand(nan("1"));
+    aircraft->setRollCommand(nan("2"));
+    aircraft->setThrottleCommand(nan("3"));
+
+    double retval = NthMyGene (0)->evaluate (0);
+
     double pitch_found = aircraft->getPitchCommand();
     double roll_found = aircraft->getRollCommand();
     double throttle_found = aircraft->getThrottleCommand();
 
     // how did we do?
-    double delta = abs(pitch_found - pitch) + abs(roll_found - roll); // + abs(throttle_found - throttle);
+    double delta = abs(pitch_found - path.at(i).x) + abs(roll_found - path.at(i).y);// + abs(throttle_found - path.at(i).z);
     if (!isnan(delta) && !isinf(delta)) {
-      stdFitness += (delta);
+      stdFitness += delta;
     } else {
       stdFitness += 1000000;
     }
-  } 
+  }
 }
 
 
@@ -290,6 +291,9 @@ int main ()
   // Set up a new-handler, because we might need a lot of memory, and
   // we don't know it's there.
   set_new_handler (newHandler);
+
+  //Initialize with non-deterministic seeds
+  rng.seed(std::random_device{}()); 
   
   // Init GP system.
   GPInit (1, -1);
@@ -327,6 +331,20 @@ int main ()
   MyPopulation* newPop=NULL;
   for (int gen=1; gen<=cfg.NumberOfGenerations; gen++)
     {
+      // generate the fitness test case
+      for (int i = 0; i < 1000; i++) {
+
+        double rangle = dist(rng); // TODO Thread instance
+        input.push_back(rangle);
+
+        // what we should get
+        Point3D point = Point3D();
+        point.x = sin(rangle);
+        point.y = cos(rangle);
+        point.z = tan(rangle / M_PI);
+        path.push_back(point);
+      }
+
       // Create a new generation from the old one by applying the
       // genetic operators
       if (!cfg.SteadyState)
@@ -342,6 +360,10 @@ int main ()
 
       // Create a report of this generation and how well it is doing
       pop->createGenerationReport (0, gen, fout, bout);
+
+      // TODO HACK clean out prior fitness cases
+      path.clear();
+      input.clear();
     }
 
   return 0;
