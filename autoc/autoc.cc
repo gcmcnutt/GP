@@ -48,8 +48,8 @@ struct GPConfigVarInformation configArray[]=
 
 
 // Define function and terminal identifiers
-enum Operators {ADD=0, NEG, MUL, INV, SIN, GET, ROLL, PITCH, THROTTLE, PI, ZERO, ONE};
-const int OPERATORS_NR_ITEM=12;
+enum Operators {ADD=0, SUB, MUL, DIV, SIN, COS, TAN, GET, PITCH, ROLL, THROTTLE, PI, ZERO, ONE, TWO, PROGN};
+const int OPERATORS_NR_ITEM=16;
 
 
 // Define class identifiers
@@ -171,21 +171,29 @@ double MyGene::evaluate (double arg)
   switch (node->value ())
     {
       case ADD: returnValue=NthMyChild(0)->evaluate (arg)+NthMyChild(1)->evaluate (arg); break;
-      case NEG: returnValue=-NthMyChild(0)->evaluate (arg); break;
+      case SUB: returnValue=NthMyChild(0)->evaluate (arg)-NthMyChild(1)->evaluate (arg); break;
       case MUL: returnValue=NthMyChild(0)->evaluate (arg)*NthMyChild(1)->evaluate (arg); break;
-      case INV: {
-                double div = NthMyChild(0)->evaluate (arg);
-                returnValue = div == 0 ? 0 : 1 / div;
+      case DIV: {
+                double div = NthMyChild(1)->evaluate (arg);
+                returnValue = (div == 0) ? 0 : NthMyChild(0)->evaluate (arg) / div;
                 break;
       }
-      case ROLL: returnValue = aircraft->setRollCommand(NthMyChild(0)->evaluate (arg)); break;
       case PITCH: returnValue = aircraft->setPitchCommand(NthMyChild(0)->evaluate (arg)); break;
+      case ROLL: returnValue = aircraft->setRollCommand(NthMyChild(0)->evaluate (arg)); break;
       case THROTTLE: returnValue = aircraft->setThrottleCommand(NthMyChild(0)->evaluate (arg)); break;
       case GET: returnValue = aircraft->getState()->dRelVel; break;
       case SIN: returnValue = sin(NthMyChild(0)->evaluate (arg)); break;
+      case COS: returnValue = cos(NthMyChild(0)->evaluate (arg)); break;
+      case TAN: returnValue = tan(NthMyChild(0)->evaluate (arg)); break;
       case PI: returnValue = M_PI; break;
       case ZERO: returnValue = 0; break;
       case ONE: returnValue = 1; break;
+      case TWO: returnValue = 2; break;
+      case PROGN: {
+                  NthMyChild(0)->evaluate (arg);
+                  returnValue = NthMyChild(1)->evaluate (arg);
+                  break;
+      }
 
     default: 
       GPExitSystem ("MyGene::evaluate", "Undefined node value");
@@ -210,6 +218,8 @@ void MyGP::evaluate ()
   // deal with pre.path on the initial eval..
   if (path.size() == 0) {
     stdFitness = 1000001;
+  } else {
+    stdFitness = 0.0;
   }
 
   for (int i = 0; i < path.size(); i++) {
@@ -236,7 +246,7 @@ void MyGP::evaluate ()
     double throttle_found = aircraft->getThrottleCommand();
 
     // how did we do?
-    double delta = abs(pitch_found - path.at(i).x) + abs(roll_found - path.at(i).y);// + abs(throttle_found - path.at(i).z);
+    double delta = abs(pitch_found - path.at(i).x) + abs(roll_found - path.at(i).y) + abs(throttle_found - path.at(i).z);
     if (!isnan(delta) && !isinf(delta)) {
       stdFitness += delta;
     } else {
@@ -263,17 +273,21 @@ void createNodeSet (GPAdfNodeSet& adfNs)
   // sets.  Terminals take two arguments, functions three (the third
   // parameter is the number of arguments the function has)
   ns.putNode (*new GPNode (ADD, "ADD", 2));
-  ns.putNode (*new GPNode (NEG, "NEG", 1));
+  ns.putNode (*new GPNode (SUB, "SUB", 2));
   ns.putNode (*new GPNode (MUL, "MUL", 2));
-  ns.putNode (*new GPNode (INV, "INV", 1));
-  ns.putNode (*new GPNode (ROLL, "ROLL", 1));
+  ns.putNode (*new GPNode (DIV, "DIV", 2));
   ns.putNode (*new GPNode (PITCH, "PITCH", 1));
+  ns.putNode (*new GPNode (ROLL, "ROLL", 1));
   ns.putNode (*new GPNode (THROTTLE, "THROTTLE", 1));
   ns.putNode (*new GPNode (SIN, "SIN", 1));
+  ns.putNode (*new GPNode (COS, "COS", 1));
+  ns.putNode (*new GPNode (TAN, "TAN", 1));
   ns.putNode (*new GPNode (GET, "GET"));
   ns.putNode (*new GPNode (PI, "PI"));
   ns.putNode (*new GPNode (ZERO, "ZERO"));
   ns.putNode (*new GPNode (ONE, "ONE"));
+  ns.putNode (*new GPNode (TWO, "TWO"));
+  ns.putNode (*new GPNode (PROGN, "PROGN", 2));
 }
 
 

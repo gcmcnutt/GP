@@ -33,8 +33,14 @@ std::vector<Point3D> generateSmoothPath(int numPoints, double radius) {
     std::vector<Point3D> controlPoints;
     std::vector<Point3D> path;
 
+    // Initial control point2
+    Point3D initialPoint = {0, 0, 25};
+    controlPoints.push_back(initialPoint);
+    Point3D initialPoint2 = {10, 0, 25};
+    controlPoints.push_back(initialPoint2);
+
     // Generate random control points
-    for (int i = 0; i < numPoints; ++i) {
+    for (int i = 0; i < numPoints - 2; ++i) {
         controlPoints.push_back(randomPointInHalfSphere(radius));
     }
 
