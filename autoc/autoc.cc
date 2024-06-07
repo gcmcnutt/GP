@@ -65,6 +65,7 @@ std::vector<Path> path = std::vector<Path>();
 unsigned long pathIndex = 0; // current entry on path
 bool printEval = false;
 std::ofstream fout;
+Renderer renderer = Renderer();
 
 // Inherit the three GP classes GPGene, GP and GPPopulation
 class MyGene : public GPGene
@@ -348,12 +349,9 @@ void MyGP::evaluate ()
   }
 
   if (printEval) {
-    Renderer *renderer = new Renderer(planPath, actualPath);
+    renderer.update(planPath, actualPath);
     planPath.clear();
     actualPath.clear();
-
-    // TODO free up the renderer
-    
   }
 
 }
@@ -441,6 +439,9 @@ int main ()
   strStatFile << "data.stc" << ends;
   fout.open(strOutFile.str());
   ofstream bout (strStatFile.str());
+
+  // start rendering screen
+  renderer.start();
   
   // Create a population with this configuration
   cout << "Creating initial population ..." << endl;

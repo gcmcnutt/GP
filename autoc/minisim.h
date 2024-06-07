@@ -14,6 +14,7 @@
 #include <vtkRenderWindowInteractor.h>
 #include <vtkNamedColors.h>
 #include <vtkProperty.h>
+#include <condition_variable>
 
 #define MAX_DELTA_ANGLE_RADSEC M_PI
 #define MAX_SERVO_DEFLECTION 1000.0
@@ -71,17 +72,18 @@ class Aircraft {
 
 class Renderer {
   public:
-    Renderer(std::vector<Point3D> path, std::vector<Point3D> actual);
-    ~Renderer();
+    void update(std::vector<Point3D> path, std::vector<Point3D> actual);
+    void start();
   private:
-    vtkSmartPointer<vtkNamedColors> colors;
-    vtkSmartPointer<vtkPolyDataMapper> mapper1;
-    vtkSmartPointer<vtkPolyDataMapper> mapper2;
-    vtkSmartPointer<vtkActor> actor1;
-    vtkSmartPointer<vtkActor> actor2;
-    vtkSmartPointer<vtkRenderer> renderer;
-    vtkSmartPointer<vtkRenderWindow> renderWindow;
-    vtkSmartPointer<vtkRenderWindowInteractor> renderWindowInteractor;
+    // Shared resources
+    std::mutex dataMutex;
+    std::condition_variable dataCondition;
+    bool newDataAvailable = false;
+    vtkSmartPointer<vtkPolyData> path;
+    vtkSmartPointer<vtkPolyData> actual;
+
+    void RenderInBackground(vtkSmartPointer<vtkRenderWindow> renderWindow);
+
 };
 
 #endif

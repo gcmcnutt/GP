@@ -1,6 +1,8 @@
 /* test sim for aircraft */
 #include <iostream>
 #include <cmath>
+#include <thread>
+#include <mutex>
 
 #include "minisim.h"
 #include "pathgen.h"
@@ -108,6 +110,7 @@ void Aircraft::toString(char *output) {
     pitchCommand, rollCommand, throttleCommand);
 }
 
+
 vtkSmartPointer<vtkPolyData> createPointSet(const std::vector<Point3D> points) {
     vtkSmartPointer<vtkPoints> vtp = vtkSmartPointer<vtkPoints>::New();
     for (const auto& point : points) {
@@ -127,47 +130,92 @@ vtkSmartPointer<vtkPolyData> createPointSet(const std::vector<Point3D> points) {
     return pointPolyData;
 }
 
-Renderer::Renderer(std::vector<Point3D> path, std::vector<Point3D> actual) {
-    colors = vtkSmartPointer<vtkNamedColors>::New();
-
-    // Create VTK poly data for each set of points
-    vtkSmartPointer<vtkPolyData> pointPolyData1 = createPointSet(path);
-    vtkSmartPointer<vtkPolyData> pointPolyData2 = createPointSet(actual);
-
-    // Create mappers
-    mapper1 = vtkSmartPointer<vtkPolyDataMapper>::New();
-    mapper1->SetInputData(pointPolyData1);
-
-    mapper2 = vtkSmartPointer<vtkPolyDataMapper>::New();
-    mapper2->SetInputData(pointPolyData2);
-
-    // Create actors
-    actor1 = vtkSmartPointer<vtkActor>::New();
-    actor1->SetMapper(mapper1);
-    actor1->GetProperty()->SetColor(colors->GetColor3d("Red").GetData());
-    actor1->GetProperty()->SetPointSize(5);
-
-    actor2 = vtkSmartPointer<vtkActor>::New();
-    actor2->SetMapper(mapper2);
-    actor2->GetProperty()->SetColor(colors->GetColor3d("Blue").GetData());
-    actor2->GetProperty()->SetPointSize(5);
-
-    // Create a renderer
-    renderer = vtkSmartPointer<vtkRenderer>::New();
-    renderer->AddActor(actor1);
-    renderer->AddActor(actor2);
-    renderer->SetBackground(colors->GetColor3d("Black").GetData());
-
-    // Create a render window
-    renderWindow = vtkSmartPointer<vtkRenderWindow>::New();
+void Renderer::RenderInBackground(vtkSmartPointer<vtkRenderWindow> renderWindow)
+{
+    // Create a renderer and render window interactor
+    vtkSmartPointer<vtkRenderer> renderer = vtkSmartPointer<vtkRenderer>::New();
     renderWindow->AddRenderer(renderer);
     renderWindow->SetSize(800, 600);
 
-    // Create an interactor
-    renderWindowInteractor = vtkSmartPointer<vtkRenderWindowInteractor>::New();
+    vtkSmartPointer<vtkRenderWindowInteractor> renderWindowInteractor = vtkSmartPointer<vtkRenderWindowInteractor>::New();
     renderWindowInteractor->SetRenderWindow(renderWindow);
 
-    // Start the interaction
+    // Initialize the rendering and interaction
     renderWindow->Render();
-    renderWindowInteractor->Start();
+    renderWindowInteractor->Initialize();
+
+    vtkSmartPointer<vtkNamedColors> colors = vtkSmartPointer<vtkNamedColors>::New();
+
+
+    // Rendering loop
+    while (true)
+    {
+        std::unique_lock<std::mutex> lock(dataMutex);
+        dataCondition.wait(lock, [this] { return newDataAvailable; });
+
+        // Update the rendering with new data
+        renderer->RemoveAllViewProps();
+
+        // Create mappers
+        vtkSmartPointer<vtkPolyDataMapper> mapper1 = vtkSmartPointer<vtkPolyDataMapper>::New();
+        mapper1->SetInputData(path);
+
+        vtkSmartPointer<vtkPolyDataMapper> mapper2 = vtkSmartPointer<vtkPolyDataMapper>::New();
+        mapper2->SetInputData(actual);
+
+        // Create actors
+        vtkSmartPointer<vtkActor> actor1 = vtkSmartPointer<vtkActor>::New();
+        actor1->SetMapper(mapper1);
+        actor1->GetProperty()->SetColor(colors->GetColor3d("Red").GetData());
+        actor1->GetProperty()->SetPointSize(4);
+
+        vtkSmartPointer<vtkActor> actor2 = vtkSmartPointer<vtkActor>::New();
+        actor2->SetMapper(mapper2);
+        actor2->GetProperty()->SetColor(colors->GetColor3d("Blue").GetData());
+        actor2->GetProperty()->SetPointSize(4);
+
+        // Create a renderer
+        renderer = vtkSmartPointer<vtkRenderer>::New();
+        renderer->AddActor(actor1);
+        renderer->AddActor(actor2);
+        renderer->SetBackground(colors->GetColor3d("Black").GetData());
+
+        // Create a render window
+        // renderWindow = vtkSmartPointer<vtkRenderWindow>::New();
+        renderWindow->AddRenderer(renderer);
+        // renderWindow->SetSize(800, 600);
+
+        // Create an interactor
+        renderWindowInteractor = vtkSmartPointer<vtkRenderWindowInteractor>::New();
+        renderWindowInteractor->SetRenderWindow(renderWindow);
+
+        // Start the interaction
+        renderWindow->Render();
+
+        newDataAvailable = false;
+    }
 }
+
+void Renderer::update(std::vector<Point3D> path, std::vector<Point3D> actual) {
+  {
+    std::lock_guard<std::mutex> lock(dataMutex);
+    this->path = createPointSet(path);
+    this->actual = createPointSet(actual);
+    newDataAvailable = true;
+  }
+  dataCondition.notify_one();
+}
+
+void Renderer::start() {
+    // Create a VTK render window
+    vtkSmartPointer<vtkRenderWindow> renderWindow = vtkSmartPointer<vtkRenderWindow>::New();
+
+    std::thread renderThread([this, renderWindow]() { RenderInBackground(renderWindow); });
+    renderThread.detach(); // Detach the thread to run independently
+
+    // TODO
+    // renderThread.join();
+}
+
+
+
