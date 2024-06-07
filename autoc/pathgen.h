@@ -12,6 +12,14 @@ class Point3D {
     Point3D(double x, double y, double z) : x(x), y(y), z(z) {}
 };
 
-std::vector<Point3D> generateSmoothPath(int numPoints, double radius);
+class Path {
+    public:
+        Point3D start;
+        double distanceFromStart;
+
+        void toString(char* output);
+};
+
+std::vector<Path> generateSmoothPath(int numPoints, double radius);
 
 #endif

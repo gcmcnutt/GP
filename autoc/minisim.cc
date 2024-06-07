@@ -1,6 +1,11 @@
 /* test sim for aircraft */
 #include <iostream>
+#include <cmath>
+
 #include "minisim.h"
+#include "pathgen.h"
+
+using namespace std;
 
 AircraftState::AircraftState() {
       this->dRelVel = 0;
@@ -15,7 +20,7 @@ AircraftState::AircraftState() {
       this->R_Z = 0;
 } 
 
-void AircraftState::setState(double dRelVel, double dPhi, double dTheta, double dPsi, double X, double Y, double Z, double R_X, double R_Y, double R_Z) {
+AircraftState::AircraftState(double dRelVel, double dPhi, double dTheta, double dPsi, double X, double Y, double Z, double R_X, double R_Y, double R_Z) {
       this->dRelVel = dRelVel;
       this->dPhi = dPhi;
       this->dTheta = dTheta;
@@ -72,7 +77,29 @@ double Aircraft::getThrottleCommand() {
 }
 
 void Aircraft::advanceState(double dt) {
-  // do some physics
+  // get velocity
+  double dVel = state->dRelVel;
+
+  // get heading CW from North
+  double heading = state->dPsi;
+
+  // get roll command: negative is roll left, positive is roll right (-1:1)
+  double roll = max(min(getRollCommand(), MAX_SERVO_DEFLECTION), -MAX_SERVO_DEFLECTION) / MAX_SERVO_DEFLECTION;
+
+  // get position
+  Point3D position = {state->X, state->Y, state->Z};
+
+  // update heading based on roll
+  heading = remainder(heading + roll * dt * MAX_DELTA_ANGLE_RADSEC, M_PI * 2);
+
+  // update XY position based on heading, velocity, and dt
+  position.x += dVel * std::cos(heading) * dt;
+  position.y += dVel * std::sin(heading) * dt;
+
+  // update state as a result
+  state->X = position.x;
+  state->Y = position.y;
+  state->dPsi = heading;
 }
 
 void Aircraft::toString(char *output) {

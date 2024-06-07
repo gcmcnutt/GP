@@ -46,10 +46,9 @@ struct GPConfigVarInformation configArray[]=
 };
 
 
-
 // Define function and terminal identifiers
-enum Operators {ADD=0, SUB, MUL, DIV, SIN, COS, TAN, GET, PITCH, ROLL, THROTTLE, PI, ZERO, ONE, TWO, PROGN};
-const int OPERATORS_NR_ITEM=16;
+enum Operators {ADD=0, NEG, MUL, INV, IF, EQ, GT, SIN, COS, TAN, GETDR, GETDS, GETMX, GETMY, GETPSI, PITCH, ROLL, THROTTLE, PI, ZERO, ONE, TWO, PROGN, _END};
+const int OPERATORS_NR_ITEM=_END;
 
 
 // Define class identifiers
@@ -62,8 +61,10 @@ std::uniform_real_distribution<double> dist(-M_PI, M_PI);  //(min, max)
 std::mt19937 rng; 
 
 Aircraft *aircraft = new Aircraft(new AircraftState());
-std::vector<Point3D> path = std::vector<Point3D>();
-std::vector<double> input = std::vector<double>();
+std::vector<Path> path = std::vector<Path>();
+unsigned long pathIndex = 0; // current entry on path
+bool printEval = false;
+std::ofstream fout;
 
 // Inherit the three GP classes GPGene, GP and GPPopulation
 class MyGene : public GPGene
@@ -171,17 +172,19 @@ double MyGene::evaluate (double arg)
   switch (node->value ())
     {
       case ADD: returnValue=NthMyChild(0)->evaluate (arg)+NthMyChild(1)->evaluate (arg); break;
-      case SUB: returnValue=NthMyChild(0)->evaluate (arg)-NthMyChild(1)->evaluate (arg); break;
+      case NEG: returnValue=-NthMyChild(0)->evaluate (arg); break;
       case MUL: returnValue=NthMyChild(0)->evaluate (arg)*NthMyChild(1)->evaluate (arg); break;
-      case DIV: {
-                double div = NthMyChild(1)->evaluate (arg);
-                returnValue = (div == 0) ? 0 : NthMyChild(0)->evaluate (arg) / div;
+      case INV: {
+                double div = NthMyChild(0)->evaluate (arg);
+                returnValue = (div == 0) ? 0 : 1 / div;
                 break;
       }
+      case IF: returnValue = NthMyChild(0)->evaluate (arg) ? NthMyChild(1)->evaluate (arg) : NthMyChild(2)->evaluate (arg); break;
+      case EQ: returnValue = NthMyChild(0)->evaluate (arg) == NthMyChild(1)->evaluate (arg); break;
+      case GT: returnValue = NthMyChild(0)->evaluate (arg) > NthMyChild(1)->evaluate (arg); break;
       case PITCH: returnValue = aircraft->setPitchCommand(NthMyChild(0)->evaluate (arg)); break;
       case ROLL: returnValue = aircraft->setRollCommand(NthMyChild(0)->evaluate (arg)); break;
       case THROTTLE: returnValue = aircraft->setThrottleCommand(NthMyChild(0)->evaluate (arg)); break;
-      case GET: returnValue = aircraft->getState()->dRelVel; break;
       case SIN: returnValue = sin(NthMyChild(0)->evaluate (arg)); break;
       case COS: returnValue = cos(NthMyChild(0)->evaluate (arg)); break;
       case TAN: returnValue = tan(NthMyChild(0)->evaluate (arg)); break;
@@ -194,9 +197,32 @@ double MyGene::evaluate (double arg)
                   returnValue = NthMyChild(1)->evaluate (arg);
                   break;
       }
+      case GETMX: returnValue = aircraft->getState()->X; break;
+      case GETMY: returnValue = aircraft->getState()->Y; break;
+      case GETPSI: returnValue = aircraft->getState()->dPsi; break;
 
-    default: 
-      GPExitSystem ("MyGene::evaluate", "Undefined node value");
+      case GETDR: // get left/right angle from my path to the next point
+                  {
+                    unsigned long idx = max(min(NthMyChild(0)->evaluate (arg) + pathIndex, (double) min(path.size()-1, (pathIndex+5))), (double) pathIndex);
+                    double dx = path.at(idx).start.x - aircraft->getState()->X;
+                    double dy = path.at(idx).start.y - aircraft->getState()->Y;
+                    double angle = atan2(dy, dx);
+                    double dPsi = aircraft->getState()->dPsi;
+                    returnValue = remainder(angle - dPsi, M_PI * 2);
+                    break;
+                  }
+      case GETDS: // get distance to the next point
+                  {
+                    unsigned long idx = max(min(NthMyChild(0)->evaluate (arg) + pathIndex, (double) min(path.size()-1, (pathIndex+5))), (double) pathIndex);
+                    double dx = path.at(idx).start.x - aircraft->getState()->X;
+                    double dy = path.at(idx).start.y - aircraft->getState()->Y;
+                    double dz = path.at(idx).start.z - aircraft->getState()->Z;
+                    returnValue = sqrt(dx*dx + dy*dy + dz*dz);
+                    break;
+                  }
+      
+      default: 
+        GPExitSystem ("MyGene::evaluate", "Undefined node value");
     }
   
   #define RANGELIMIT 1000000
@@ -218,43 +244,102 @@ void MyGP::evaluate ()
   // deal with pre.path on the initial eval..
   if (path.size() == 0) {
     stdFitness = 1000001;
+    return;
   } else {
     stdFitness = 0.0;
   }
 
-  for (int i = 0; i < path.size(); i++) {
+  // north, 5m/s at 10m
+  AircraftState state = {SIM_INITIAL_VELOCITY, 0.0, 0.0, 0.0, 0.0, 0.0, SIM_INITIAL_ALTITUDE, 0.0, 0.0, 0.0};
+  aircraft->setState(&state);
+  aircraft->setPitchCommand(0.0);
+  aircraft->setRollCommand(0.0);
+  aircraft->setThrottleCommand(SIM_INITIAL_THROTTLE);
+  // char output[200];
+  // aircraft->toString(output);
+  // cout << output << endl;
 
-    // AircraftState state = AircraftState(0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0);
-    // Aircraft aircraft = Aircraft(state);
-    // aircraft.setPitchCommand(20);
-    // aircraft.setRollCommand(30);
-    // aircraft.setThrottleCommand(40);
-    // char output[200];
-    // aircraft.toString(output);
-    // cout << output << endl;
+  // iterate the simulator
+  double duration = 0.0; // how long have we been running
+  pathIndex = 0; // where are we on the path?
+  bool printHeader = true;
 
-    // eval
-    aircraft->getState()->dRelVel = input.at(i);
-    aircraft->setPitchCommand(nan("1"));
-    aircraft->setRollCommand(nan("2"));
-    aircraft->setThrottleCommand(nan("3"));
+  // as long as we are within the time limit and have not reached the end of the path
+  while (duration < SIM_TOTAL_TIME && pathIndex < path.size()) {
 
-    double retval = NthMyGene (0)->evaluate (0);
+    // walk path looking for next item around 0.5 seconds later
+    double minDistance = path.at(pathIndex).distanceFromStart + (0.5 * SIM_INITIAL_VELOCITY);
+    int newPathIndex = pathIndex;
+    while (newPathIndex < path.size() && (path.at(newPathIndex).distanceFromStart < minDistance)) {
+      newPathIndex++;
+    }
+    // are we off the end?
+    if (newPathIndex == path.size()) {
+      break;
+    }
 
-    double pitch_found = aircraft->getPitchCommand();
-    double roll_found = aircraft->getRollCommand();
-    double throttle_found = aircraft->getThrottleCommand();
+    // ok, how far is this point from the last point?
+    double distance = path.at(newPathIndex).distanceFromStart - path.at(pathIndex).distanceFromStart;
+    // so this is the real dT
+    double dT = distance / SIM_INITIAL_VELOCITY;
+
+    // advance the simulator
+    duration += dT;
+    pathIndex = newPathIndex;
+
+    // GP determine control input
+    NthMyGene (0)->evaluate (0);
+
+    // and advances the aircraft
+    aircraft->advanceState(dT);
 
     // how did we do?
-    double delta = abs(pitch_found - path.at(i).x) + abs(roll_found - path.at(i).y) + abs(throttle_found - path.at(i).z);
-    if (!isnan(delta) && !isinf(delta)) {
-      stdFitness += delta;
-    } else {
-      stdFitness += 1000000;
+    // for now how close are we to the goal point?
+    double distanceFromGoal = std::sqrt(
+          std::pow(aircraft->getState()->X - path.at(pathIndex).start.x, 2) +
+          std::pow(aircraft->getState()->Y - path.at(pathIndex).start.y, 2) +
+          std::pow(aircraft->getState()->Z - path.at(pathIndex).start.z, 2));
+
+    // add in distance component
+    stdFitness += distanceFromGoal;
+
+    // but have we crashed outside the sphere?
+    double x = aircraft->getState()->X;
+    double y = aircraft->getState()->Y;
+    double z = aircraft->getState()->Z;
+    if (aircraft->getState()->Z < 0 || std::sqrt(x*x + y*y + z*z) > SIM_PATH_RADIUS_LIMIT) { // XXX parameterize
+      // ok we are outside the bounds -- penalize but 
+      double timeRemaining = max(0.0, SIM_TOTAL_TIME - duration); // XXX parameterize
+      stdFitness += SIM_CRASH_FITNESS_PENALTY + timeRemaining * SIM_INITIAL_VELOCITY; // big-xx our velocity
+      break;
+    }
+
+    if (printEval) {
+      if (printHeader) {
+        fout << "    Time Idx       dT    pathX    pathY    pathZ        X        Y        Z     dPsi     dPhi   dTheta   relVel       dG     roll    pitch    power  fitness\n";
+        printHeader = false;
+      }
+
+      char outbuf[1000]; // XXX use c++20
+      sprintf(outbuf, "% 8.2f %3ld % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f\n", 
+        duration, pathIndex, dT, 
+        path.at(pathIndex).start.x,
+        path.at(pathIndex).start.y,
+        path.at(pathIndex).start.z,
+        x, y, z,
+        aircraft->getState()->dPsi,
+        aircraft->getState()->dPhi,
+        aircraft->getState()->dTheta,
+        aircraft->getState()->dRelVel,
+        distanceFromGoal,
+        aircraft->getRollCommand(),
+        aircraft->getPitchCommand(),
+        aircraft->getThrottleCommand(),
+        stdFitness);
+        fout << outbuf;
     }
   }
 }
-
 
 
 // Create function and terminal set
@@ -273,21 +358,29 @@ void createNodeSet (GPAdfNodeSet& adfNs)
   // sets.  Terminals take two arguments, functions three (the third
   // parameter is the number of arguments the function has)
   ns.putNode (*new GPNode (ADD, "ADD", 2));
-  ns.putNode (*new GPNode (SUB, "SUB", 2));
+  ns.putNode (*new GPNode (NEG, "NEG", 1));
   ns.putNode (*new GPNode (MUL, "MUL", 2));
-  ns.putNode (*new GPNode (DIV, "DIV", 2));
+  ns.putNode (*new GPNode (INV, "INV", 1));
+  ns.putNode (*new GPNode (IF, "IF", 3));
+  ns.putNode (*new GPNode (EQ, "EQ", 2));
+  ns.putNode (*new GPNode (GT, "GT", 2));
   ns.putNode (*new GPNode (PITCH, "PITCH", 1));
   ns.putNode (*new GPNode (ROLL, "ROLL", 1));
   ns.putNode (*new GPNode (THROTTLE, "THROTTLE", 1));
   ns.putNode (*new GPNode (SIN, "SIN", 1));
   ns.putNode (*new GPNode (COS, "COS", 1));
   ns.putNode (*new GPNode (TAN, "TAN", 1));
-  ns.putNode (*new GPNode (GET, "GET"));
   ns.putNode (*new GPNode (PI, "PI"));
-  ns.putNode (*new GPNode (ZERO, "ZERO"));
-  ns.putNode (*new GPNode (ONE, "ONE"));
-  ns.putNode (*new GPNode (TWO, "TWO"));
+  ns.putNode (*new GPNode (ZERO, "0"));
+  ns.putNode (*new GPNode (ONE, "1"));
+  ns.putNode (*new GPNode (TWO, "2"));
   ns.putNode (*new GPNode (PROGN, "PROGN", 2));
+  ns.putNode (*new GPNode (GETDR, "GETDR", 1));
+  ns.putNode (*new GPNode (GETDS, "GETDS", 1));
+  ns.putNode (*new GPNode (GETMX, "GETMX"));
+  ns.putNode (*new GPNode (GETMY, "GETMY"));
+  ns.putNode (*new GPNode (GETPSI, "GETPSI"));
+  // ns.putNode (*new GPNode (GETMZ, "GETMZ"));
 }
 
 
@@ -329,7 +422,7 @@ int main ()
   ostringstream strOutFile, strStatFile;
   strOutFile  << "data.dat" << ends;
   strStatFile << "data.stc" << ends;
-  ofstream fout (strOutFile.str());
+  fout.open(strOutFile.str());
   ofstream bout (strStatFile.str());
   
   // Create a population with this configuration
@@ -343,21 +436,20 @@ int main ()
   // which is in essence just repeated reproduction and crossover loop
   // through all the generations ...
   MyPopulation* newPop=NULL;
+  
+  // THIS IS FOR ALL GENERATIONS...
+  // path = generateSmoothPath(20, SIM_PATH_BOUNDS); // TODO parameterize points
+
   for (int gen=1; gen<=cfg.NumberOfGenerations; gen++)
     {
-      // generate the fitness test case
-      for (int i = 0; i < 1000; i++) {
-
-        double rangle = dist(rng); // TODO Thread instance
-        input.push_back(rangle);
-
-        // what we should get
-        Point3D point = Point3D();
-        point.x = sin(rangle);
-        point.y = cos(rangle);
-        point.z = tan(rangle / M_PI);
-        path.push_back(point);
-      }
+      // For this generation, build a smooth path goal
+      path = generateSmoothPath(20, SIM_PATH_BOUNDS); // TODO parameterize points
+      // char *output = new char[200];
+      // for (int i = 0; i < path.size(); i++) {
+      //   path.at(i).toString(output);
+      //   cout << i << ":" << output << endl;
+      // }
+      // printf("Path: %lu points, total length %f\n", path.size(), path.at(path.size() - 1).distanceFromStart);
 
       // Create a new generation from the old one by applying the
       // genetic operators
@@ -365,6 +457,11 @@ int main ()
 	      newPop=new MyPopulation (cfg, adfNs);
       pop->generate (*newPop);
       
+            // XXX fix this pattern to use a dynamic logger
+      printEval = true;
+      pop->NthMyGP(pop->bestOfPopulation)->evaluate();
+      printEval = false;
+
       // Delete the old generation and make the new the old one
       if (!cfg.SteadyState)
 	    {
@@ -375,10 +472,7 @@ int main ()
       // Create a report of this generation and how well it is doing
       pop->createGenerationReport (0, gen, fout, bout);
 
-      // TODO HACK clean out prior fitness cases
+      // clean out prior fitness case
       path.clear();
-      input.clear();
     }
-
-  return 0;
 }
