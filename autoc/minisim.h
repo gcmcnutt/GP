@@ -2,6 +2,19 @@
 #ifndef MINISIM_H
 #define MINISIM_H
 
+#include "pathgen.h"
+#include <vtkPoints.h>
+#include <vtkSmartPointer.h>
+#include <vtkPolyData.h>
+#include <vtkVertexGlyphFilter.h>
+#include <vtkPolyDataMapper.h>
+#include <vtkActor.h>
+#include <vtkRenderer.h>
+#include <vtkRenderWindow.h>
+#include <vtkRenderWindowInteractor.h>
+#include <vtkNamedColors.h>
+#include <vtkProperty.h>
+
 #define MAX_DELTA_ANGLE_RADSEC M_PI
 #define MAX_SERVO_DEFLECTION 1000.0
 #define MAX_THROTTLE_DEFLECTION 1000.0
@@ -54,6 +67,21 @@ class Aircraft {
     double pitchCommand;
     double rollCommand;
     double throttleCommand;
+};
+
+class Renderer {
+  public:
+    Renderer(std::vector<Point3D> path, std::vector<Point3D> actual);
+    ~Renderer();
+  private:
+    vtkSmartPointer<vtkNamedColors> colors;
+    vtkSmartPointer<vtkPolyDataMapper> mapper1;
+    vtkSmartPointer<vtkPolyDataMapper> mapper2;
+    vtkSmartPointer<vtkActor> actor1;
+    vtkSmartPointer<vtkActor> actor2;
+    vtkSmartPointer<vtkRenderer> renderer;
+    vtkSmartPointer<vtkRenderWindow> renderWindow;
+    vtkSmartPointer<vtkRenderWindowInteractor> renderWindowInteractor;
 };
 
 #endif

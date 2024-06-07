@@ -1,4 +1,5 @@
 #include "pathgen.h"
+#include "minisim.h"
 #include <cmath>
 #include <iostream>
 #include <ctime>

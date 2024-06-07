@@ -264,6 +264,9 @@ void MyGP::evaluate ()
   pathIndex = 0; // where are we on the path?
   bool printHeader = true;
 
+  std::vector<Point3D> planPath = std::vector<Point3D>();
+  std::vector<Point3D> actualPath = std::vector<Point3D>();
+
   // as long as we are within the time limit and have not reached the end of the path
   while (duration < SIM_TOTAL_TIME && pathIndex < path.size()) {
 
@@ -337,8 +340,22 @@ void MyGP::evaluate ()
         aircraft->getThrottleCommand(),
         stdFitness);
         fout << outbuf;
+
+      // now prepare points for Renderer
+      planPath.push_back(path.at(pathIndex).start);
+      actualPath.push_back({aircraft->getState()->X, aircraft->getState()->Y, aircraft->getState()->Z});
     }
   }
+
+  if (printEval) {
+    Renderer *renderer = new Renderer(planPath, actualPath);
+    planPath.clear();
+    actualPath.clear();
+
+    // TODO free up the renderer
+    
+  }
+
 }
 
 
@@ -457,7 +474,7 @@ int main ()
 	      newPop=new MyPopulation (cfg, adfNs);
       pop->generate (*newPop);
       
-            // XXX fix this pattern to use a dynamic logger
+      // XXX fix this pattern to use a dynamic logger
       printEval = true;
       pop->NthMyGP(pop->bestOfPopulation)->evaluate();
       printEval = false;
