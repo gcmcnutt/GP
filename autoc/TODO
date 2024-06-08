@@ -1,0 +1,15 @@
+- slight memory leak on iterations -- find out where
+- interctive display window -- get it working
+- figure out how to have directional icon (little triange) on the path
+- add some axes to the rendering to show orientation
+- random launch points and orientations
+- random start point of path and update the dynamic goal
+- need to save generations
+- consider co-evolve the random paths
+- top level build script that builds debug/release
+- benchmark the impact of debug mode code
+- add general purpose logger
+- at exit need a top/cancel close function in the GUI
+- open up Z axes
+- verify the simulator is working correctly
+- verify the fitness function is working correctly

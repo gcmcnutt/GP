@@ -1,3 +1,4 @@
+#include "gp.h"
 #include "pathgen.h"
 #include "minisim.h"
 #include <cmath>
@@ -8,9 +9,9 @@
 
 // Function to generate a random point within a half-sphere
 Point3D randomPointInHalfSphere(double radius) {
-    double theta = ((double) rand() / RAND_MAX) * 2 * M_PI;
-    double phi = ((double) rand() / RAND_MAX) * M_PI / 2;
-    double r = radius * std::cbrt((double) rand() / RAND_MAX);
+    double theta = ((double) GPrand() / RAND_MAX) * 2 * M_PI;
+    double phi = ((double) GPrand() / RAND_MAX) * M_PI / 2;
+    double r = radius * std::cbrt((double) GPrand() / RAND_MAX);
 
     double x = r * std::sin(phi) * std::cos(theta);
     double y = r * std::sin(phi) * std::sin(theta);

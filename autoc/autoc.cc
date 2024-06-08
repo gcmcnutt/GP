@@ -454,9 +454,6 @@ int main ()
   // which is in essence just repeated reproduction and crossover loop
   // through all the generations ...
   MyPopulation* newPop=NULL;
-  
-  // THIS IS FOR ALL GENERATIONS...
-  // path = generateSmoothPath(20, SIM_PATH_BOUNDS); // TODO parameterize points
 
   for (int gen=1; gen<=cfg.NumberOfGenerations; gen++)
     {
@@ -475,7 +472,7 @@ int main ()
 	      newPop=new MyPopulation (cfg, adfNs);
       pop->generate (*newPop);
       
-      // XXX fix this pattern to use a dynamic logger
+      // TODO fix this pattern to use a dynamic logger
       printEval = true;
       pop->NthMyGP(pop->bestOfPopulation)->evaluate();
       printEval = false;

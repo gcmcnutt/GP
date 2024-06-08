@@ -117,17 +117,27 @@ vtkSmartPointer<vtkPolyData> createPointSet(const std::vector<Point3D> points) {
         vtp->InsertNextPoint(point.x, point.y, point.z);
     }
 
+    vtkSmartPointer<vtkPolyLine> lines = vtkSmartPointer<vtkPolyLine>::New();
+    lines->GetPointIds()->SetNumberOfIds(points.size());
+    for (int i = 0; i < points.size(); ++i) {
+        lines->GetPointIds()->SetId(i, i);
+    }
+
+    vtkSmartPointer<vtkCellArray> cells = vtkSmartPointer<vtkCellArray>::New();
+    cells->InsertNextCell(lines);
+
     vtkSmartPointer<vtkPolyData> polyData = vtkSmartPointer<vtkPolyData>::New();
     polyData->SetPoints(vtp);
+    polyData->SetLines(cells);
 
-    vtkSmartPointer<vtkVertexGlyphFilter> glyphFilter = vtkSmartPointer<vtkVertexGlyphFilter>::New();
-    glyphFilter->SetInputData(polyData);
-    glyphFilter->Update();
+    // vtkSmartPointer<vtkVertexGlyphFilter> glyphFilter = vtkSmartPointer<vtkVertexGlyphFilter>::New();
+    // glyphFilter->SetInputData(polyData);
+    // glyphFilter->Update();
 
-    vtkSmartPointer<vtkPolyData> pointPolyData = vtkSmartPointer<vtkPolyData>::New();
-    pointPolyData->ShallowCopy(glyphFilter->GetOutput());
+    // vtkSmartPointer<vtkPolyData> pointPolyData = vtkSmartPointer<vtkPolyData>::New();
+    // pointPolyData->ShallowCopy(glyphFilter->GetOutput());
 
-    return pointPolyData;
+    return polyData;
 }
 
 void Renderer::RenderInBackground(vtkSmartPointer<vtkRenderWindow> renderWindow)

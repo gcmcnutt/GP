@@ -6,6 +6,8 @@
 #include <vtkPoints.h>
 #include <vtkSmartPointer.h>
 #include <vtkPolyData.h>
+#include <vtkCellArray.h>
+#include <vtkPolyLine.h>
 #include <vtkVertexGlyphFilter.h>
 #include <vtkPolyDataMapper.h>
 #include <vtkActor.h>
