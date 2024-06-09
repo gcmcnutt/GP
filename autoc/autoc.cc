@@ -342,7 +342,7 @@ void MyGP::evaluate ()
         stdFitness);
         fout << outbuf;
 
-      // now prepare points for Renderer
+      // now update points for Renderer
       planPath.push_back(path.at(pathIndex).start);
       actualPath.push_back({aircraft->getState()->X, aircraft->getState()->Y, aircraft->getState()->Z});
     }

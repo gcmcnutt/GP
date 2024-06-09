@@ -16,7 +16,12 @@
 #include <vtkRenderWindowInteractor.h>
 #include <vtkNamedColors.h>
 #include <vtkProperty.h>
-#include <condition_variable>
+#include <vtkAxesActor.h>
+#include <vtkOrientationMarkerWidget.h>
+#include <vtkCommand.h>
+#include <vtkCamera.h>
+
+#include <mutex>
 
 #define MAX_DELTA_ANGLE_RADSEC M_PI
 #define MAX_SERVO_DEFLECTION 1000.0
@@ -72,20 +77,25 @@ class Aircraft {
     double throttleCommand;
 };
 
-class Renderer {
+class Renderer : public vtkCommand {
   public:
     void update(std::vector<Point3D> path, std::vector<Point3D> actual);
     void start();
+    virtual void Execute(vtkObject* caller, unsigned long eventId, void* vtkNotUsed(callData));
+
   private:
     // Shared resources
     std::mutex dataMutex;
-    std::condition_variable dataCondition;
     bool newDataAvailable = false;
     vtkSmartPointer<vtkPolyData> path;
     vtkSmartPointer<vtkPolyData> actual;
+    vtkSmartPointer<vtkActor> actor1;
+    vtkSmartPointer<vtkActor> actor2;
 
+    int TimerCount;
+
+    vtkSmartPointer<vtkPolyData> createPointSet(const std::vector<Point3D> points);
     void RenderInBackground(vtkSmartPointer<vtkRenderWindow> renderWindow);
-
 };
 
 #endif

@@ -1,7 +1,5 @@
 - slight memory leak on iterations -- find out where
-- interctive display window -- get it working
 - figure out how to have directional icon (little triange) on the path
-- add some axes to the rendering to show orientation
 - random launch points and orientations
 - random start point of path and update the dynamic goal
 - need to save generations
