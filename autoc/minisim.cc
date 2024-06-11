@@ -95,8 +95,8 @@ void Aircraft::advanceState(double dt) {
   heading = remainder(heading + roll * dt * MAX_DELTA_ANGLE_RADSEC, M_PI * 2);
 
   // update XY position based on heading, velocity, and dt
-  position.x += dVel * std::cos(heading) * dt;
-  position.y += dVel * std::sin(heading) * dt;
+  position.x += dVel * std::sin(heading) * dt;
+  position.y += dVel * std::cos(heading) * dt;
 
   // update state as a result
   state->X = position.x;
@@ -127,7 +127,12 @@ void Renderer::Execute(vtkObject* caller, unsigned long eventId, void* vtkNotUse
     vtkSmartPointer<vtkPolyDataMapper> mapper2 = vtkSmartPointer<vtkPolyDataMapper>::New();
     mapper2->SetInputData(actual);
 
+    // Create a mapper for the plane
+    vtkSmartPointer<vtkPolyDataMapper> planeMapper = vtkSmartPointer<vtkPolyDataMapper>::New();
+    planeMapper->SetInputConnection(planeSource->GetOutputPort());
+
     // Update actors
+    planeActor->SetMapper(planeMapper);
     actor1->SetMapper(mapper1);
     actor2->SetMapper(mapper2);
 
@@ -176,11 +181,15 @@ void Renderer::RenderInBackground(vtkSmartPointer<vtkRenderWindow> renderWindow)
   renderWindow->SetSize(1080, 900);
 
   vtkSmartPointer<vtkRenderWindowInteractor> renderWindowInteractor = vtkSmartPointer<vtkRenderWindowInteractor>::New();
+
+    // Set the interactor style to trackball camera
+  vtkSmartPointer<vtkInteractorStyleTrackballCamera> style = vtkSmartPointer<vtkInteractorStyleTrackballCamera>::New();
+  renderWindowInteractor->SetInteractorStyle(style);
   renderWindowInteractor->SetRenderWindow(renderWindow);
 
   // Configure the camera
   vtkSmartPointer<vtkCamera> camera = vtkSmartPointer<vtkCamera>::New();
-  camera->SetPosition(-50, 0, 2);        // behind the action
+  camera->SetPosition(0, -50, 2);        // behind the action
   camera->SetFocalPoint(0, 0, 10);       // Start of initial height
   camera->SetViewUp(0, 0, 1);           // Set the view up vector
   camera->SetViewAngle(60);             // Set the field of view (FOV) in degrees
@@ -212,6 +221,48 @@ void Renderer::RenderInBackground(vtkSmartPointer<vtkRenderWindow> renderWindow)
 
   renderer->SetBackground(colors->GetColor3d("Black").GetData());
 
+  // Create a plane source at z = 0
+  planeSource = vtkSmartPointer<vtkPlaneSource>::New();
+
+  double width = 100.0;
+  double height = 100.0;
+  int resolution = 10;
+  planeSource->SetOrigin(-width / 2.0, -height / 2.0, 0.0);
+  planeSource->SetPoint1(width / 2.0, -height / 2.0, 0.0);
+  planeSource->SetPoint2(-width / 2.0, height / 2.0, 0.0);
+  planeSource->SetXResolution(resolution);
+  planeSource->SetYResolution(resolution);
+  planeSource->Update();
+
+  // Create cell data.
+  vtkSmartPointer<vtkUnsignedCharArray> cellData = vtkSmartPointer<vtkUnsignedCharArray>::New();
+  cellData->SetNumberOfComponents(4);
+  cellData->SetNumberOfTuples(planeSource->GetOutput()->GetNumberOfCells());
+
+  // checkerboard
+  for (int i = 0; i < planeSource->GetOutput()->GetNumberOfCells(); i++) {
+    if (i % 2 ^ (i / 10) % 2) {
+      double rgb[4] = {255.0, 255.0, 255.0, 180.0};
+      cellData->InsertTuple(i, rgb);
+    } else {      
+      double rgb[4] = {0.0, 0.0, 0.0, 0.0};
+      cellData->InsertTuple(i, rgb);
+    }
+  }
+  planeSource->GetOutput()->GetCellData()->SetScalars(cellData);
+
+  // Enable anti-aliasing (multi-sampling)
+  renderWindow->SetMultiSamples(4); // Use 4x MSAA
+
+  // Enable depth peeling for proper transparency rendering
+  renderer->SetUseDepthPeeling(1);
+  renderer->SetMaximumNumberOfPeels(100);  // Maximum number of depth peels
+  renderer->SetOcclusionRatio(0.1);        // Occlusion ratio
+
+  // Create an actor for the plane
+  planeActor = vtkSmartPointer<vtkActor>::New();
+
+  renderer->AddActor(planeActor);
   renderer->AddActor(actor1);
   renderer->AddActor(actor2);
 

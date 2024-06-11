@@ -20,6 +20,10 @@
 #include <vtkOrientationMarkerWidget.h>
 #include <vtkCommand.h>
 #include <vtkCamera.h>
+#include <vtkPlaneSource.h>
+#include <vtkCellData.h>
+#include <vtkMinimalStandardRandomSequence.h>
+#include <vtkInteractorStyleTrackballCamera.h>
 
 #include <mutex>
 
@@ -29,6 +33,7 @@
 
 #define SIM_INITIAL_VELOCITY 5.0
 #define SIM_INITIAL_ALTITUDE 10.0
+#define SIM_INITiAL_HEADING 0.0
 #define SIM_INITIAL_THROTTLE 0.5
 #define SIM_PATH_BOUNDS 40.0
 #define SIM_PATH_RADIUS_LIMIT 60.0
@@ -91,6 +96,8 @@ class Renderer : public vtkCommand {
     vtkSmartPointer<vtkPolyData> actual;
     vtkSmartPointer<vtkActor> actor1;
     vtkSmartPointer<vtkActor> actor2;
+    vtkSmartPointer<vtkActor> planeActor;
+    vtkSmartPointer<vtkPlaneSource> planeSource;
 
     int TimerCount;
 

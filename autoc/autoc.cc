@@ -250,7 +250,7 @@ void MyGP::evaluate ()
     stdFitness = 0.0;
   }
 
-  // north, 5m/s at 10m
+  // north (+y), 5m/s at 10m
   AircraftState state = {SIM_INITIAL_VELOCITY, 0.0, 0.0, 0.0, 0.0, 0.0, SIM_INITIAL_ALTITUDE, 0.0, 0.0, 0.0};
   aircraft->setState(&state);
   aircraft->setPitchCommand(0.0);
