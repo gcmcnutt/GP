@@ -86,7 +86,7 @@ void Aircraft::advanceState(double dt) {
   double heading = state->dPsi;
 
   // get roll command: negative is roll left, positive is roll right
-  double roll = max(min(getRollCommand(), 1.0), -1.0);
+  double roll = max(min(getRollCommand(), 1.0), -1.0); // XXX constant
 
   // get position
   Point3D position = {state->X, state->Y, state->Z};
@@ -95,8 +95,8 @@ void Aircraft::advanceState(double dt) {
   heading = remainder(heading + roll * dt * MAX_DELTA_ANGLE_RADSEC, M_PI * 2);
 
   // update XY position based on heading, velocity, and dt
-  position.x += dVel * std::sin(heading) * dt;
-  position.y += dVel * std::cos(heading) * dt;
+  position.x += dVel * std::cos(heading) * dt; // XXX why is this reversed?
+  position.y += dVel * std::sin(heading) * dt;
 
   // update state as a result
   state->X = position.x;

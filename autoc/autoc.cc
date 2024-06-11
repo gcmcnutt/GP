@@ -268,6 +268,9 @@ void MyGP::evaluate ()
   std::vector<Point3D> planPath = std::vector<Point3D>();
   std::vector<Point3D> actualPath = std::vector<Point3D>();
 
+  planPath.push_back(path.at(pathIndex).start); // XXX push the full path
+  actualPath.push_back({aircraft->getState()->X, aircraft->getState()->Y, aircraft->getState()->Z});
+
   // as long as we are within the time limit and have not reached the end of the path
   while (duration < SIM_TOTAL_TIME && pathIndex < path.size()) {
 
@@ -306,7 +309,7 @@ void MyGP::evaluate ()
 
     // add in distance component
     // TODO add in orientation component
-    stdFitness += distanceFromGoal;
+    stdFitness += distanceFromGoal * distanceFromGoal;
 
     // but have we crashed outside the sphere?
     double x = aircraft->getState()->X;
@@ -344,7 +347,7 @@ void MyGP::evaluate ()
         fout << outbuf;
 
       // now update points for Renderer
-      planPath.push_back(path.at(pathIndex).start);
+      planPath.push_back(path.at(pathIndex).start); // XXX push the full path
       actualPath.push_back({aircraft->getState()->X, aircraft->getState()->Y, aircraft->getState()->Z});
     }
   }

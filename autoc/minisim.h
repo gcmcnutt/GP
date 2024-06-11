@@ -37,7 +37,7 @@
 #define SIM_PATH_RADIUS_LIMIT 60.0
 
 #define SIM_TOTAL_TIME 50.0
-#define SIM_CRASH_FITNESS_PENALTY 10000.0
+#define SIM_CRASH_FITNESS_PENALTY 1000000.0
 
 class AircraftState {
   public:

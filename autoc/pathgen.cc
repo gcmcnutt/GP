@@ -48,7 +48,8 @@ std::vector<Path> generateSmoothPath(int numPoints, double radius) {
     // Ensure the path is continuous by looping through control points
     double distance = 0;
     Point3D lastPoint = controlPoints[0];
-    for (size_t i = 1; i < controlPoints.size(); ++i) {
+    path.push_back({lastPoint, distance});
+    for (size_t i = 1; i < controlPoints.size() - 1; ++i) {
         for (double t = 0; t <= 1; t += 0.05) {
             Point3D interpolatedPoint = cubicInterpolate(controlPoints[i - 1], controlPoints[i], controlPoints[i + 1], controlPoints[i + 2], t);
             double newDistance = std::sqrt(std::pow(interpolatedPoint.x - lastPoint.x, 2) + std::pow(interpolatedPoint.y - lastPoint.y, 2) + std::pow(interpolatedPoint.z - lastPoint.z, 2));

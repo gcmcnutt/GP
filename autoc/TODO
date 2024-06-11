@@ -12,3 +12,5 @@
 - verify the simulator is working correctly
 - verify the fitness function is working correctly
 - change pitch roll throttle to be direct PPM MSEC to servos (500-1500)
+- change to a cylinder bounds, not half sphere
+- need to walk the path at a velocity -- so maybe another representation of the path
