@@ -28,8 +28,6 @@
 #include <mutex>
 
 #define MAX_DELTA_ANGLE_RADSEC M_PI
-#define MAX_SERVO_DEFLECTION 1000.0
-#define MAX_THROTTLE_DEFLECTION 1000.0
 
 #define SIM_INITIAL_VELOCITY 5.0
 #define SIM_INITIAL_ALTITUDE 10.0
@@ -46,13 +44,13 @@ class AircraftState {
     AircraftState(double dRelVel, double dPhi, double dTheta, double dPsi, double X, double Y, double Z, double R_X, double R_Y, double R_Z);
     AircraftState(); 
 
-    double dRelVel; // reltive velocity
-    double dPhi;    // roll
-    double dTheta;  // pitch
-    double dPsi;    // yaw
-    double X;       // positionX
-    double Y;       // positionY
-    double Z;       // positionZ
+    double dRelVel; // reltive velocity m/s
+    double dPhi;    // roll+ right -pi:pi
+    double dTheta;  // pitch+ up -pi:pi
+    double dPsi;    // yaw+ clockwise -pi:pi
+    double X;       // positionX+ right/east
+    double Y;       // positionY+ up/north
+    double Z;       // positionZ+ up (note: we are mostly in plus Z = up world)
     double R_X;     // rotationX
     double R_Y;     // rotationY
     double R_Z;     // rotationZ
@@ -77,9 +75,9 @@ class Aircraft {
     AircraftState *state; 
 
     // aircraft command values
-    double pitchCommand;
-    double rollCommand;
-    double throttleCommand;
+    double pitchCommand;  // -1:1
+    double rollCommand;   // -1:1
+    double throttleCommand; // 0:1
 };
 
 class Renderer : public vtkCommand {

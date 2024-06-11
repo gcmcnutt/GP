@@ -85,8 +85,8 @@ void Aircraft::advanceState(double dt) {
   // get heading CW from North
   double heading = state->dPsi;
 
-  // get roll command: negative is roll left, positive is roll right (-1:1)
-  double roll = max(min(getRollCommand(), MAX_SERVO_DEFLECTION), -MAX_SERVO_DEFLECTION) / MAX_SERVO_DEFLECTION;
+  // get roll command: negative is roll left, positive is roll right
+  double roll = max(min(getRollCommand(), 1.0), -1.0);
 
   // get position
   Point3D position = {state->X, state->Y, state->Z};
@@ -242,7 +242,7 @@ void Renderer::RenderInBackground(vtkSmartPointer<vtkRenderWindow> renderWindow)
   // checkerboard
   for (int i = 0; i < planeSource->GetOutput()->GetNumberOfCells(); i++) {
     if (i % 2 ^ (i / 10) % 2) {
-      double rgb[4] = {255.0, 255.0, 255.0, 180.0};
+      double rgb[4] = {255.0, 255.0, 255.0, 100.0};
       cellData->InsertTuple(i, rgb);
     } else {      
       double rgb[4] = {0.0, 0.0, 0.0, 0.0};

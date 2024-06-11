@@ -204,17 +204,17 @@ double MyGene::evaluate (double arg)
 
       case GETDR: // get left/right angle from my path to the next point
                   {
-                    unsigned long idx = max(min(NthMyChild(0)->evaluate (arg) + pathIndex, (double) min(path.size()-1, (pathIndex+5))), (double) pathIndex);
+                    unsigned long idx = min(min(max(NthMyChild(0)->evaluate (arg), 0.0), 5.0) + pathIndex, (double) path.size()-1);
                     double dx = path.at(idx).start.x - aircraft->getState()->X;
                     double dy = path.at(idx).start.y - aircraft->getState()->Y;
-                    double angle = atan2(dy, dx);
+                    double angle = atan2(dx, dy); // return angle relative to y (cw is positive since we have +z up world)
                     double dPsi = aircraft->getState()->dPsi;
-                    returnValue = remainder(angle - dPsi, M_PI * 2);
+                    returnValue = remainder(angle + dPsi, M_PI * 2);
                     break;
                   }
       case GETDS: // get distance to the next point
                   {
-                    unsigned long idx = max(min(NthMyChild(0)->evaluate (arg) + pathIndex, (double) min(path.size()-1, (pathIndex+5))), (double) pathIndex);
+                    unsigned long idx = min(min(max(NthMyChild(0)->evaluate (arg), 0.0), 5.0) + pathIndex, (double) path.size()-1);
                     double dx = path.at(idx).start.x - aircraft->getState()->X;
                     double dy = path.at(idx).start.y - aircraft->getState()->Y;
                     double dz = path.at(idx).start.z - aircraft->getState()->Z;
@@ -301,10 +301,11 @@ void MyGP::evaluate ()
     // for now how close are we to the goal point?
     double distanceFromGoal = std::sqrt(
           std::pow(aircraft->getState()->X - path.at(pathIndex).start.x, 2) +
-          std::pow(aircraft->getState()->Y - path.at(pathIndex).start.y, 2) +
-          std::pow(aircraft->getState()->Z - path.at(pathIndex).start.z, 2));
+          std::pow(aircraft->getState()->Y - path.at(pathIndex).start.y, 2)/* +
+          std::pow(aircraft->getState()->Z - path.at(pathIndex).start.z, 2)*/);
 
     // add in distance component
+    // TODO add in orientation component
     stdFitness += distanceFromGoal;
 
     // but have we crashed outside the sphere?

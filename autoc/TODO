@@ -11,3 +11,4 @@
 - open up Z axes
 - verify the simulator is working correctly
 - verify the fitness function is working correctly
+- change pitch roll throttle to be direct PPM MSEC to servos (500-1500)

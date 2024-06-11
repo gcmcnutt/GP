@@ -16,7 +16,7 @@ Point3D randomPointInHalfSphere(double radius) {
     double x = r * std::sin(phi) * std::cos(theta);
     double y = r * std::sin(phi) * std::sin(theta);
     double z = r * std::cos(phi);
-    z = SIM_INITIAL_ALTITUDE; // TODO constrained Z for now
+    z = SIM_INITIAL_ALTITUDE;
 
     return Point3D(x, y, z);
 }
@@ -37,26 +37,25 @@ std::vector<Path> generateSmoothPath(int numPoints, double radius) {
     // Initial control point2
     Point3D initialPoint = {0, 0, SIM_INITIAL_ALTITUDE};
     controlPoints.push_back(initialPoint);
-    controlPoints.push_back(initialPoint); // XXX i really want this to be the first point
     Point3D initialPoint2 = {0, SIM_INITIAL_VELOCITY * 0.5, SIM_INITIAL_ALTITUDE};
     controlPoints.push_back(initialPoint2);
 
     // Generate random control points
-    for (int i = 0; i < numPoints - 2; ++i) {
+    for (int i = 2; i <= numPoints; ++i) {
         controlPoints.push_back(randomPointInHalfSphere(radius));
     }
 
     // Ensure the path is continuous by looping through control points
     double distance = 0;
     Point3D lastPoint = controlPoints[0];
-    for (size_t i = 1; i < controlPoints.size() - 2; ++i) {
+    for (size_t i = 1; i < controlPoints.size(); ++i) {
         for (double t = 0; t <= 1; t += 0.05) {
             Point3D interpolatedPoint = cubicInterpolate(controlPoints[i - 1], controlPoints[i], controlPoints[i + 1], controlPoints[i + 2], t);
             double newDistance = std::sqrt(std::pow(interpolatedPoint.x - lastPoint.x, 2) + std::pow(interpolatedPoint.y - lastPoint.y, 2) + std::pow(interpolatedPoint.z - lastPoint.z, 2));
-            distance += newDistance;
             Path pathSegment = {interpolatedPoint, distance};
             path.push_back(pathSegment);
             lastPoint = interpolatedPoint;
+            distance += newDistance;
         }
     }
 
