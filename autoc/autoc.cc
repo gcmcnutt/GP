@@ -274,8 +274,8 @@ void MyGP::evaluate ()
   // as long as we are within the time limit and have not reached the end of the path
   while (duration < SIM_TOTAL_TIME && pathIndex < path.size()) {
 
-    // walk path looking for next item around 0.5 seconds later
-    double minDistance = path.at(pathIndex).distanceFromStart + (0.5 * SIM_INITIAL_VELOCITY);
+    // walk path looking for next item around TIME_STEP seconds later
+    double minDistance = path.at(pathIndex).distanceFromStart + (SIM_TIME_STEP * SIM_INITIAL_VELOCITY);
     int newPathIndex = pathIndex;
     while (newPathIndex < path.size() && (path.at(newPathIndex).distanceFromStart < minDistance)) {
       newPathIndex++;
@@ -309,7 +309,7 @@ void MyGP::evaluate ()
 
     // add in distance component
     // TODO add in orientation component
-    stdFitness += distanceFromGoal * distanceFromGoal;
+    stdFitness += distanceFromGoal;
 
     // but have we crashed outside the sphere?
     double x = aircraft->getState()->X;
@@ -462,16 +462,9 @@ int main ()
   for (int gen=1; gen<=cfg.NumberOfGenerations; gen++)
     {
       // For this generation, build a smooth path goal
-      path = generateSmoothPath(20, SIM_PATH_BOUNDS); // TODO parameterize points
-      // char *output = new char[200];
-      // for (int i = 0; i < path.size(); i++) {
-      //   path.at(i).toString(output);
-      //   cout << i << ":" << output << endl;
-      // }
-      // printf("Path: %lu points, total length %f\n", path.size(), path.at(path.size() - 1).distanceFromStart);
+      path = generateSmoothPath(12, SIM_PATH_BOUNDS); // TODO parameterize points
 
-      // Create a new generation from the old one by applying the
-      // genetic operators
+      // Create a new generation from the old one by applying the genetic operators
       if (!cfg.SteadyState)
 	      newPop=new MyPopulation (cfg, adfNs);
       pop->generate (*newPop);

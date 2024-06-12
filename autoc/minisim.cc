@@ -127,6 +127,9 @@ void Renderer::Execute(vtkObject* caller, unsigned long eventId, void* vtkNotUse
     vtkSmartPointer<vtkPolyDataMapper> mapper2 = vtkSmartPointer<vtkPolyDataMapper>::New();
     mapper2->SetInputData(actual);
 
+    vtkSmartPointer<vtkPolyDataMapper> mapper3 = vtkSmartPointer<vtkPolyDataMapper>::New();
+    mapper3->SetInputData(segmentGap);
+
     // Create a mapper for the plane
     vtkSmartPointer<vtkPolyDataMapper> planeMapper = vtkSmartPointer<vtkPolyDataMapper>::New();
     planeMapper->SetInputConnection(planeSource->GetOutputPort());
@@ -135,6 +138,7 @@ void Renderer::Execute(vtkObject* caller, unsigned long eventId, void* vtkNotUse
     planeActor->SetMapper(planeMapper);
     actor1->SetMapper(mapper1);
     actor2->SetMapper(mapper2);
+    actor3->SetMapper(mapper3);
 
     // render
     vtkRenderWindowInteractor* iren = static_cast<vtkRenderWindowInteractor*>(caller);
@@ -170,6 +174,34 @@ vtkSmartPointer<vtkPolyData> Renderer::createPointSet(const std::vector<Point3D>
 
   // vtkSmartPointer<vtkPolyData> pointPolyData = vtkSmartPointer<vtkPolyData>::New();
   // pointPolyData->ShallowCopy(glyphFilter->GetOutput());
+
+  return polyData;
+}
+
+vtkSmartPointer<vtkPolyData> Renderer::createSegmentSet(const std::vector<Point3D> start, const std::vector<Point3D> end) {
+  vtkSmartPointer<vtkPoints> points = vtkSmartPointer<vtkPoints>::New();
+  for (int i = 0; i < start.size(); ++i) {
+    points->InsertNextPoint(start[i].x, start[i].y, start[i].z);
+    points->InsertNextPoint(end[i].x, end[i].y, end[i].z);
+  }
+
+  vtkSmartPointer<vtkCellArray> lines = vtkSmartPointer<vtkCellArray>::New();
+  for (int i = 0; i < start.size(); i += 2) {
+    vtkSmartPointer<vtkLine> line = vtkSmartPointer<vtkLine>::New();
+    line->GetPointIds()->SetId(0, i);
+    line->GetPointIds()->SetId(1, i + 1);
+    lines->InsertNextCell(line);
+  }
+
+  vtkSmartPointer<vtkPoints> vtp = vtkSmartPointer<vtkPoints>::New();
+  for (int i = 0 ; i < start.size(); ++i) {
+    vtp->InsertNextPoint(start[i].x, start[i].y, start[i].z);
+    vtp->InsertNextPoint(end[i].x, end[i].y, end[i].z);
+  }
+
+  vtkSmartPointer<vtkPolyData> polyData = vtkSmartPointer<vtkPolyData>::New();
+  polyData->SetPoints(vtp);
+  polyData->SetLines(lines);
 
   return polyData;
 }
@@ -219,6 +251,10 @@ void Renderer::RenderInBackground(vtkSmartPointer<vtkRenderWindow> renderWindow)
   actor2->GetProperty()->SetColor(colors->GetColor3d("Blue").GetData());
   actor2->GetProperty()->SetPointSize(4);
 
+  actor3 = vtkSmartPointer<vtkActor>::New();
+  actor3->GetProperty()->SetColor(colors->GetColor3d("Grey").GetData());
+  actor3->GetProperty()->SetPointSize(2);
+
   renderer->SetBackground(colors->GetColor3d("Black").GetData());
 
   // Create a plane source at z = 0
@@ -242,10 +278,10 @@ void Renderer::RenderInBackground(vtkSmartPointer<vtkRenderWindow> renderWindow)
   // checkerboard
   for (int i = 0; i < planeSource->GetOutput()->GetNumberOfCells(); i++) {
     if (i % 2 ^ (i / 10) % 2) {
-      double rgb[4] = {255.0, 255.0, 255.0, 100.0};
+      double rgb[4] = {0.0, 255.0, 100.0, 100.0};
       cellData->InsertTuple(i, rgb);
     } else {      
-      double rgb[4] = {0.0, 0.0, 0.0, 0.0};
+      double rgb[4] = {0.0, 80.0, 0.0, 100.0};
       cellData->InsertTuple(i, rgb);
     }
   }
@@ -265,6 +301,7 @@ void Renderer::RenderInBackground(vtkSmartPointer<vtkRenderWindow> renderWindow)
   renderer->AddActor(planeActor);
   renderer->AddActor(actor1);
   renderer->AddActor(actor2);
+  renderer->AddActor(actor3);
 
   // Add the timer callback
   renderWindowInteractor->AddObserver(vtkCommand::TimerEvent, this);
@@ -279,6 +316,8 @@ void Renderer::update(std::vector<Point3D> path, std::vector<Point3D> actual) {
   std::lock_guard<std::mutex> lock(dataMutex);
   this->path = createPointSet(path);
   this->actual = createPointSet(actual);
+  this->segmentGap = createSegmentSet(actual, path);
+
   newDataAvailable = true;
 }
 

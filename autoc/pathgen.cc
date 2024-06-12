@@ -37,7 +37,7 @@ std::vector<Path> generateSmoothPath(int numPoints, double radius) {
     // Initial control point2
     Point3D initialPoint = {0, 0, SIM_INITIAL_ALTITUDE};
     controlPoints.push_back(initialPoint);
-    Point3D initialPoint2 = {0, SIM_INITIAL_VELOCITY * 0.5, SIM_INITIAL_ALTITUDE};
+    Point3D initialPoint2 = {0, SIM_INITIAL_VELOCITY * SIM_TIME_STEP, SIM_INITIAL_ALTITUDE};
     controlPoints.push_back(initialPoint2);
 
     // Generate random control points

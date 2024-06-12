@@ -2,7 +2,10 @@
 #ifndef MINISIM_H
 #define MINISIM_H
 
+#include <mutex>
+
 #include "pathgen.h"
+
 #include <vtkPoints.h>
 #include <vtkSmartPointer.h>
 #include <vtkPolyData.h>
@@ -24,8 +27,7 @@
 #include <vtkCellData.h>
 #include <vtkMinimalStandardRandomSequence.h>
 #include <vtkInteractorStyleTrackballCamera.h>
-
-#include <mutex>
+#include <vtkLine.h>
 
 #define MAX_DELTA_ANGLE_RADSEC M_PI
 
@@ -36,7 +38,8 @@
 #define SIM_PATH_BOUNDS 40.0
 #define SIM_PATH_RADIUS_LIMIT 60.0
 
-#define SIM_TOTAL_TIME 50.0
+#define SIM_TOTAL_TIME 75.0
+#define SIM_TIME_STEP 0.4
 #define SIM_CRASH_FITNESS_PENALTY 1000000.0
 
 class AircraftState {
@@ -87,19 +90,23 @@ class Renderer : public vtkCommand {
     virtual void Execute(vtkObject* caller, unsigned long eventId, void* vtkNotUsed(callData));
 
   private:
+    
     // Shared resources
     std::mutex dataMutex;
     bool newDataAvailable = false;
     vtkSmartPointer<vtkPolyData> path;
     vtkSmartPointer<vtkPolyData> actual;
+    vtkSmartPointer<vtkPolyData> segmentGap;
     vtkSmartPointer<vtkActor> actor1;
     vtkSmartPointer<vtkActor> actor2;
+    vtkSmartPointer<vtkActor> actor3;
     vtkSmartPointer<vtkActor> planeActor;
     vtkSmartPointer<vtkPlaneSource> planeSource;
 
     int TimerCount;
 
     vtkSmartPointer<vtkPolyData> createPointSet(const std::vector<Point3D> points);
+    vtkSmartPointer<vtkPolyData> createSegmentSet(const std::vector<Point3D> start, const std::vector<Point3D> end);
     void RenderInBackground(vtkSmartPointer<vtkRenderWindow> renderWindow);
 };
 
