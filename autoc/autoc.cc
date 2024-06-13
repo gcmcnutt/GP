@@ -11,6 +11,8 @@ From skeleton/skeleton.cc
 #include <fstream>
 #include <sstream>
 #include <random>
+#include <thread>
+#include <chrono>
 
 #include "gp.h"
 #include "gpconfig.h"
@@ -47,7 +49,12 @@ struct GPConfigVarInformation configArray[]=
 
 
 // Define function and terminal identifiers
-enum Operators {ADD=0, NEG, MUL, INV, IF, EQ, GT, SIN, COS, TAN, GETDR, GETDS, GETMX, GETMY, GETPSI, PITCH, ROLL, THROTTLE, PI, ZERO, ONE, TWO, PROGN, _END};
+enum Operators {ADD=0, NEG, MUL, INV,
+                IF, EQ, GT, 
+                SIN, COS, TAN, 
+                GETDR, GETDS, GETMX, GETMY, GETPSI, GETPHI,
+                PITCH, ROLL, THROTTLE, 
+                PI, ZERO, ONE, TWO, PROGN, _END};
 const int OPERATORS_NR_ITEM=_END;
 
 
@@ -201,6 +208,7 @@ double MyGene::evaluate (double arg)
       case GETMX: returnValue = aircraft->getState()->X; break;
       case GETMY: returnValue = aircraft->getState()->Y; break;
       case GETPSI: returnValue = aircraft->getState()->dPsi; break;
+      case GETPHI: returnValue = aircraft->getState()->dPhi; break;
 
       case GETDR: // get left/right angle from my path to the next point
                   {
@@ -208,8 +216,8 @@ double MyGene::evaluate (double arg)
                     double dx = path.at(idx).start.x - aircraft->getState()->X;
                     double dy = path.at(idx).start.y - aircraft->getState()->Y;
                     double angle = atan2(dx, dy); // return angle relative to y (cw is positive since we have +z up world)
-                    double dPsi = aircraft->getState()->dPsi;
-                    returnValue = remainder(angle + dPsi, M_PI * 2);
+                    double heading = aircraft->getState()->dPsi;
+                    returnValue = remainder(angle + heading, M_PI * 2);
                     break;
                   }
       case GETDS: // get distance to the next point
@@ -251,7 +259,7 @@ void MyGP::evaluate ()
   }
 
   // north (+y), 5m/s at 10m
-  AircraftState state = {SIM_INITIAL_VELOCITY, 0.0, 0.0, 0.0, 0.0, 0.0, SIM_INITIAL_ALTITUDE, 0.0, 0.0, 0.0};
+  AircraftState state = {SIM_INITIAL_VELOCITY, 0.0, 0.0, SIM_INITiAL_HEADING, 0.0, 0.0, SIM_INITIAL_ALTITUDE, 0.0, 0.0, 0.0};
   aircraft->setState(&state);
   aircraft->setPitchCommand(0.0);
   aircraft->setRollCommand(0.0);
@@ -309,16 +317,16 @@ void MyGP::evaluate ()
 
     // add in distance component
     // TODO add in orientation component
-    stdFitness += distanceFromGoal;
+    stdFitness += pow(distanceFromGoal, SIM_FITNESS_EXPONENT);
 
     // but have we crashed outside the sphere?
     double x = aircraft->getState()->X;
     double y = aircraft->getState()->Y;
     double z = aircraft->getState()->Z;
-    if (aircraft->getState()->Z < 0 || std::sqrt(x*x + y*y + z*z) > SIM_PATH_RADIUS_LIMIT) { // XXX parameterize
+    if (aircraft->getState()->Z < SIM_MIN_ELEVATION || std::sqrt(x*x + y*y + z*z) > SIM_PATH_RADIUS_LIMIT) { // XXX parameterize
       // ok we are outside the bounds -- penalize but 
       double timeRemaining = max(0.0, SIM_TOTAL_TIME - duration); // XXX parameterize
-      stdFitness += SIM_CRASH_FITNESS_PENALTY + timeRemaining * SIM_INITIAL_VELOCITY; // big-xx our velocity
+      stdFitness += SIM_CRASH_FITNESS_PENALTY + pow(timeRemaining * SIM_INITIAL_VELOCITY, SIM_FITNESS_EXPONENT);
       break;
     }
 
@@ -399,6 +407,7 @@ void createNodeSet (GPAdfNodeSet& adfNs)
   ns.putNode (*new GPNode (GETMX, "GETMX"));
   ns.putNode (*new GPNode (GETMY, "GETMY"));
   ns.putNode (*new GPNode (GETPSI, "GETPSI"));
+  ns.putNode (*new GPNode (GETPHI, "GETPHI"));
   // ns.putNode (*new GPNode (GETMZ, "GETMZ"));
 }
 
@@ -462,7 +471,7 @@ int main ()
   for (int gen=1; gen<=cfg.NumberOfGenerations; gen++)
     {
       // For this generation, build a smooth path goal
-      path = generateSmoothPath(12, SIM_PATH_BOUNDS); // TODO parameterize points
+      path = generateSmoothPath(18, SIM_PATH_BOUNDS); // TODO parameterize points
 
       // Create a new generation from the old one by applying the genetic operators
       if (!cfg.SteadyState)
@@ -486,5 +495,8 @@ int main ()
 
       // clean out prior fitness case
       path.clear();
+
+      // sleep a bit
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
 }

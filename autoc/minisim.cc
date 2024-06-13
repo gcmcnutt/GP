@@ -82,33 +82,45 @@ void Aircraft::advanceState(double dt) {
   // get velocity
   double dVel = state->dRelVel;
 
-  // get heading CW from North
-  double heading = state->dPsi;
+  // get current roll state
+  double rollCurrent = state->dPhi;
 
   // get roll command: negative is roll left, positive is roll right
-  double roll = max(min(getRollCommand(), 1.0), -1.0); // XXX constant
+  double rollCommand = max(min(getRollCommand(), 1.0), -1.0); // XXX constant
+
+  // compute new roll orientation
+  double rollNew = remainder(rollCurrent + rollCommand * dt * MAX_ROLL_RATE_RADSEC, M_PI * 2);
+
+  // compute ground left/right force from current roll
+  double dForceLR = sin(rollNew) * dt * MAX_YAW_RATE_RADSEC;
+
+  // get current heading
+  double headingCurrent = state->dPsi;
+
+  // update heading based on roll
+  double newHeading = remainder(headingCurrent + dForceLR, M_PI * 2);
 
   // get position
   Point3D position = {state->X, state->Y, state->Z};
 
-  // update heading based on roll
-  heading = remainder(heading + roll * dt * MAX_DELTA_ANGLE_RADSEC, M_PI * 2);
-
   // update XY position based on heading, velocity, and dt
-  position.x += dVel * std::cos(heading) * dt; // XXX why is this reversed?
-  position.y += dVel * std::sin(heading) * dt;
+  position.x += dVel * std::cos(newHeading) * dt; // XXX need to work on z+ is actually down
+  position.y += dVel * std::sin(newHeading) * dt;
 
   // update state as a result
   state->X = position.x;
   state->Y = position.y;
-  state->dPsi = heading;
+  state->dPhi = rollNew;
+  state->dPsi = newHeading;
 }
 
 void Aircraft::toString(char *output) {
-  sprintf(output, "AircraftState: %f %f %f %f %f %f %f %f %f %f  Command: %f %f %f\n", state->dRelVel, state->dPhi, state->dTheta,
-    state->dPsi, state->X, state->Y, state->Z, state->R_X, state->R_Y, state->R_Z,
+  sprintf(output, "AircraftState: %f %f %f %f %f %f %f %f %f %f %f  Command: %f %f %f\n", state->dRelVel, state->dPhi, state->dTheta,
+    state->dPsi, state->dPhi, state->X, state->Y, state->Z, state->R_X, state->R_Y, state->R_Z,
     pitchCommand, rollCommand, throttleCommand);
 }
+
+
 
 
 // VTK timer event callback
@@ -180,27 +192,21 @@ vtkSmartPointer<vtkPolyData> Renderer::createPointSet(const std::vector<Point3D>
 
 vtkSmartPointer<vtkPolyData> Renderer::createSegmentSet(const std::vector<Point3D> start, const std::vector<Point3D> end) {
   vtkSmartPointer<vtkPoints> points = vtkSmartPointer<vtkPoints>::New();
-  for (int i = 0; i < start.size(); ++i) {
+  for (int i = 0; i < start.size(); i++) {
     points->InsertNextPoint(start[i].x, start[i].y, start[i].z);
     points->InsertNextPoint(end[i].x, end[i].y, end[i].z);
   }
 
   vtkSmartPointer<vtkCellArray> lines = vtkSmartPointer<vtkCellArray>::New();
-  for (int i = 0; i < start.size(); i += 2) {
+  for (int i = 0; i < points->GetNumberOfPoints(); i += 2) {
     vtkSmartPointer<vtkLine> line = vtkSmartPointer<vtkLine>::New();
     line->GetPointIds()->SetId(0, i);
     line->GetPointIds()->SetId(1, i + 1);
     lines->InsertNextCell(line);
   }
 
-  vtkSmartPointer<vtkPoints> vtp = vtkSmartPointer<vtkPoints>::New();
-  for (int i = 0 ; i < start.size(); ++i) {
-    vtp->InsertNextPoint(start[i].x, start[i].y, start[i].z);
-    vtp->InsertNextPoint(end[i].x, end[i].y, end[i].z);
-  }
-
   vtkSmartPointer<vtkPolyData> polyData = vtkSmartPointer<vtkPolyData>::New();
-  polyData->SetPoints(vtp);
+  polyData->SetPoints(points);
   polyData->SetLines(lines);
 
   return polyData;
@@ -248,11 +254,11 @@ void Renderer::RenderInBackground(vtkSmartPointer<vtkRenderWindow> renderWindow)
   actor1->GetProperty()->SetPointSize(4);
   
   actor2 = vtkSmartPointer<vtkActor>::New();
-  actor2->GetProperty()->SetColor(colors->GetColor3d("Blue").GetData());
+  actor2->GetProperty()->SetColor(colors->GetColor3d("Yellow").GetData());
   actor2->GetProperty()->SetPointSize(4);
 
   actor3 = vtkSmartPointer<vtkActor>::New();
-  actor3->GetProperty()->SetColor(colors->GetColor3d("Grey").GetData());
+  actor3->GetProperty()->SetColor(colors->GetColor3d("Blue").GetData());
   actor3->GetProperty()->SetPointSize(2);
 
   renderer->SetBackground(colors->GetColor3d("Black").GetData());
@@ -278,10 +284,10 @@ void Renderer::RenderInBackground(vtkSmartPointer<vtkRenderWindow> renderWindow)
   // checkerboard
   for (int i = 0; i < planeSource->GetOutput()->GetNumberOfCells(); i++) {
     if (i % 2 ^ (i / 10) % 2) {
-      double rgb[4] = {0.0, 255.0, 100.0, 100.0};
+      double rgb[4] = {255.0, 255.0, 255.0, 100.0};
       cellData->InsertTuple(i, rgb);
     } else {      
-      double rgb[4] = {0.0, 80.0, 0.0, 100.0};
+      double rgb[4] = {0.0, 0.0, 0.0, 100.0};
       cellData->InsertTuple(i, rgb);
     }
   }

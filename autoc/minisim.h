@@ -29,7 +29,8 @@
 #include <vtkInteractorStyleTrackballCamera.h>
 #include <vtkLine.h>
 
-#define MAX_DELTA_ANGLE_RADSEC M_PI
+#define MAX_ROLL_RATE_RADSEC M_PI
+#define MAX_YAW_RATE_RADSEC M_PI / 2.0
 
 #define SIM_INITIAL_VELOCITY 5.0
 #define SIM_INITIAL_ALTITUDE 10.0
@@ -37,10 +38,13 @@
 #define SIM_INITIAL_THROTTLE 0.5
 #define SIM_PATH_BOUNDS 40.0
 #define SIM_PATH_RADIUS_LIMIT 60.0
+#define SIM_MIN_ELEVATION 3.0
 
 #define SIM_TOTAL_TIME 75.0
-#define SIM_TIME_STEP 0.4
-#define SIM_CRASH_FITNESS_PENALTY 1000000.0
+#define SIM_TIME_STEP 0.1
+
+#define SIM_FITNESS_EXPONENT 2.0
+#define SIM_CRASH_FITNESS_PENALTY pow(1000.0, SIM_FITNESS_EXPONENT)
 
 class AircraftState {
   public:
