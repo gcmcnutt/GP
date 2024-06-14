@@ -259,7 +259,7 @@ void MyGP::evaluate ()
   }
 
   // north (+y), 5m/s at 10m
-  AircraftState state = {SIM_INITIAL_VELOCITY, 0.0, 0.0, SIM_INITiAL_HEADING, 0.0, 0.0, SIM_INITIAL_ALTITUDE, 0.0, 0.0, 0.0};
+  AircraftState state = {SIM_INITIAL_VELOCITY, 0.0, 0.0, SIM_INITIAL_HEADING, 0.0, 0.0, SIM_INITIAL_ALTITUDE, 0.0, 0.0, 0.0};
   aircraft->setState(&state);
   aircraft->setPitchCommand(0.0);
   aircraft->setRollCommand(0.0);
@@ -322,7 +322,7 @@ void MyGP::evaluate ()
     // but have we crashed outside the sphere?
     double x = aircraft->getState()->X;
     double y = aircraft->getState()->Y;
-    double z = aircraft->getState()->Z;
+    double z = 10.0; //aircraft->getState()->Z;
     if (aircraft->getState()->Z < SIM_MIN_ELEVATION || std::sqrt(x*x + y*y + z*z) > SIM_PATH_RADIUS_LIMIT) { // XXX parameterize
       // ok we are outside the bounds -- penalize but 
       double timeRemaining = max(0.0, SIM_TOTAL_TIME - duration); // XXX parameterize
@@ -470,6 +470,9 @@ int main ()
 
   for (int gen=1; gen<=cfg.NumberOfGenerations; gen++)
     {
+      // sleep a bit to kick off the gui
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
       // For this generation, build a smooth path goal
       path = generateSmoothPath(18, SIM_PATH_BOUNDS); // TODO parameterize points
 

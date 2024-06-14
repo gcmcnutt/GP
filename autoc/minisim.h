@@ -34,7 +34,7 @@
 
 #define SIM_INITIAL_VELOCITY 5.0
 #define SIM_INITIAL_ALTITUDE 10.0
-#define SIM_INITiAL_HEADING 0.0
+#define SIM_INITIAL_HEADING 0.0
 #define SIM_INITIAL_THROTTLE 0.5
 #define SIM_PATH_BOUNDS 40.0
 #define SIM_PATH_RADIUS_LIMIT 60.0
@@ -51,13 +51,14 @@ class AircraftState {
     AircraftState(double dRelVel, double dPhi, double dTheta, double dPsi, double X, double Y, double Z, double R_X, double R_Y, double R_Z);
     AircraftState(); 
 
-    double dRelVel; // reltive velocity m/s
+    // ENU convention for location
+    double dRelVel; // reltive forward velocity on +x airplane axis m/s
     double dPhi;    // roll+ right -pi:pi
     double dTheta;  // pitch+ up -pi:pi
     double dPsi;    // yaw+ clockwise -pi:pi
-    double X;       // positionX+ right/east
-    double Y;       // positionY+ up/north
-    double Z;       // positionZ+ up (note: we are mostly in plus Z = up world)
+    double X;       // positionX+ east
+    double Y;       // positionY+ north
+    double Z;       // positionZ+ up
     double R_X;     // rotationX
     double R_Y;     // rotationY
     double R_Z;     // rotationZ

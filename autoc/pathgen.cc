@@ -16,7 +16,7 @@ Point3D randomPointInHalfSphere(double radius) {
     double x = r * std::sin(phi) * std::cos(theta);
     double y = r * std::sin(phi) * std::sin(theta);
     double z = r * std::cos(phi);
-    z = SIM_INITIAL_ALTITUDE;
+    // z = SIM_INITIAL_ALTITUDE;
 
     return Point3D(x, y, z);
 }

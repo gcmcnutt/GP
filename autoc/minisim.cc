@@ -82,7 +82,7 @@ void Aircraft::advanceState(double dt) {
   // get velocity
   double dVel = state->dRelVel;
 
-  // get current roll state
+  // get current roll state (positive roll is right roll)
   double rollCurrent = state->dPhi;
 
   // get roll command: negative is roll left, positive is roll right
@@ -91,10 +91,10 @@ void Aircraft::advanceState(double dt) {
   // compute new roll orientation
   double rollNew = remainder(rollCurrent + rollCommand * dt * MAX_ROLL_RATE_RADSEC, M_PI * 2);
 
-  // compute ground left/right force from current roll
+  // compute ground left/right force from current roll (positive is right)
   double dForceLR = sin(rollNew) * dt * MAX_YAW_RATE_RADSEC;
 
-  // get current heading
+  // get current heading (positive yaw is clockwise)
   double headingCurrent = state->dPsi;
 
   // update heading based on roll
@@ -228,7 +228,7 @@ void Renderer::RenderInBackground(vtkSmartPointer<vtkRenderWindow> renderWindow)
   // Configure the camera
   vtkSmartPointer<vtkCamera> camera = vtkSmartPointer<vtkCamera>::New();
   camera->SetPosition(0, -50, 2);        // behind the action
-  camera->SetFocalPoint(0, 0, 10);       // Start of initial height
+  camera->SetFocalPoint(0, 0, SIM_INITIAL_ALTITUDE);       // Start of initial height
   camera->SetViewUp(0, 0, 1);           // Set the view up vector
   camera->SetViewAngle(60);             // Set the field of view (FOV) in degrees
 
