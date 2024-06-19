@@ -18,6 +18,7 @@ From skeleton/skeleton.cc
 #include "gpconfig.h"
 #include "minisim.h"
 #include "pathgen.h"
+#include "vmath.h"
 
 using namespace std;
 
@@ -51,8 +52,8 @@ struct GPConfigVarInformation configArray[]=
 // Define function and terminal identifiers
 enum Operators {ADD=0, NEG, MUL, INV,
                 IF, EQ, GT, 
-                SIN, COS, TAN, 
-                GETDR, GETDS, GETMX, GETMY, GETPSI, GETPHI,
+                SIN, COS, TAN,
+                GETDPHI, GETDTHETA, GETDS, GETMX, GETMY, GETMZ, GETPHI, GETTHETA,
                 PITCH, ROLL, THROTTLE, 
                 PI, ZERO, ONE, TWO, PROGN, _END};
 const int OPERATORS_NR_ITEM=_END;
@@ -207,22 +208,61 @@ double MyGene::evaluate (double arg)
       }
       case GETMX: returnValue = aircraft->getState()->X; break;
       case GETMY: returnValue = aircraft->getState()->Y; break;
-      case GETPSI: returnValue = aircraft->getState()->dPsi; break;
+      case GETMZ: returnValue = aircraft->getState()->Z; break;
       case GETPHI: returnValue = aircraft->getState()->dPhi; break;
+      case GETTHETA: returnValue = aircraft->getState()->dTheta; break;
 
-      case GETDR: // get left/right angle from my path to the next point
+      case GETDPHI: // compute roll goal from current to target
                   {
-                    unsigned long idx = min(min(max(NthMyChild(0)->evaluate (arg), 0.0), 5.0) + pathIndex, (double) path.size()-1);
+                    // compute vector to target
+                    long idx = min(min(max(NthMyChild(0)->evaluate (arg), 0.0), 5.0) + pathIndex, (double) path.size()-1);
                     double dx = path.at(idx).start.x - aircraft->getState()->X;
                     double dy = path.at(idx).start.y - aircraft->getState()->Y;
-                    double angle = atan2(dx, dy); // return angle relative to y (cw is positive since we have +z up world)
-                    double heading = aircraft->getState()->dPsi;
-                    returnValue = remainder(angle + heading, M_PI * 2);
+                    double dz = path.at(idx).start.z - aircraft->getState()->Z;
+                    std::array<double, 3> goalVectorWorldFrame = {dx, dy, dz};
+
+                    // Convert the goal vector to body frame
+                    std::array<double, 3> goalVectorBodyFrame = vmath::worldToLocal(aircraft->getState()->dPsi,
+                                    aircraft->getState()->dTheta, aircraft->getState()->dPhi, goalVectorWorldFrame);
+
+                    // Calculate the current roll of the body
+                    double currentRoll = aircraft->getState()->dPhi;
+
+                    // Calculate the required roll to align with the goal vector in body coordinates
+                    double requiredRoll = atan2(goalVectorBodyFrame[1], goalVectorBodyFrame[0]);
+
+                    // Calculate the roll delta
+                    double returnValue = requiredRoll - currentRoll;
                     break;
                   }
+
+      case GETDTHETA: // compute pitch goal from current to target
+                  {
+                    // compute vector to target
+                    long idx = min(min(max(NthMyChild(0)->evaluate (arg), 0.0), 5.0) + pathIndex, (double) path.size()-1);
+                    double dx = path.at(idx).start.x - aircraft->getState()->X;
+                    double dy = path.at(idx).start.y - aircraft->getState()->Y;
+                    double dz = path.at(idx).start.z - aircraft->getState()->Z;
+                    std::array<double, 3> goalVectorWorldFrame = {dx, dy, dz};
+
+                    // Convert the goal vector to body frame
+                    std::array<double, 3> goalVectorBodyFrame = vmath::worldToLocal(aircraft->getState()->dPsi,
+                                    aircraft->getState()->dTheta, aircraft->getState()->dPhi, goalVectorWorldFrame);
+
+                    // Calculate the current pitch of the body
+                    double currentPitch = aircraft->getState()->dTheta;
+
+                    // Calculate the required pitch to align with the goal vector in body coordinates
+                    double requiredPitch = atan2(goalVectorBodyFrame[2], sqrt(goalVectorBodyFrame[0] * goalVectorBodyFrame[0] + goalVectorBodyFrame[1] * goalVectorBodyFrame[1]));
+
+                    // Calculate the pitch delta
+                    double returnValue = requiredPitch - currentPitch;
+                    break;
+                  }
+
       case GETDS: // get distance to the next point
                   {
-                    unsigned long idx = min(min(max(NthMyChild(0)->evaluate (arg), 0.0), 5.0) + pathIndex, (double) path.size()-1);
+                    long idx = min(min(max(NthMyChild(0)->evaluate (arg), 0.0), 5.0) + pathIndex, (double) path.size()-1);
                     double dx = path.at(idx).start.x - aircraft->getState()->X;
                     double dy = path.at(idx).start.y - aircraft->getState()->Y;
                     double dz = path.at(idx).start.z - aircraft->getState()->Z;
@@ -312,8 +352,8 @@ void MyGP::evaluate ()
     // for now how close are we to the goal point?
     double distanceFromGoal = std::sqrt(
           std::pow(aircraft->getState()->X - path.at(pathIndex).start.x, 2) +
-          std::pow(aircraft->getState()->Y - path.at(pathIndex).start.y, 2)/* +
-          std::pow(aircraft->getState()->Z - path.at(pathIndex).start.z, 2)*/);
+          std::pow(aircraft->getState()->Y - path.at(pathIndex).start.y, 2) +
+          std::pow(aircraft->getState()->Z - path.at(pathIndex).start.z, 2));
 
     // add in distance component
     // TODO add in orientation component
@@ -322,11 +362,11 @@ void MyGP::evaluate ()
     // but have we crashed outside the sphere?
     double x = aircraft->getState()->X;
     double y = aircraft->getState()->Y;
-    double z = 10.0; //aircraft->getState()->Z;
-    if (aircraft->getState()->Z < SIM_MIN_ELEVATION || std::sqrt(x*x + y*y + z*z) > SIM_PATH_RADIUS_LIMIT) { // XXX parameterize
+    double z = aircraft->getState()->Z;
+    if (aircraft->getState()->Z > SIM_MIN_ELEVATION || std::sqrt(x*x + y*y + z*z) > SIM_PATH_RADIUS_LIMIT) {
       // ok we are outside the bounds -- penalize but 
-      double timeRemaining = max(0.0, SIM_TOTAL_TIME - duration); // XXX parameterize
-      stdFitness += SIM_CRASH_FITNESS_PENALTY + pow(timeRemaining * SIM_INITIAL_VELOCITY, SIM_FITNESS_EXPONENT);
+      double timeRemaining = max(0.0, SIM_TOTAL_TIME - duration);
+      stdFitness += SIM_CRASH_FITNESS_PENALTY + pow((timeRemaining / SIM_TIME_STEP) * SIM_HALF_DISTANCE, SIM_FITNESS_EXPONENT);
       break;
     }
 
@@ -402,13 +442,14 @@ void createNodeSet (GPAdfNodeSet& adfNs)
   ns.putNode (*new GPNode (ONE, "1"));
   ns.putNode (*new GPNode (TWO, "2"));
   ns.putNode (*new GPNode (PROGN, "PROGN", 2));
-  ns.putNode (*new GPNode (GETDR, "GETDR", 1));
+  ns.putNode (*new GPNode (GETDPHI, "GETDPHI", 1));
+  ns.putNode (*new GPNode (GETDTHETA, "GETDTHETA", 1));
   ns.putNode (*new GPNode (GETDS, "GETDS", 1));
   ns.putNode (*new GPNode (GETMX, "GETMX"));
   ns.putNode (*new GPNode (GETMY, "GETMY"));
-  ns.putNode (*new GPNode (GETPSI, "GETPSI"));
+  ns.putNode (*new GPNode (GETMZ, "GETMZ"));
   ns.putNode (*new GPNode (GETPHI, "GETPHI"));
-  // ns.putNode (*new GPNode (GETMZ, "GETMZ"));
+  ns.putNode (*new GPNode (GETTHETA, "GETTHETA"));
 }
 
 

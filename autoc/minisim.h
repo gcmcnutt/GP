@@ -30,35 +30,42 @@
 #include <vtkLine.h>
 
 #define MAX_ROLL_RATE_RADSEC M_PI
+#define MAX_PITCH_RATE_RADSEC M_PI
 #define MAX_YAW_RATE_RADSEC M_PI / 2.0
 
-#define SIM_INITIAL_VELOCITY 5.0
-#define SIM_INITIAL_ALTITUDE 10.0
+#define SIM_INITIAL_VELOCITY 4.0
+#define SIM_INITIAL_ALTITUDE -10.0
 #define SIM_INITIAL_HEADING 0.0
 #define SIM_INITIAL_THROTTLE 0.5
 #define SIM_PATH_BOUNDS 40.0
 #define SIM_PATH_RADIUS_LIMIT 60.0
-#define SIM_MIN_ELEVATION 3.0
+#define SIM_MIN_ELEVATION -3.0
 
 #define SIM_TOTAL_TIME 75.0
 #define SIM_TIME_STEP 0.1
 
 #define SIM_FITNESS_EXPONENT 2.0
-#define SIM_CRASH_FITNESS_PENALTY pow(1000.0, SIM_FITNESS_EXPONENT)
+#define SIM_CRASH_FITNESS_PENALTY pow(1.0, SIM_FITNESS_EXPONENT)
+#define SIM_HALF_DISTANCE SIM_PATH_BOUNDS
 
 class AircraftState {
   public:
     AircraftState(double dRelVel, double dPhi, double dTheta, double dPsi, double X, double Y, double Z, double R_X, double R_Y, double R_Z);
     AircraftState(); 
 
-    // ENU convention for location
     double dRelVel; // reltive forward velocity on +x airplane axis m/s
+
+    // world frame for now
     double dPhi;    // roll+ right -pi:pi
     double dTheta;  // pitch+ up -pi:pi
-    double dPsi;    // yaw+ clockwise -pi:pi
-    double X;       // positionX+ east
-    double Y;       // positionY+ north
-    double Z;       // positionZ+ up
+    double dPsi;    // yaw+ clockwise -pi:pi -- ALWAYS 0
+
+    // NED convention for location
+    double X;       // positionX+ north
+    double Y;       // positionY+ east
+    double Z;       // positionZ+ down
+
+    //not used
     double R_X;     // rotationX
     double R_Y;     // rotationY
     double R_Z;     // rotationZ

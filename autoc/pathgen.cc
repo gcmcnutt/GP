@@ -15,8 +15,7 @@ Point3D randomPointInHalfSphere(double radius) {
 
     double x = r * std::sin(phi) * std::cos(theta);
     double y = r * std::sin(phi) * std::sin(theta);
-    double z = r * std::cos(phi);
-    // z = SIM_INITIAL_ALTITUDE;
+    double z = -r * std::cos(phi);
 
     return Point3D(x, y, z);
 }
@@ -37,7 +36,7 @@ std::vector<Path> generateSmoothPath(int numPoints, double radius) {
     // Initial control point2
     Point3D initialPoint = {0, 0, SIM_INITIAL_ALTITUDE};
     controlPoints.push_back(initialPoint);
-    Point3D initialPoint2 = {0, SIM_INITIAL_VELOCITY * SIM_TIME_STEP, SIM_INITIAL_ALTITUDE};
+    Point3D initialPoint2 = {SIM_INITIAL_VELOCITY * SIM_TIME_STEP, 0, SIM_INITIAL_ALTITUDE};
     controlPoints.push_back(initialPoint2);
 
     // Generate random control points

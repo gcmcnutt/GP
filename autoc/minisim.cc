@@ -3,11 +3,14 @@
 #include <cmath>
 #include <thread>
 #include <mutex>
+#include <array>
 
 #include "minisim.h"
 #include "pathgen.h"
+#include "vmath.h"
 
 using namespace std;
+using namespace vmath;
 
 AircraftState::AircraftState() {
       this->dRelVel = 0;
@@ -82,36 +85,49 @@ void Aircraft::advanceState(double dt) {
   // get velocity
   double dVel = state->dRelVel;
 
-  // get current roll state (positive roll is right roll)
-  double rollCurrent = state->dPhi;
+  // Convert current Euler angles to a rotation matrix
+  Matrix3x3 currentRotation = eulerToRotationMatrix(state->dPsi, state->dTheta, state->dPhi);
 
-  // get roll command: negative is roll left, positive is roll right
-  double rollCommand = max(min(getRollCommand(), 1.0), -1.0); // XXX constant
+  // Apply the adjustments to the rotation matrix
+  double rollCommand = max(min(getRollCommand(), 1.0), -1.0); // limit
+  double rollDelta = remainder(rollCommand * dt * MAX_ROLL_RATE_RADSEC, M_PI * 2);
 
-  // compute new roll orientation
-  double rollNew = remainder(rollCurrent + rollCommand * dt * MAX_ROLL_RATE_RADSEC, M_PI * 2);
+  // get current pitch state, compute up/down force (positive pitch is up)
+  double pitchCommand = max(min(getPitchCommand(), 1.0), -1.0); // limit
+  double pitchDelta = remainder(pitchCommand * dt * MAX_PITCH_RATE_RADSEC, M_PI * 2);
 
-  // compute ground left/right force from current roll (positive is right)
-  double dForceLR = sin(rollNew) * dt * MAX_YAW_RATE_RADSEC;
+  Matrix3x3 newRotation = applyAdjustments(currentRotation, pitchDelta, rollDelta);
 
-  // get current heading (positive yaw is clockwise)
-  double headingCurrent = state->dPsi;
+  // Convert the new rotation matrix back to Euler angles
+  std::array<double, 3> newEulerAngles = rotationMatrixToEuler(newRotation);
 
-  // update heading based on roll
-  double newHeading = remainder(headingCurrent + dForceLR, M_PI * 2);
+  // Define a unit vector along the roll axis in the body frame
+  std::array<double, 3> rollAxis = {1, 0, 0};
 
+  // Convert the roll axis vector to world coordinates
+  Matrix3x3 bodyToWorldMatrix = bodyToWorld(newEulerAngles[0], newEulerAngles[1], newEulerAngles[2]);
+  std::array<double, 3> worldRollAxis = multiplyMatrixVector(bodyToWorldMatrix, rollAxis);
+
+  // Scale the roll axis vector by the velocity*dt
+  for (auto &component : worldRollAxis) {
+      component *= (dVel * dt);
+  }
+  
   // get position
   Point3D position = {state->X, state->Y, state->Z};
 
-  // update XY position based on heading, velocity, and dt
-  position.x += dVel * std::cos(newHeading) * dt; // XXX need to work on z+ is actually down
-  position.y += dVel * std::sin(newHeading) * dt;
+  // update XYZ position based on vector
+  position.x += worldRollAxis[0];
+  position.y += worldRollAxis[1];
+  position.z += worldRollAxis[2];
 
   // update state as a result
   state->X = position.x;
   state->Y = position.y;
-  state->dPhi = rollNew;
-  state->dPsi = newHeading;
+  state->Z = position.z;
+  state->dPhi = newEulerAngles[2];
+  state->dTheta = newEulerAngles[1];
+  state->dPsi = newEulerAngles[0];
 }
 
 void Aircraft::toString(char *output) {
@@ -227,9 +243,9 @@ void Renderer::RenderInBackground(vtkSmartPointer<vtkRenderWindow> renderWindow)
 
   // Configure the camera
   vtkSmartPointer<vtkCamera> camera = vtkSmartPointer<vtkCamera>::New();
-  camera->SetPosition(0, -50, 2);        // behind the action
+  camera->SetPosition(-50, 0, -2);        // behind the action
   camera->SetFocalPoint(0, 0, SIM_INITIAL_ALTITUDE);       // Start of initial height
-  camera->SetViewUp(0, 0, 1);           // Set the view up vector
+  camera->SetViewUp(0, 0, -1);           // Set the view up vector
   camera->SetViewAngle(60);             // Set the field of view (FOV) in degrees
 
   // Apply the camera settings to the renderer

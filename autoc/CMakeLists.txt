@@ -7,6 +7,6 @@ include_directories(../include ${VTK_INCLUDE_DIRS})
 link_directories(../lib)
 add_compile_options(-Wno-write-strings)
 
-add_executable(autoc autoc.cc minisim.h minisim.cc pathgen.cc pathgen.h )
+add_executable(autoc autoc.cc minisim.h minisim.cc pathgen.cc pathgen.h vmath.cc vmath.h )
 
 target_link_libraries(autoc gp ${VTK_LIBRARIES})
