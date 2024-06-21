@@ -15,7 +15,7 @@ Point3D randomPointInHalfSphere(double radius) {
 
     double x = r * std::sin(phi) * std::cos(theta);
     double y = r * std::sin(phi) * std::sin(theta);
-    double z = -r * std::cos(phi);
+    double z = (SIM_MIN_ELEVATION - r) * std::cos(phi);
 
     return Point3D(x, y, z);
 }
@@ -36,19 +36,31 @@ std::vector<Path> generateSmoothPath(int numPoints, double radius) {
     // Initial control point2
     Point3D initialPoint = {0, 0, SIM_INITIAL_ALTITUDE};
     controlPoints.push_back(initialPoint);
-    Point3D initialPoint2 = {SIM_INITIAL_VELOCITY * SIM_TIME_STEP, 0, SIM_INITIAL_ALTITUDE};
-    controlPoints.push_back(initialPoint2);
 
     // Generate random control points
-    for (int i = 2; i <= numPoints; ++i) {
-        controlPoints.push_back(randomPointInHalfSphere(radius));
+    double x, y, z;
+    for (size_t i = 0; i < numPoints; ++i) {
+        x = sin(2 * M_PI * i / numPoints) * SIM_PATH_BOUNDS/2;
+        z = SIM_INITIAL_ALTITUDE - SIM_PATH_BOUNDS/2 + cos(2 * M_PI * i / numPoints) * SIM_PATH_BOUNDS/2;
+        y = i;
+        controlPoints.push_back(Point3D(x, y, z)); 
+
+        //controlPoints.push_back(randomPointInHalfSphere(radius));
+    }
+    for (size_t i = 0; i < numPoints; ++i) {
+        x = sin(2 * M_PI * i / numPoints) * SIM_PATH_BOUNDS/2;
+        y = cos(2 * M_PI * i / numPoints) * SIM_PATH_BOUNDS/2;
+        controlPoints.push_back(Point3D(x, y, z)); 
+        z = SIM_INITIAL_ALTITUDE - i;
+
+        //controlPoints.push_back(randomPointInHalfSphere(radius));
     }
 
     // Ensure the path is continuous by looping through control points
     double distance = 0;
     Point3D lastPoint = controlPoints[0];
     path.push_back({lastPoint, distance});
-    for (size_t i = 1; i < controlPoints.size() - 1; ++i) {
+    for (size_t i = 1; i < controlPoints.size() - 3; ++i) {
         for (double t = 0; t <= 1; t += 0.05) {
             Point3D interpolatedPoint = cubicInterpolate(controlPoints[i - 1], controlPoints[i], controlPoints[i + 1], controlPoints[i + 2], t);
             double newDistance = std::sqrt(std::pow(interpolatedPoint.x - lastPoint.x, 2) + std::pow(interpolatedPoint.y - lastPoint.y, 2) + std::pow(interpolatedPoint.z - lastPoint.z, 2));

@@ -18,7 +18,6 @@ From skeleton/skeleton.cc
 #include "gpconfig.h"
 #include "minisim.h"
 #include "pathgen.h"
-#include "vmath.h"
 
 using namespace std;
 
@@ -52,8 +51,8 @@ struct GPConfigVarInformation configArray[]=
 // Define function and terminal identifiers
 enum Operators {ADD=0, NEG, MUL, INV,
                 IF, EQ, GT, 
-                SIN, COS, TAN,
-                GETDPHI, GETDTHETA, GETDS, GETMX, GETMY, GETMZ, GETPHI, GETTHETA,
+                SIN, COS,
+                GETDPHI, GETDTHETA, GETDS, GETMX, GETMY, GETMZ, GETPHI, GETTHETA, GETPSI,
                 PITCH, ROLL, THROTTLE, 
                 PI, ZERO, ONE, TWO, PROGN, _END};
 const int OPERATORS_NR_ITEM=_END;
@@ -170,7 +169,15 @@ public:
     return (MyGP*) GPContainer::Nth (n); }
 };
 
+int getIndex(double arg) {
+  if (isnan(arg)) {
+    return pathIndex;
+  }
 
+  int idx = min(max((int) arg, -1), 5) + pathIndex;
+
+  return idx < path.size()-1 ? idx : path.size()-1;
+}
 
 // This function evaluates the fitness of a genetic tree.  We have the
 // freedom to define this function in any way we like.  
@@ -196,7 +203,6 @@ double MyGene::evaluate (double arg)
       case THROTTLE: returnValue = aircraft->setThrottleCommand(NthMyChild(0)->evaluate (arg)); break;
       case SIN: returnValue = sin(NthMyChild(0)->evaluate (arg)); break;
       case COS: returnValue = cos(NthMyChild(0)->evaluate (arg)); break;
-      case TAN: returnValue = tan(NthMyChild(0)->evaluate (arg)); break;
       case PI: returnValue = M_PI; break;
       case ZERO: returnValue = 0; break;
       case ONE: returnValue = 1; break;
@@ -211,58 +217,83 @@ double MyGene::evaluate (double arg)
       case GETMZ: returnValue = aircraft->getState()->Z; break;
       case GETPHI: returnValue = aircraft->getState()->dPhi; break;
       case GETTHETA: returnValue = aircraft->getState()->dTheta; break;
+      case GETPSI: returnValue = aircraft->getState()->dPsi; break;
 
       case GETDPHI: // compute roll goal from current to target
                   {
-                    // compute vector to target
-                    long idx = min(min(max(NthMyChild(0)->evaluate (arg), 0.0), 5.0) + pathIndex, (double) path.size()-1);
-                    double dx = path.at(idx).start.x - aircraft->getState()->X;
-                    double dy = path.at(idx).start.y - aircraft->getState()->Y;
-                    double dz = path.at(idx).start.z - aircraft->getState()->Z;
-                    std::array<double, 3> goalVectorWorldFrame = {dx, dy, dz};
+                    // Aircraft's initial position and orientation (in world frame)
+                    Eigen::Vector3d aircraft_position(aircraft->getState()->X,
+                            aircraft->getState()->Y,
+                            aircraft->getState()->Z);
 
-                    // Convert the goal vector to body frame
-                    std::array<double, 3> goalVectorBodyFrame = vmath::worldToLocal(aircraft->getState()->dPsi,
-                                    aircraft->getState()->dTheta, aircraft->getState()->dPhi, goalVectorWorldFrame);
+                    // Convert initial Euler angles to quaternion
+                    Eigen::Quaterniond aircraft_orientation =
+                        Eigen::AngleAxisd(aircraft->getState()->dPsi, Eigen::Vector3d::UnitZ()) *
+                        Eigen::AngleAxisd(aircraft->getState()->dTheta, Eigen::Vector3d::UnitY()) *
+                        Eigen::AngleAxisd(aircraft->getState()->dPhi, Eigen::Vector3d::UnitX());
 
-                    // Calculate the current roll of the body
-                    double currentRoll = aircraft->getState()->dPhi;
+                    // Target's position (in world frame)
+                    int idx = getIndex(NthMyChild(0)->evaluate (arg));
+                    Eigen::Vector3d target_position(path.at(idx).start.x, path.at(idx).start.y, path.at(idx).start.z);
 
-                    // Calculate the required roll to align with the goal vector in body coordinates
-                    double requiredRoll = atan2(goalVectorBodyFrame[1], goalVectorBodyFrame[0]);
+                    // Compute the vector from the aircraft to the target
+                    Eigen::Vector3d target_vector = target_position - aircraft_position;
 
-                    // Calculate the roll delta
-                    double returnValue = requiredRoll - currentRoll;
+                    // Normalize the target vector to get the direction
+                    Eigen::Vector3d target_direction = target_vector.normalized();
+
+                    // Aircraft's current y-axis vector in world frame
+                    Eigen::Vector3d aircraft_y_axis(0, 1, 0); // Assuming unit vector along the y-axis
+                    aircraft_y_axis = aircraft_orientation * aircraft_y_axis;
+
+                    // Compute the quaternion representing the rotation from aircraft y-axis to target direction
+                    Eigen::Quaterniond quat_current_to_target = Eigen::Quaterniond::FromTwoVectors(aircraft_y_axis, target_direction);
+
+                    // Extract the roll delta from the quaternion
+                    Eigen::Vector3d euler_angles_delta = quat_current_to_target.toRotationMatrix().eulerAngles(2, 1, 0); // ZYX order: yaw, pitch, roll
+                    double returnValue = euler_angles_delta(2);
                     break;
                   }
 
       case GETDTHETA: // compute pitch goal from current to target
                   {
-                    // compute vector to target
-                    long idx = min(min(max(NthMyChild(0)->evaluate (arg), 0.0), 5.0) + pathIndex, (double) path.size()-1);
-                    double dx = path.at(idx).start.x - aircraft->getState()->X;
-                    double dy = path.at(idx).start.y - aircraft->getState()->Y;
-                    double dz = path.at(idx).start.z - aircraft->getState()->Z;
-                    std::array<double, 3> goalVectorWorldFrame = {dx, dy, dz};
+                    // Aircraft's initial position and orientation (in world frame)
+                    Eigen::Vector3d aircraft_position(aircraft->getState()->X,
+                            aircraft->getState()->Y,
+                            aircraft->getState()->Z);
 
-                    // Convert the goal vector to body frame
-                    std::array<double, 3> goalVectorBodyFrame = vmath::worldToLocal(aircraft->getState()->dPsi,
-                                    aircraft->getState()->dTheta, aircraft->getState()->dPhi, goalVectorWorldFrame);
+                    // Convert initial Euler angles to quaternion
+                    Eigen::Quaterniond aircraft_orientation =
+                        Eigen::AngleAxisd(aircraft->getState()->dPsi, Eigen::Vector3d::UnitZ()) *
+                        Eigen::AngleAxisd(aircraft->getState()->dTheta, Eigen::Vector3d::UnitY()) *
+                        Eigen::AngleAxisd(aircraft->getState()->dPhi, Eigen::Vector3d::UnitX());
 
-                    // Calculate the current pitch of the body
-                    double currentPitch = aircraft->getState()->dTheta;
+                    // Target's position (in world frame)
+                    int idx = getIndex(NthMyChild(0)->evaluate (arg));
+                    Eigen::Vector3d target_position(path.at(idx).start.x, path.at(idx).start.y, path.at(idx).start.z);
 
-                    // Calculate the required pitch to align with the goal vector in body coordinates
-                    double requiredPitch = atan2(goalVectorBodyFrame[2], sqrt(goalVectorBodyFrame[0] * goalVectorBodyFrame[0] + goalVectorBodyFrame[1] * goalVectorBodyFrame[1]));
+                    // Compute the vector from the aircraft to the target
+                    Eigen::Vector3d target_vector = target_position - aircraft_position;
 
-                    // Calculate the pitch delta
-                    double returnValue = requiredPitch - currentPitch;
+                    // Normalize the target vector to get the direction
+                    Eigen::Vector3d target_direction = target_vector.normalized();
+
+                    // Aircraft's current x-axis velocity vector in world frame
+                    Eigen::Vector3d aircraft_velocity(1, 0, 0); // Assuming unit vector along the x-axis
+                    aircraft_velocity = aircraft_orientation * aircraft_velocity;
+
+                    // Compute the quaternion representing the rotation from aircraft velocity to target direction
+                    Eigen::Quaterniond quat_current_to_target = Eigen::Quaterniond::FromTwoVectors(aircraft_velocity, target_direction);
+
+                    // Extract the pitch delta from the quaternion
+                    Eigen::Vector3d euler_angles_delta = quat_current_to_target.toRotationMatrix().eulerAngles(2, 1, 0); // ZYX order: yaw, pitch, roll
+                    double returnValue = euler_angles_delta(1);
                     break;
                   }
 
       case GETDS: // get distance to the next point
                   {
-                    long idx = min(min(max(NthMyChild(0)->evaluate (arg), 0.0), 5.0) + pathIndex, (double) path.size()-1);
+                    int idx = getIndex(NthMyChild(0)->evaluate (arg));
                     double dx = path.at(idx).start.x - aircraft->getState()->X;
                     double dy = path.at(idx).start.y - aircraft->getState()->Y;
                     double dz = path.at(idx).start.z - aircraft->getState()->Z;
@@ -349,15 +380,53 @@ void MyGP::evaluate ()
     aircraft->advanceState(dT);
 
     // how did we do?
-    // for now how close are we to the goal point?
-    double distanceFromGoal = std::sqrt(
-          std::pow(aircraft->getState()->X - path.at(pathIndex).start.x, 2) +
-          std::pow(aircraft->getState()->Y - path.at(pathIndex).start.y, 2) +
-          std::pow(aircraft->getState()->Z - path.at(pathIndex).start.z, 2));
+    // compute the delta vector from the aircraft to the goal based on
+    // alignment (vector direction diff to velocity vector)
+    // distance
+    Eigen::Vector3d aircraft_position(aircraft->getState()->X, aircraft->getState()->Y, aircraft->getState()->Z);
+
+    // Convert initial Euler angles to quaternion
+    Eigen::Quaterniond aircraft_orientation =
+        Eigen::AngleAxisd(aircraft->getState()->dPsi, Eigen::Vector3d::UnitZ()) *
+        Eigen::AngleAxisd(aircraft->getState()->dTheta, Eigen::Vector3d::UnitY()) *
+        Eigen::AngleAxisd(aircraft->getState()->dPhi, Eigen::Vector3d::UnitX());
+
+    // Target's position (in world frame)
+    Eigen::Vector3d target_position(path.at(pathIndex).start.x, path.at(pathIndex).start.y, path.at(pathIndex).start.z);
+
+    // Compute the vector from the aircraft to the target
+    Eigen::Vector3d target_vector = target_position - aircraft_position;
+
+    // Normalize the target vector to get the direction
+    Eigen::Vector3d target_direction = target_vector.normalized();
+
+    // Aircraft's current x-axis velocity vector in world frame
+    Eigen::Vector3d aircraft_velocity(1, 0, 0); // Assuming unit vector along the x-axis
+    aircraft_velocity = aircraft_orientation * aircraft_velocity;
+
+    // Normalize the aircraft velocity vector
+    Eigen::Vector3d aircraft_velocity_normalized = aircraft_velocity.normalized();
+
+    // Compute the dot product of the two normalized vectors
+    double dot_product = target_direction.dot(aircraft_velocity_normalized);
+
+    // Clamp the dot product to avoid numerical issues with acos
+    dot_product = std::clamp(dot_product, -1.0, 1.0);
+
+    // Compute the angle between the two vectors in radians
+    double angle_rad = std::acos(dot_product);
+
+    // Compute the distance btw the aircraft and the goal
+    double distanceFromGoal = target_vector.norm();
+
+    // Compute the fitness value (distance * power function of distance)
+    double anglePenalty = fabs(angle_rad) - M_PI / 6; // within 30 deg is good!
+    double fitness = pow(distanceFromGoal, anglePenalty);
 
     // add in distance component
-    // TODO add in orientation component
-    stdFitness += pow(distanceFromGoal, SIM_FITNESS_EXPONENT);
+    if (!isnan(fitness)) {
+      stdFitness += fitness;
+    }
 
     // but have we crashed outside the sphere?
     double x = aircraft->getState()->X;
@@ -366,19 +435,20 @@ void MyGP::evaluate ()
     if (aircraft->getState()->Z > SIM_MIN_ELEVATION || std::sqrt(x*x + y*y + z*z) > SIM_PATH_RADIUS_LIMIT) {
       // ok we are outside the bounds -- penalize but 
       double timeRemaining = max(0.0, SIM_TOTAL_TIME - duration);
-      stdFitness += SIM_CRASH_FITNESS_PENALTY + pow((timeRemaining / SIM_TIME_STEP) * SIM_HALF_DISTANCE, SIM_FITNESS_EXPONENT);
+      stdFitness += SIM_CRASH_FITNESS_PENALTY + (timeRemaining / SIM_TIME_STEP) * SIM_HALF_DISTANCE;
       break;
     }
 
     if (printEval) {
       if (printHeader) {
-        fout << "    Time Idx       dT    pathX    pathY    pathZ        X        Y        Z     dPsi     dPhi   dTheta   relVel       dG     roll    pitch    power  fitness\n";
+        fout << "    Time Idx       dT  totDist   pathX    pathY    pathZ        X        Y        Z     dPsi     dPhi   dTheta   relVel       dG     roll    pitch    power  fitness\n";
         printHeader = false;
       }
 
       char outbuf[1000]; // XXX use c++20
-      sprintf(outbuf, "% 8.2f %3ld % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f\n", 
+      sprintf(outbuf, "% 8.2f %3ld % 8.2f % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f\n", 
         duration, pathIndex, dT, 
+        path.at(pathIndex).distanceFromStart,
         path.at(pathIndex).start.x,
         path.at(pathIndex).start.y,
         path.at(pathIndex).start.z,
@@ -436,7 +506,6 @@ void createNodeSet (GPAdfNodeSet& adfNs)
   ns.putNode (*new GPNode (THROTTLE, "THROTTLE", 1));
   ns.putNode (*new GPNode (SIN, "SIN", 1));
   ns.putNode (*new GPNode (COS, "COS", 1));
-  ns.putNode (*new GPNode (TAN, "TAN", 1));
   ns.putNode (*new GPNode (PI, "PI"));
   ns.putNode (*new GPNode (ZERO, "0"));
   ns.putNode (*new GPNode (ONE, "1"));
@@ -450,6 +519,7 @@ void createNodeSet (GPAdfNodeSet& adfNs)
   ns.putNode (*new GPNode (GETMZ, "GETMZ"));
   ns.putNode (*new GPNode (GETPHI, "GETPHI"));
   ns.putNode (*new GPNode (GETTHETA, "GETTHETA"));
+  ns.putNode (*new GPNode (GETPSI, "GETPSI"));
 }
 
 

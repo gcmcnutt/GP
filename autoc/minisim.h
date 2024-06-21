@@ -3,6 +3,8 @@
 #define MINISIM_H
 
 #include <mutex>
+#include <Eigen/Dense>
+#include <Eigen/Geometry>
 
 #include "pathgen.h"
 
@@ -29,9 +31,8 @@
 #include <vtkInteractorStyleTrackballCamera.h>
 #include <vtkLine.h>
 
-#define MAX_ROLL_RATE_RADSEC M_PI
-#define MAX_PITCH_RATE_RADSEC M_PI
-#define MAX_YAW_RATE_RADSEC M_PI / 2.0
+#define MAX_ROLL_RATE_RADSEC M_PI / 2.0
+#define MAX_PITCH_RATE_RADSEC M_PI / 3.0
 
 #define SIM_INITIAL_VELOCITY 4.0
 #define SIM_INITIAL_ALTITUDE -10.0
@@ -44,8 +45,7 @@
 #define SIM_TOTAL_TIME 75.0
 #define SIM_TIME_STEP 0.1
 
-#define SIM_FITNESS_EXPONENT 2.0
-#define SIM_CRASH_FITNESS_PENALTY pow(1.0, SIM_FITNESS_EXPONENT)
+#define SIM_CRASH_FITNESS_PENALTY 1000.0
 #define SIM_HALF_DISTANCE SIM_PATH_BOUNDS
 
 class AircraftState {
@@ -58,10 +58,10 @@ class AircraftState {
     // world frame for now
     double dPhi;    // roll+ right -pi:pi
     double dTheta;  // pitch+ up -pi:pi
-    double dPsi;    // yaw+ clockwise -pi:pi -- ALWAYS 0
+    double dPsi;    // yaw+ clockwise -pi:pi
 
     // NED convention for location
-    double X;       // positionX+ north
+    double X;       // positionX+ meters north
     double Y;       // positionY+ east
     double Z;       // positionZ+ down
 
