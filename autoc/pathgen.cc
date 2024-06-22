@@ -33,11 +33,15 @@ std::vector<Path> generateSmoothPath(int numPoints, double radius) {
     std::vector<Point3D> controlPoints;
     std::vector<Path> path;
 
-    // Initial control point2
+    // Initial control points in forward direction
     Point3D initialPoint = {0, 0, SIM_INITIAL_ALTITUDE};
     controlPoints.push_back(initialPoint);
+    Point3D initialPoint2 = {SIM_INITIAL_VELOCITY * SIM_TIME_STEP, 0, SIM_INITIAL_ALTITUDE};
+    controlPoints.push_back(initialPoint2);
 
-    // Generate random control points
+// #define PATHGEN_FIXED_PATH 1
+#ifdef PATHGEN_FIXED_PATH
+    // Sin
     double x, y, z;
     for (size_t i = 0; i < numPoints; ++i) {
         x = sin(2 * M_PI * i / numPoints) * SIM_PATH_BOUNDS/2;
@@ -55,6 +59,12 @@ std::vector<Path> generateSmoothPath(int numPoints, double radius) {
 
         //controlPoints.push_back(randomPointInHalfSphere(radius));
     }
+#else
+    // Generate random control points
+    for (size_t i = 2; i <= numPoints; ++i) {
+        controlPoints.push_back(randomPointInHalfSphere(radius));
+    }
+#endif
 
     // Ensure the path is continuous by looping through control points
     double distance = 0;

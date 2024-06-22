@@ -351,7 +351,8 @@ void MyGP::evaluate ()
   actualPath.push_back({aircraft->getState()->X, aircraft->getState()->Y, aircraft->getState()->Z});
 
   // as long as we are within the time limit and have not reached the end of the path
-  while (duration < SIM_TOTAL_TIME && pathIndex < path.size()) {
+  bool hasCrashed = false; 
+  while (duration < SIM_TOTAL_TIME && pathIndex < path.size() && !hasCrashed) {
 
     // walk path looking for next item around TIME_STEP seconds later
     double minDistance = path.at(pathIndex).distanceFromStart + (SIM_TIME_STEP * SIM_INITIAL_VELOCITY);
@@ -360,7 +361,7 @@ void MyGP::evaluate ()
       newPathIndex++;
     }
     // are we off the end?
-    if (newPathIndex == path.size()) {
+    if (newPathIndex >= path.size()) {
       break;
     }
 
@@ -380,52 +381,48 @@ void MyGP::evaluate ()
     aircraft->advanceState(dT);
 
     // how did we do?
-    // compute the delta vector from the aircraft to the goal based on
-    // alignment (vector direction diff to velocity vector)
-    // distance
-    Eigen::Vector3d aircraft_position(aircraft->getState()->X, aircraft->getState()->Y, aircraft->getState()->Z);
+    // compute the delta vector from the aircraft vector to the goal vector based on
+    // alignment (vector direction diff to velocity vector) and distance
 
-    // Convert initial Euler angles to quaternion
+    // Convert initial aircraft Euler angles to quaternion
     Eigen::Quaterniond aircraft_orientation =
         Eigen::AngleAxisd(aircraft->getState()->dPsi, Eigen::Vector3d::UnitZ()) *
         Eigen::AngleAxisd(aircraft->getState()->dTheta, Eigen::Vector3d::UnitY()) *
         Eigen::AngleAxisd(aircraft->getState()->dPhi, Eigen::Vector3d::UnitX());
 
-    // Target's position (in world frame)
-    Eigen::Vector3d target_position(path.at(pathIndex).start.x, path.at(pathIndex).start.y, path.at(pathIndex).start.z);
-
-    // Compute the vector from the aircraft to the target
-    Eigen::Vector3d target_vector = target_position - aircraft_position;
-
-    // Normalize the target vector to get the direction
-    Eigen::Vector3d target_direction = target_vector.normalized();
-
-    // Aircraft's current x-axis velocity vector in world frame
+    // Aircraft's current x-axis normalized velocity vector in world frame
     Eigen::Vector3d aircraft_velocity(1, 0, 0); // Assuming unit vector along the x-axis
     aircraft_velocity = aircraft_orientation * aircraft_velocity;
-
-    // Normalize the aircraft velocity vector
     Eigen::Vector3d aircraft_velocity_normalized = aircraft_velocity.normalized();
+
+    // Target's direction normalized vector (in world frame)
+    Eigen::Vector3d target_direction(path.at(pathIndex).start.x - path.at(pathIndex-1).start.x,
+                                     path.at(pathIndex).start.y - path.at(pathIndex-1).start.y,
+                                     path.at(pathIndex).start.z - path.at(pathIndex-1).start.z);
+    target_direction.normalize();
 
     // Compute the dot product of the two normalized vectors
     double dot_product = target_direction.dot(aircraft_velocity_normalized);
 
     // Clamp the dot product to avoid numerical issues with acos
     dot_product = std::clamp(dot_product, -1.0, 1.0);
-
-    // Compute the angle between the two vectors in radians
     double angle_rad = std::acos(dot_product);
 
-    // Compute the distance btw the aircraft and the goal
-    double distanceFromGoal = target_vector.norm();
+    // Compute the distance between the aircraft and the goal
+    Eigen::Vector3d aircraft_position(aircraft->getState()->X, aircraft->getState()->Y, aircraft->getState()->Z);
+    Eigen::Vector3d target_position(path.at(pathIndex).start.x, path.at(pathIndex).start.y, path.at(pathIndex).start.z);
+    double distanceFromGoal = (target_position - aircraft_position).norm();
 
-    // Compute the fitness value (distance * power function of distance)
-    double anglePenalty = fabs(angle_rad) - M_PI / 6; // within 30 deg is good!
-    double fitness = pow(distanceFromGoal, anglePenalty);
+    // Compute the fitness value (distance * some power function) + (angle penalty * some power function)
+    double anglePenalty = pow(SIM_ANGLE_SCALE_FACTOR * fabs(angle_rad), SIM_ANGLE_PENALTY_FACTOR);
+    double distancePenalty = pow(distanceFromGoal, SIM_DISTANCE_PENALTY_FACTOR);
+    double fitness = distancePenalty + anglePenalty;
 
     // add in distance component
     if (!isnan(fitness)) {
       stdFitness += fitness;
+    } else {
+      stdFitness += 1000000;
     }
 
     // but have we crashed outside the sphere?
@@ -433,20 +430,22 @@ void MyGP::evaluate ()
     double y = aircraft->getState()->Y;
     double z = aircraft->getState()->Z;
     if (aircraft->getState()->Z > SIM_MIN_ELEVATION || std::sqrt(x*x + y*y + z*z) > SIM_PATH_RADIUS_LIMIT) {
-      // ok we are outside the bounds -- penalize but 
+      // ok we are outside the bounds -- penalize at whatever rate of error we had so far
       double timeRemaining = max(0.0, SIM_TOTAL_TIME - duration);
-      stdFitness += SIM_CRASH_FITNESS_PENALTY + (timeRemaining / SIM_TIME_STEP) * SIM_HALF_DISTANCE;
-      break;
+      double preCrashFitness = stdFitness / duration;
+      double projectedFitness = preCrashFitness * timeRemaining;
+      stdFitness += pow(projectedFitness, SIM_CRASH_FITNESS_PENALTY_FACTOR);
+      hasCrashed = true;
     }
 
     if (printEval) {
       if (printHeader) {
-        fout << "    Time Idx       dT  totDist   pathX    pathY    pathZ        X        Y        Z     dPsi     dPhi   dTheta   relVel       dG     roll    pitch    power  fitness\n";
+        fout << "    Time Idx       dT  totDist   pathX    pathY    pathZ        X        Y        Z     dPsi     dPhi   dTheta   relVel       dG     roll    pitch    power  fitness   angleP    distP\n";
         printHeader = false;
       }
 
       char outbuf[1000]; // XXX use c++20
-      sprintf(outbuf, "% 8.2f %3ld % 8.2f % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f\n", 
+      sprintf(outbuf, "% 8.2f %3ld % 8.2f % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f\n", 
         duration, pathIndex, dT, 
         path.at(pathIndex).distanceFromStart,
         path.at(pathIndex).start.x,
@@ -461,7 +460,10 @@ void MyGP::evaluate ()
         aircraft->getRollCommand(),
         aircraft->getPitchCommand(),
         aircraft->getThrottleCommand(),
-        stdFitness);
+        stdFitness,
+        anglePenalty,
+        distancePenalty
+        );
         fout << outbuf;
 
       // now update points for Renderer
