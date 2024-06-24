@@ -1,20 +1,13 @@
 // Define a structure for 3D points
-#ifndef POINT3D_H
-#define POINT3D_H
+#ifndef PATHGEN_H
+#define PATHGEN_H
 
 #include <vector>
-
-class Point3D {
-  public:
-    double x, y, z;
-
-    Point3D() : x(0), y(0), z(0) {}
-    Point3D(double x, double y, double z) : x(x), y(y), z(z) {}
-};
+#include <Eigen/Dense>
 
 class Path {
     public:
-        Point3D start;
+        Eigen::Vector3d start;
         double distanceFromStart;
 
         void toString(char* output);

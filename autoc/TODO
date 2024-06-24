@@ -15,4 +15,3 @@
 - turn white segment markers into arrows
 - each generation needs a series of test paths
 - llm fitness function evolution
-- use Eigen::Vector3D for all vectors

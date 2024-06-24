@@ -13,20 +13,16 @@ using namespace std;
 AircraftState::AircraftState() {
       this->dRelVel = 0;
       this->aircraft_orientation = Eigen::Quaterniond::Identity();
-      this->X = 0;
-      this->Y = 0;
-      this->Z = 0;
+      this->position = {0, 0, 0};
       this->R_X = 0;
       this->R_Y = 0;
       this->R_Z = 0;
 } 
 
-AircraftState::AircraftState(double dRelVel, Eigen::Quaterniond aircraft_orientation, double X, double Y, double Z, double R_X, double R_Y, double R_Z) {
+AircraftState::AircraftState(double dRelVel, Eigen::Quaterniond aircraft_orientation, Eigen::Vector3d position, double R_X, double R_Y, double R_Z) {
       this->dRelVel = dRelVel;
       this->aircraft_orientation = aircraft_orientation;
-      this->X = X;
-      this->Y = Y;
-      this->Z = Z;
+      this->position = position;
       this->R_X = R_X;
       this->R_Y = R_Y;
       this->R_Z = R_Z;
@@ -105,24 +101,14 @@ void Aircraft::advanceState(double dt) {
   // Rotate the velocity vector using the updated quaternion
   Eigen::Vector3d velocity_world = state->aircraft_orientation * velocity_body;
 
-  // get position
-  Point3D position = {state->X, state->Y, state->Z};
-
-  // update XYZ position based on vector
-  position.x += velocity_world[0];
-  position.y += velocity_world[1];
-  position.z += velocity_world[2];
-
-  // update state as a result
-  state->X = position.x;
-  state->Y = position.y;
-  state->Z = position.z;
+  // adjust position
+  state->position += velocity_world;
 }
 
 void Aircraft::toString(char *output) {
   sprintf(output, "AircraftState: %f %f %f %f %f %f %f %f %f %f %f  Command: %f %f %f\n", state->dRelVel, 
     state->aircraft_orientation.w(), state->aircraft_orientation.x(), state->aircraft_orientation.y(), state->aircraft_orientation.z(),
-    state->X, state->Y, state->Z, state->R_X, state->R_Y, state->R_Z,
+    state->position[0], state->position[1], state->position[2], state->R_X, state->R_Y, state->R_Z,
     pitchCommand, rollCommand, throttleCommand);
 }
 
@@ -167,10 +153,10 @@ void Renderer::Execute(vtkObject* caller, unsigned long eventId, void* vtkNotUse
 }
 
 
-vtkSmartPointer<vtkPolyData> Renderer::createPointSet(const std::vector<Point3D> points) {
+vtkSmartPointer<vtkPolyData> Renderer::createPointSet(const std::vector<Eigen::Vector3d> points) {
   vtkSmartPointer<vtkPoints> vtp = vtkSmartPointer<vtkPoints>::New();
   for (const auto& point : points) {
-      vtp->InsertNextPoint(point.x, point.y, point.z);
+      vtp->InsertNextPoint(point[0], point[1], point[2]);
   }
 
   vtkSmartPointer<vtkPolyLine> lines = vtkSmartPointer<vtkPolyLine>::New();
@@ -196,11 +182,11 @@ vtkSmartPointer<vtkPolyData> Renderer::createPointSet(const std::vector<Point3D>
   return polyData;
 }
 
-vtkSmartPointer<vtkPolyData> Renderer::createSegmentSet(const std::vector<Point3D> start, const std::vector<Point3D> end) {
+vtkSmartPointer<vtkPolyData> Renderer::createSegmentSet(const std::vector<Eigen::Vector3d> start, const std::vector<Eigen::Vector3d> end) {
   vtkSmartPointer<vtkPoints> points = vtkSmartPointer<vtkPoints>::New();
   for (int i = 0; i < start.size(); i++) {
-    points->InsertNextPoint(start[i].x, start[i].y, start[i].z);
-    points->InsertNextPoint(end[i].x, end[i].y, end[i].z);
+    points->InsertNextPoint(start[i][0], start[i][1], start[i][2]);
+    points->InsertNextPoint(end[i][0], end[i][1], end[i][2]);
   }
 
   vtkSmartPointer<vtkCellArray> lines = vtkSmartPointer<vtkCellArray>::New();
@@ -324,7 +310,7 @@ void Renderer::RenderInBackground(vtkSmartPointer<vtkRenderWindow> renderWindow)
   renderWindowInteractor->Start();
 }
 
-void Renderer::update(std::vector<Point3D> path, std::vector<Point3D> actual) {
+void Renderer::update(std::vector<Eigen::Vector3d> path, std::vector<Eigen::Vector3d> actual) {
   std::lock_guard<std::mutex> lock(dataMutex);
   this->path = createPointSet(path);
   this->actual = createPointSet(actual);

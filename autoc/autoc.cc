@@ -212,9 +212,9 @@ double MyGene::evaluate (double arg)
                   returnValue = NthMyChild(1)->evaluate (arg);
                   break;
       }
-      case GETMX: returnValue = aircraft->getState()->X; break;
-      case GETMY: returnValue = aircraft->getState()->Y; break;
-      case GETMZ: returnValue = aircraft->getState()->Z; break;
+      case GETMX: returnValue = aircraft->getState()->position[0]; break;
+      case GETMY: returnValue = aircraft->getState()->position[1]; break;
+      case GETMZ: returnValue = aircraft->getState()->position[2]; break;
       case GETOX: returnValue = aircraft->getState()->aircraft_orientation.x(); break;
       case GETOY: returnValue = aircraft->getState()->aircraft_orientation.y(); break;
       case GETOZ: returnValue = aircraft->getState()->aircraft_orientation.z(); break;
@@ -223,13 +223,11 @@ double MyGene::evaluate (double arg)
       case GETDPHI: // compute roll goal from current to target
                   {
                     // Aircraft's initial position and orientation (in world frame)
-                    Eigen::Vector3d aircraft_position(aircraft->getState()->X,
-                            aircraft->getState()->Y,
-                            aircraft->getState()->Z);
+                    Eigen::Vector3d aircraft_position = aircraft->getState()->position;
 
                     // Target's position (in world frame)
                     int idx = getIndex(NthMyChild(0)->evaluate (arg));
-                    Eigen::Vector3d target_position(path.at(idx).start.x, path.at(idx).start.y, path.at(idx).start.z);
+                    Eigen::Vector3d target_position(path.at(idx).start[0], path.at(idx).start[1], path.at(idx).start[2]);
 
                     // Compute the vector from the aircraft to the target
                     Eigen::Vector3d target_vector = target_position - aircraft_position;
@@ -253,13 +251,11 @@ double MyGene::evaluate (double arg)
       case GETDTHETA: // compute pitch goal from current to target
                   {
                     // Aircraft's initial position and orientation (in world frame)
-                    Eigen::Vector3d aircraft_position(aircraft->getState()->X,
-                            aircraft->getState()->Y,
-                            aircraft->getState()->Z);
+                    Eigen::Vector3d aircraft_position = aircraft->getState()->position;
 
                     // Target's position (in world frame)
                     int idx = getIndex(NthMyChild(0)->evaluate (arg));
-                    Eigen::Vector3d target_position(path.at(idx).start.x, path.at(idx).start.y, path.at(idx).start.z);
+                    Eigen::Vector3d target_position(path.at(idx).start[0], path.at(idx).start[1], path.at(idx).start[2]);
 
                     // Compute the vector from the aircraft to the target
                     Eigen::Vector3d target_vector = target_position - aircraft_position;
@@ -283,10 +279,7 @@ double MyGene::evaluate (double arg)
       case GETDS: // get distance to the next point
                   {
                     int idx = getIndex(NthMyChild(0)->evaluate (arg));
-                    double dx = path.at(idx).start.x - aircraft->getState()->X;
-                    double dy = path.at(idx).start.y - aircraft->getState()->Y;
-                    double dz = path.at(idx).start.z - aircraft->getState()->Z;
-                    returnValue = sqrt(dx*dx + dy*dy + dz*dz);
+                    returnValue = (path.at(idx).start - aircraft->getState()->position).norm();
                     break;
                   }
       
@@ -324,7 +317,8 @@ void MyGP::evaluate ()
       Eigen::AngleAxisd(0.0, Eigen::Vector3d::UnitY()) *
       Eigen::AngleAxisd(0.0, Eigen::Vector3d::UnitX());
 
-  AircraftState state = {SIM_INITIAL_VELOCITY, aircraft_orientation, 0.0, 0.0, SIM_INITIAL_ALTITUDE, 0.0, 0.0, 0.0};
+  Eigen::Vector3d initialPosition = Eigen::Vector3d(0, 0, SIM_INITIAL_ALTITUDE);
+  AircraftState state = {SIM_INITIAL_VELOCITY, aircraft_orientation, initialPosition, 0.0, 0.0, 0.0};
   aircraft->setState(&state);
   aircraft->setPitchCommand(0.0);
   aircraft->setRollCommand(0.0);
@@ -338,11 +332,11 @@ void MyGP::evaluate ()
   pathIndex = 0; // where are we on the path?
   bool printHeader = true;
 
-  std::vector<Point3D> planPath = std::vector<Point3D>();
-  std::vector<Point3D> actualPath = std::vector<Point3D>();
+  std::vector<Eigen::Vector3d> planPath = std::vector<Eigen::Vector3d>();
+  std::vector<Eigen::Vector3d> actualPath = std::vector<Eigen::Vector3d>();
 
   planPath.push_back(path.at(pathIndex).start); // XXX push the full path
-  actualPath.push_back({aircraft->getState()->X, aircraft->getState()->Y, aircraft->getState()->Z});
+  actualPath.push_back(aircraft->getState()->position);
 
   // as long as we are within the time limit and have not reached the end of the path
   bool hasCrashed = false; 
@@ -384,9 +378,7 @@ void MyGP::evaluate ()
     Eigen::Vector3d aircraft_velocity_normalized = aircraft_velocity.normalized();
 
     // Target's direction normalized vector (in world frame)
-    Eigen::Vector3d target_direction(path.at(pathIndex).start.x - path.at(pathIndex-1).start.x,
-                                     path.at(pathIndex).start.y - path.at(pathIndex-1).start.y,
-                                     path.at(pathIndex).start.z - path.at(pathIndex-1).start.z);
+    Eigen::Vector3d target_direction(path.at(pathIndex).start - path.at(pathIndex-1).start);
     target_direction.normalize();
 
     // Compute the dot product of the two normalized vectors
@@ -397,9 +389,7 @@ void MyGP::evaluate ()
     double angle_rad = std::acos(dot_product);
 
     // Compute the distance between the aircraft and the goal
-    Eigen::Vector3d aircraft_position(aircraft->getState()->X, aircraft->getState()->Y, aircraft->getState()->Z);
-    Eigen::Vector3d target_position(path.at(pathIndex).start.x, path.at(pathIndex).start.y, path.at(pathIndex).start.z);
-    double distanceFromGoal = (target_position - aircraft_position).norm();
+    double distanceFromGoal = (path.at(pathIndex).start - aircraft->getState()->position).norm();
 
     // Compute the fitness value (distance * some power function) + (angle penalty * some power function)
     double anglePenalty = pow(SIM_ANGLE_SCALE_FACTOR * fabs(angle_rad), SIM_ANGLE_PENALTY_FACTOR);
@@ -414,10 +404,8 @@ void MyGP::evaluate ()
     }
 
     // but have we crashed outside the sphere?
-    double x = aircraft->getState()->X;
-    double y = aircraft->getState()->Y;
-    double z = aircraft->getState()->Z;
-    if (aircraft->getState()->Z > SIM_MIN_ELEVATION || std::sqrt(x*x + y*y + z*z) > SIM_PATH_RADIUS_LIMIT) {
+    double distanceFromOrigin = (aircraft->getState()->position - Eigen::Vector3d(0, 0, SIM_INITIAL_ALTITUDE)).norm();
+    if (aircraft->getState()->position[2] > SIM_MIN_ELEVATION || distanceFromOrigin > SIM_PATH_RADIUS_LIMIT) {
       // ok we are outside the bounds -- penalize at whatever rate of error we had so far
       double timeRemaining = max(0.0, SIM_TOTAL_TIME - duration);
       double preCrashFitness = stdFitness / duration;
@@ -436,10 +424,12 @@ void MyGP::evaluate ()
       sprintf(outbuf, "% 8.2f %3ld % 8.2f % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f\n", 
         duration, pathIndex, dT, 
         path.at(pathIndex).distanceFromStart,
-        path.at(pathIndex).start.x,
-        path.at(pathIndex).start.y,
-        path.at(pathIndex).start.z,
-        x, y, z,
+        path.at(pathIndex).start[0],
+        path.at(pathIndex).start[1],
+        path.at(pathIndex).start[2],
+        aircraft->getState()->position[0],
+        aircraft->getState()->position[1],
+        aircraft->getState()->position[2],
         aircraft->getState()->aircraft_orientation.w(),
         aircraft->getState()->aircraft_orientation.x(),
         aircraft->getState()->aircraft_orientation.y(),
@@ -457,7 +447,7 @@ void MyGP::evaluate ()
 
       // now update points for Renderer
       planPath.push_back(path.at(pathIndex).start); // XXX push the full path
-      actualPath.push_back({aircraft->getState()->X, aircraft->getState()->Y, aircraft->getState()->Z});
+      actualPath.push_back(aircraft->getState()->position);
     }
   }
 

@@ -47,14 +47,14 @@
 #define SIM_TOTAL_TIME 75.0
 #define SIM_TIME_STEP 0.1
 
-#define SIM_CRASH_FITNESS_PENALTY_FACTOR 0.8
-#define SIM_DISTANCE_PENALTY_FACTOR 1.5
-#define SIM_ANGLE_PENALTY_FACTOR 1.0
-#define SIM_ANGLE_SCALE_FACTOR (SIM_PATH_BOUNDS / M_PI)
+#define SIM_CRASH_FITNESS_PENALTY_FACTOR 1.0
+#define SIM_DISTANCE_PENALTY_FACTOR 1.0
+#define SIM_ANGLE_PENALTY_FACTOR 1.5
+#define SIM_ANGLE_SCALE_FACTOR (2 * SIM_PATH_BOUNDS / M_PI)
 
 class AircraftState {
   public:
-    AircraftState(double dRelVel, Eigen::Quaterniond aircraft_orientation, double X, double Y, double Z, double R_X, double R_Y, double R_Z);
+    AircraftState(double dRelVel, Eigen::Quaterniond aircraft_orientation, Eigen::Vector3d position, double R_X, double R_Y, double R_Z);
     AircraftState(); 
 
     double dRelVel; // reltive forward velocity on +x airplane axis m/s
@@ -62,10 +62,8 @@ class AircraftState {
     // world frame for now
     Eigen::Quaterniond aircraft_orientation;
 
-    // NED convention for location
-    double X;       // positionX+ meters north
-    double Y;       // positionY+ east
-    double Z;       // positionZ+ down
+    // NED convention for location x+ north, y+ east, z+ down
+    Eigen::Vector3d position;
 
     // not used yet
     double R_X;     // rotationX
@@ -94,12 +92,12 @@ class Aircraft {
     // aircraft command values
     double pitchCommand;  // -1:1
     double rollCommand;   // -1:1
-    double throttleCommand; // 0:1
+    double throttleCommand; // -1:1
 };
 
 class Renderer : public vtkCommand {
   public:
-    void update(std::vector<Point3D> path, std::vector<Point3D> actual);
+    void update(std::vector<Eigen::Vector3d> path, std::vector<Eigen::Vector3d> actual);
     void start();
     virtual void Execute(vtkObject* caller, unsigned long eventId, void* vtkNotUsed(callData));
 
@@ -119,8 +117,8 @@ class Renderer : public vtkCommand {
 
     int TimerCount;
 
-    vtkSmartPointer<vtkPolyData> createPointSet(const std::vector<Point3D> points);
-    vtkSmartPointer<vtkPolyData> createSegmentSet(const std::vector<Point3D> start, const std::vector<Point3D> end);
+    vtkSmartPointer<vtkPolyData> createPointSet(const std::vector<Eigen::Vector3d> points);
+    vtkSmartPointer<vtkPolyData> createSegmentSet(const std::vector<Eigen::Vector3d> start, const std::vector<Eigen::Vector3d> end);
     void RenderInBackground(vtkSmartPointer<vtkRenderWindow> renderWindow);
 };
 
