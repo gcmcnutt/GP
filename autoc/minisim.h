@@ -47,29 +47,27 @@
 #define SIM_TOTAL_TIME 75.0
 #define SIM_TIME_STEP 0.1
 
-#define SIM_CRASH_FITNESS_PENALTY_FACTOR 2.0
+#define SIM_CRASH_FITNESS_PENALTY_FACTOR 0.8
 #define SIM_DISTANCE_PENALTY_FACTOR 1.5
-#define SIM_ANGLE_PENALTY_FACTOR 1.5
+#define SIM_ANGLE_PENALTY_FACTOR 1.0
 #define SIM_ANGLE_SCALE_FACTOR (SIM_PATH_BOUNDS / M_PI)
 
 class AircraftState {
   public:
-    AircraftState(double dRelVel, double dPhi, double dTheta, double dPsi, double X, double Y, double Z, double R_X, double R_Y, double R_Z);
+    AircraftState(double dRelVel, Eigen::Quaterniond aircraft_orientation, double X, double Y, double Z, double R_X, double R_Y, double R_Z);
     AircraftState(); 
 
     double dRelVel; // reltive forward velocity on +x airplane axis m/s
 
     // world frame for now
-    double dPhi;    // roll+ right -pi:pi
-    double dTheta;  // pitch+ up -pi:pi
-    double dPsi;    // yaw+ clockwise -pi:pi
+    Eigen::Quaterniond aircraft_orientation;
 
     // NED convention for location
     double X;       // positionX+ meters north
     double Y;       // positionY+ east
     double Z;       // positionZ+ down
 
-    //not used
+    // not used yet
     double R_X;     // rotationX
     double R_Y;     // rotationY
     double R_Z;     // rotationZ

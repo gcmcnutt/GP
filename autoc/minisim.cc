@@ -12,9 +12,7 @@ using namespace std;
 
 AircraftState::AircraftState() {
       this->dRelVel = 0;
-      this->dPhi = 0;
-      this->dTheta = 0;
-      this->dPsi = 0;
+      this->aircraft_orientation = Eigen::Quaterniond::Identity();
       this->X = 0;
       this->Y = 0;
       this->Z = 0;
@@ -23,11 +21,9 @@ AircraftState::AircraftState() {
       this->R_Z = 0;
 } 
 
-AircraftState::AircraftState(double dRelVel, double dPhi, double dTheta, double dPsi, double X, double Y, double Z, double R_X, double R_Y, double R_Z) {
+AircraftState::AircraftState(double dRelVel, Eigen::Quaterniond aircraft_orientation, double X, double Y, double Z, double R_X, double R_Y, double R_Z) {
       this->dRelVel = dRelVel;
-      this->dPhi = dPhi;
-      this->dTheta = dTheta;
-      this->dPsi = dPsi;
+      this->aircraft_orientation = aircraft_orientation;
       this->X = X;
       this->Y = Y;
       this->Z = Z;
@@ -92,31 +88,22 @@ void Aircraft::advanceState(double dt) {
   double throttle = std::clamp(getThrottleCommand(), -1.0, +1.0);
   state->dRelVel = SIM_INITIAL_VELOCITY + (throttle * SIM_THROTTLE_SCALE);
 
-  // Convert initial Euler angles to quaternion
-  Eigen::AngleAxisd rollAngle(state->dPhi, Eigen::Vector3d::UnitX());
-  Eigen::AngleAxisd pitchAngle(state->dTheta, Eigen::Vector3d::UnitY());
-  Eigen::AngleAxisd yawAngle(state->dPsi, Eigen::Vector3d::UnitZ());
-  Eigen::Quaterniond aircraft_orientation = yawAngle * pitchAngle * rollAngle;
-
   // Convert pitch and roll updates to quaternions (in the body frame)
   Eigen::Quaterniond delta_pitch_quat(Eigen::AngleAxisd(delta_pitch, Eigen::Vector3d::UnitY()));
   Eigen::Quaterniond delta_roll_quat(Eigen::AngleAxisd(delta_roll, Eigen::Vector3d::UnitX()));
 
   // Apply the pitch and roll adjustments to the aircraft's orientation
-  aircraft_orientation = delta_pitch_quat * aircraft_orientation;
-  aircraft_orientation = delta_roll_quat * aircraft_orientation;
+  state->aircraft_orientation = delta_pitch_quat * state->aircraft_orientation;
+  state->aircraft_orientation = delta_roll_quat * state->aircraft_orientation;
 
   // Normalize the resulting quaternion
-  aircraft_orientation.normalize();
+  state->aircraft_orientation.normalize();
  
-  // Convert the updated quaternion to Euler angles relative to the world frame
-  Eigen::Vector3d euler_angles = aircraft_orientation.toRotationMatrix().eulerAngles(2, 1, 0); // ZYX order: yaw, pitch, roll
-
   // Define the initial velocity vector in the body frame
   Eigen::Vector3d velocity_body(state->dRelVel * dt, 0, 0);
 
   // Rotate the velocity vector using the updated quaternion
-  Eigen::Vector3d velocity_world = aircraft_orientation * velocity_body;
+  Eigen::Vector3d velocity_world = state->aircraft_orientation * velocity_body;
 
   // get position
   Point3D position = {state->X, state->Y, state->Z};
@@ -130,14 +117,12 @@ void Aircraft::advanceState(double dt) {
   state->X = position.x;
   state->Y = position.y;
   state->Z = position.z;
-  state->dPhi = euler_angles[2];
-  state->dTheta = euler_angles[1];
-  state->dPsi = euler_angles[0];
 }
 
 void Aircraft::toString(char *output) {
-  sprintf(output, "AircraftState: %f %f %f %f %f %f %f %f %f %f %f  Command: %f %f %f\n", state->dRelVel, state->dPhi, state->dTheta,
-    state->dPsi, state->dPhi, state->X, state->Y, state->Z, state->R_X, state->R_Y, state->R_Z,
+  sprintf(output, "AircraftState: %f %f %f %f %f %f %f %f %f %f %f  Command: %f %f %f\n", state->dRelVel, 
+    state->aircraft_orientation.w(), state->aircraft_orientation.x(), state->aircraft_orientation.y(), state->aircraft_orientation.z(),
+    state->X, state->Y, state->Z, state->R_X, state->R_Y, state->R_Z,
     pitchCommand, rollCommand, throttleCommand);
 }
 

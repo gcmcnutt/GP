@@ -52,7 +52,7 @@ struct GPConfigVarInformation configArray[]=
 enum Operators {ADD=0, NEG, MUL, INV,
                 IF, EQ, GT, 
                 SIN, COS,
-                GETDPHI, GETDTHETA, GETDS, GETMX, GETMY, GETMZ, GETPHI, GETTHETA, GETPSI,
+                GETDPHI, GETDTHETA, GETDS, GETMX, GETMY, GETMZ, GETOX, GETOY, GETOZ, GETOW,
                 PITCH, ROLL, THROTTLE, 
                 PI, ZERO, ONE, TWO, PROGN, _END};
 const int OPERATORS_NR_ITEM=_END;
@@ -215,9 +215,10 @@ double MyGene::evaluate (double arg)
       case GETMX: returnValue = aircraft->getState()->X; break;
       case GETMY: returnValue = aircraft->getState()->Y; break;
       case GETMZ: returnValue = aircraft->getState()->Z; break;
-      case GETPHI: returnValue = aircraft->getState()->dPhi; break;
-      case GETTHETA: returnValue = aircraft->getState()->dTheta; break;
-      case GETPSI: returnValue = aircraft->getState()->dPsi; break;
+      case GETOX: returnValue = aircraft->getState()->aircraft_orientation.x(); break;
+      case GETOY: returnValue = aircraft->getState()->aircraft_orientation.y(); break;
+      case GETOZ: returnValue = aircraft->getState()->aircraft_orientation.z(); break;
+      case GETOW: returnValue = aircraft->getState()->aircraft_orientation.w(); break;
 
       case GETDPHI: // compute roll goal from current to target
                   {
@@ -225,12 +226,6 @@ double MyGene::evaluate (double arg)
                     Eigen::Vector3d aircraft_position(aircraft->getState()->X,
                             aircraft->getState()->Y,
                             aircraft->getState()->Z);
-
-                    // Convert initial Euler angles to quaternion
-                    Eigen::Quaterniond aircraft_orientation =
-                        Eigen::AngleAxisd(aircraft->getState()->dPsi, Eigen::Vector3d::UnitZ()) *
-                        Eigen::AngleAxisd(aircraft->getState()->dTheta, Eigen::Vector3d::UnitY()) *
-                        Eigen::AngleAxisd(aircraft->getState()->dPhi, Eigen::Vector3d::UnitX());
 
                     // Target's position (in world frame)
                     int idx = getIndex(NthMyChild(0)->evaluate (arg));
@@ -242,12 +237,12 @@ double MyGene::evaluate (double arg)
                     // Normalize the target vector to get the direction
                     Eigen::Vector3d target_direction = target_vector.normalized();
 
-                    // Aircraft's current y-axis vector in world frame
-                    Eigen::Vector3d aircraft_y_axis(0, 1, 0); // Assuming unit vector along the y-axis
-                    aircraft_y_axis = aircraft_orientation * aircraft_y_axis;
+                    // Aircraft's current z-axis vector in world frame
+                    Eigen::Vector3d aircraft_z_axis(0, 0, 1); // Assuming unit vector along the z-axis
+                    aircraft_z_axis = aircraft->getState()->aircraft_orientation * aircraft_z_axis;
 
-                    // Compute the quaternion representing the rotation from aircraft y-axis to target direction
-                    Eigen::Quaterniond quat_current_to_target = Eigen::Quaterniond::FromTwoVectors(aircraft_y_axis, target_direction);
+                    // Compute the quaternion representing the rotation from aircraft z-axis to target direction
+                    Eigen::Quaterniond quat_current_to_target = Eigen::Quaterniond::FromTwoVectors(aircraft_z_axis, target_direction);
 
                     // Extract the roll delta from the quaternion
                     Eigen::Vector3d euler_angles_delta = quat_current_to_target.toRotationMatrix().eulerAngles(2, 1, 0); // ZYX order: yaw, pitch, roll
@@ -262,12 +257,6 @@ double MyGene::evaluate (double arg)
                             aircraft->getState()->Y,
                             aircraft->getState()->Z);
 
-                    // Convert initial Euler angles to quaternion
-                    Eigen::Quaterniond aircraft_orientation =
-                        Eigen::AngleAxisd(aircraft->getState()->dPsi, Eigen::Vector3d::UnitZ()) *
-                        Eigen::AngleAxisd(aircraft->getState()->dTheta, Eigen::Vector3d::UnitY()) *
-                        Eigen::AngleAxisd(aircraft->getState()->dPhi, Eigen::Vector3d::UnitX());
-
                     // Target's position (in world frame)
                     int idx = getIndex(NthMyChild(0)->evaluate (arg));
                     Eigen::Vector3d target_position(path.at(idx).start.x, path.at(idx).start.y, path.at(idx).start.z);
@@ -280,7 +269,7 @@ double MyGene::evaluate (double arg)
 
                     // Aircraft's current x-axis velocity vector in world frame
                     Eigen::Vector3d aircraft_velocity(1, 0, 0); // Assuming unit vector along the x-axis
-                    aircraft_velocity = aircraft_orientation * aircraft_velocity;
+                    aircraft_velocity = aircraft->getState()->aircraft_orientation * aircraft_velocity;
 
                     // Compute the quaternion representing the rotation from aircraft velocity to target direction
                     Eigen::Quaterniond quat_current_to_target = Eigen::Quaterniond::FromTwoVectors(aircraft_velocity, target_direction);
@@ -329,8 +318,13 @@ void MyGP::evaluate ()
     stdFitness = 0.0;
   }
 
-  // north (+y), 5m/s at 10m
-  AircraftState state = {SIM_INITIAL_VELOCITY, 0.0, 0.0, SIM_INITIAL_HEADING, 0.0, 0.0, SIM_INITIAL_ALTITUDE, 0.0, 0.0, 0.0};
+  // north (+x), 5m/s at 10m
+  Eigen::Quaterniond aircraft_orientation =
+      Eigen::AngleAxisd(SIM_INITIAL_HEADING, Eigen::Vector3d::UnitZ()) *
+      Eigen::AngleAxisd(0.0, Eigen::Vector3d::UnitY()) *
+      Eigen::AngleAxisd(0.0, Eigen::Vector3d::UnitX());
+
+  AircraftState state = {SIM_INITIAL_VELOCITY, aircraft_orientation, 0.0, 0.0, SIM_INITIAL_ALTITUDE, 0.0, 0.0, 0.0};
   aircraft->setState(&state);
   aircraft->setPitchCommand(0.0);
   aircraft->setRollCommand(0.0);
@@ -384,15 +378,9 @@ void MyGP::evaluate ()
     // compute the delta vector from the aircraft vector to the goal vector based on
     // alignment (vector direction diff to velocity vector) and distance
 
-    // Convert initial aircraft Euler angles to quaternion
-    Eigen::Quaterniond aircraft_orientation =
-        Eigen::AngleAxisd(aircraft->getState()->dPsi, Eigen::Vector3d::UnitZ()) *
-        Eigen::AngleAxisd(aircraft->getState()->dTheta, Eigen::Vector3d::UnitY()) *
-        Eigen::AngleAxisd(aircraft->getState()->dPhi, Eigen::Vector3d::UnitX());
-
     // Aircraft's current x-axis normalized velocity vector in world frame
     Eigen::Vector3d aircraft_velocity(1, 0, 0); // Assuming unit vector along the x-axis
-    aircraft_velocity = aircraft_orientation * aircraft_velocity;
+    aircraft_velocity = aircraft->getState()->aircraft_orientation * aircraft_velocity;
     Eigen::Vector3d aircraft_velocity_normalized = aircraft_velocity.normalized();
 
     // Target's direction normalized vector (in world frame)
@@ -440,21 +428,22 @@ void MyGP::evaluate ()
 
     if (printEval) {
       if (printHeader) {
-        fout << "    Time Idx       dT  totDist   pathX    pathY    pathZ        X        Y        Z     dPsi     dPhi   dTheta   relVel       dG     roll    pitch    power  fitness   angleP    distP\n";
+        fout << "    Time Idx       dT  totDist   pathX    pathY    pathZ        X        Y        Z       dW       dX       dY       dZ   relVel       dG     roll    pitch    power  fitness   angleP    distP\n";
         printHeader = false;
       }
 
       char outbuf[1000]; // XXX use c++20
-      sprintf(outbuf, "% 8.2f %3ld % 8.2f % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f\n", 
+      sprintf(outbuf, "% 8.2f %3ld % 8.2f % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f\n", 
         duration, pathIndex, dT, 
         path.at(pathIndex).distanceFromStart,
         path.at(pathIndex).start.x,
         path.at(pathIndex).start.y,
         path.at(pathIndex).start.z,
         x, y, z,
-        aircraft->getState()->dPsi,
-        aircraft->getState()->dPhi,
-        aircraft->getState()->dTheta,
+        aircraft->getState()->aircraft_orientation.w(),
+        aircraft->getState()->aircraft_orientation.x(),
+        aircraft->getState()->aircraft_orientation.y(),
+        aircraft->getState()->aircraft_orientation.z(),
         aircraft->getState()->dRelVel,
         distanceFromGoal,
         aircraft->getRollCommand(),
@@ -519,9 +508,10 @@ void createNodeSet (GPAdfNodeSet& adfNs)
   ns.putNode (*new GPNode (GETMX, "GETMX"));
   ns.putNode (*new GPNode (GETMY, "GETMY"));
   ns.putNode (*new GPNode (GETMZ, "GETMZ"));
-  ns.putNode (*new GPNode (GETPHI, "GETPHI"));
-  ns.putNode (*new GPNode (GETTHETA, "GETTHETA"));
-  ns.putNode (*new GPNode (GETPSI, "GETPSI"));
+  ns.putNode (*new GPNode (GETOX, "GETOX"));
+  ns.putNode (*new GPNode (GETOY, "GETOY"));
+  ns.putNode (*new GPNode (GETOZ, "GETOZ"));
+  ns.putNode (*new GPNode (GETOW, "GETOW"));
 }
 
 
