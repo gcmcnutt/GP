@@ -47,9 +47,9 @@
 #define SIM_TOTAL_TIME 75.0
 #define SIM_TIME_STEP 0.1
 
-#define SIM_CRASH_FITNESS_PENALTY_FACTOR 1.0
+#define SIM_CRASH_FITNESS_PENALTY_FACTOR 1.3
 #define SIM_DISTANCE_PENALTY_FACTOR 1.0
-#define SIM_ANGLE_PENALTY_FACTOR 1.5
+#define SIM_ANGLE_PENALTY_FACTOR 1.3
 #define SIM_ANGLE_SCALE_FACTOR (2 * SIM_PATH_BOUNDS / M_PI)
 
 class AircraftState {
@@ -93,6 +93,19 @@ class Aircraft {
     double pitchCommand;  // -1:1
     double rollCommand;   // -1:1
     double throttleCommand; // -1:1
+};
+
+// TODO prob not needed, can be attributes in GPProgram
+class SimRun {
+  public:
+    SimRun() {
+      aircraft = new Aircraft(new AircraftState()); 
+    }
+    ~SimRun() {
+      delete aircraft;
+    }
+    Aircraft *aircraft;
+    unsigned long pathIndex = 0; // current entry on path
 };
 
 class Renderer : public vtkCommand {

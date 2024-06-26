@@ -72,8 +72,11 @@ void GPPopulation::evaluate ()
 	  current->fitnessValid=1;
 	}
     }
+    endOfEvaluation ();  
 }
 
+// a hook for the user to do something at the end of the evaluation
+void GPPopulation::endOfEvaluation () {}
 
 
 // Evaluation for a genetic program.  The user must provide for this

@@ -534,6 +534,7 @@ public:
   virtual GPContainer* selectParents (GPPopulationRange& range);
   virtual void calculateStatistics ();
   virtual void evaluate();
+  virtual void endOfEvaluation ();
 
   virtual void createGenerationReport (int printLegend, int generation,
 				       ostream& fout, ostream& bout);

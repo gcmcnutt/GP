@@ -38,7 +38,7 @@ std::vector<Path> generateSmoothPath(int numPoints, double radius) {
     controlPoints.push_back(initialPoint);
     controlPoints.push_back(initialPoint); // XXX seems first point gap isn't interpolated
 
-#define PATHGEN_FIXED_PATH 1
+// #define PATHGEN_FIXED_PATH 1
 #ifdef PATHGEN_FIXED_PATH
     // Sin
     double x, y, z;
