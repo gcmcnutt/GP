@@ -117,8 +117,8 @@ void Aircraft::toString(char *output) {
 
 // VTK timer event callback
 void Renderer::Execute(vtkObject* caller, unsigned long eventId, void* vtkNotUsed(callData)) {
+  std::lock_guard<std::mutex> lock(dataMutex);
   if (vtkCommand::TimerEvent == eventId) {
-    std::lock_guard<std::mutex> lock(dataMutex);
 
     if (!newDataAvailable) {
       return;
@@ -149,6 +149,9 @@ void Renderer::Execute(vtkObject* caller, unsigned long eventId, void* vtkNotUse
     iren->GetRenderWindow()->Render();
 
     newDataAvailable = false;
+  }
+  else if (vtkCommand::ExitEvent == eventId) {
+    exitFlag = true;
   }
 }
 
@@ -301,8 +304,9 @@ void Renderer::RenderInBackground(vtkSmartPointer<vtkRenderWindow> renderWindow)
   renderer->AddActor(actor2);
   renderer->AddActor(actor3);
 
-  // Add the timer callback
+  // Add the timer callback and close callback
   renderWindowInteractor->AddObserver(vtkCommand::TimerEvent, this);
+  renderWindowInteractor->AddObserver(vtkCommand::ExitEvent, this);
   renderWindowInteractor->CreateRepeatingTimer(100); // 100 ms interval
 
   // Initialize the rendering and interaction
@@ -330,5 +334,7 @@ void Renderer::start() {
   // renderThread.join();
 }
 
-
-
+bool Renderer::isRunning() {
+  std::lock_guard<std::mutex> lock(dataMutex);
+  return !exitFlag;
+}

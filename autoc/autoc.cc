@@ -582,35 +582,41 @@ int main ()
   MyPopulation* newPop=NULL;
 
   for (int gen=1; gen<=cfg.NumberOfGenerations; gen++)
+  {
+    // For this generation, build a smooth path goal
+    path = generateSmoothPath(18, SIM_PATH_BOUNDS); // TODO parameterize points
+    
+    // Create a new generation from the old one by applying the genetic operators
+    if (!cfg.SteadyState)
+      newPop=new MyPopulation (cfg, adfNs);
+    pop->generate (*newPop);
+    
+    // TODO fix this pattern to use a dynamic logger
+    printEval = true;
+    pop->NthMyGP(pop->bestOfPopulation)->evaluate();
+    pop->endOfEvaluation();
+    printEval = false;
+
+    // Delete the old generation and make the new the old one
+    if (!cfg.SteadyState)
     {
-      // For this generation, build a smooth path goal
-      path = generateSmoothPath(18, SIM_PATH_BOUNDS); // TODO parameterize points
-     
-      // Create a new generation from the old one by applying the genetic operators
-      if (!cfg.SteadyState)
-	      newPop=new MyPopulation (cfg, adfNs);
-      pop->generate (*newPop);
-      
-      // TODO fix this pattern to use a dynamic logger
-      printEval = true;
-      pop->NthMyGP(pop->bestOfPopulation)->evaluate();
-      pop->endOfEvaluation();
-      printEval = false;
-
-      // Delete the old generation and make the new the old one
-      if (!cfg.SteadyState)
-	    {
-	      delete pop;
-	      pop=newPop;
-	    }
-
-      // Create a report of this generation and how well it is doing
-      pop->createGenerationReport (0, gen, fout, bout);
-
-      // clean out prior fitness case
-      path.clear();
-
-      // sleep a bit
-      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+      delete pop;
+      pop=newPop;
     }
+
+    // Create a report of this generation and how well it is doing
+    pop->createGenerationReport (0, gen, fout, bout);
+
+    // clean out prior fitness case
+    path.clear();
+
+    // sleep a bit
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+
+  // wait for window close
+  cout << "Close window to exit." << endl;
+  while (renderer.isRunning()) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
 }

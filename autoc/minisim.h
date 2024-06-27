@@ -112,6 +112,7 @@ class Renderer : public vtkCommand {
   public:
     void update(std::vector<Eigen::Vector3d> path, std::vector<Eigen::Vector3d> actual);
     void start();
+    bool isRunning();
     virtual void Execute(vtkObject* caller, unsigned long eventId, void* vtkNotUsed(callData));
 
   private:
@@ -119,6 +120,7 @@ class Renderer : public vtkCommand {
     // Shared resources
     std::mutex dataMutex;
     bool newDataAvailable = false;
+    bool exitFlag = false;
     vtkSmartPointer<vtkPolyData> path;
     vtkSmartPointer<vtkPolyData> actual;
     vtkSmartPointer<vtkPolyData> segmentGap;
