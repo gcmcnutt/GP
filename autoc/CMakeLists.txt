@@ -7,8 +7,6 @@ include(${VTK_USE_FILE} )
 include_directories(../include ${EIGEN3_INCLUDE_DIR} ${VTK_INCLUDE_DIRS})
 link_directories(../lib)
 add_compile_options(-Wno-write-strings)
-add_compile_options(-fsanitize=leak)
-add_link_options(-fsanitize=leak)
 
 add_executable(autoc autoc.cc minisim.h minisim.cc pathgen.cc pathgen.h)
 

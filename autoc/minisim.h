@@ -48,15 +48,13 @@
 #define SIM_TIME_STEP 0.1
 
 #define SIM_CRASH_FITNESS_PENALTY_FACTOR 1.3
-#define SIM_DISTANCE_PENALTY_FACTOR 1.0
-#define SIM_ANGLE_PENALTY_FACTOR 1.3
+#define SIM_DISTANCE_PENALTY_FACTOR 2.0
+#define SIM_ANGLE_PENALTY_FACTOR 1.0
 #define SIM_ANGLE_SCALE_FACTOR (2 * SIM_PATH_BOUNDS / M_PI)
 
-class AircraftState {
+class Aircraft {
   public:
-    AircraftState(double dRelVel, Eigen::Quaterniond aircraft_orientation, Eigen::Vector3d position, double R_X, double R_Y, double R_Z);
-    AircraftState(); 
-
+    // TODO should be private
     double dRelVel; // reltive forward velocity on +x airplane axis m/s
 
     // world frame for now
@@ -69,14 +67,9 @@ class AircraftState {
     double R_X;     // rotationX
     double R_Y;     // rotationY
     double R_Z;     // rotationZ
-};
 
-class Aircraft {
-  public:
-    Aircraft(AircraftState *state);
+    Aircraft(double dRelVel, Eigen::Quaterniond aircraft_orientation, Eigen::Vector3d position, double R_X, double R_Y, double R_Z);
     
-    void setState(AircraftState *state);
-    AircraftState *getState();
     double setPitchCommand(double pitchCommand);
     double getPitchCommand();
     double setRollCommand(double rollCommand);
@@ -87,25 +80,11 @@ class Aircraft {
     void toString(char * output);
 
   private:
-    AircraftState *state; 
 
     // aircraft command values
     double pitchCommand;  // -1:1
     double rollCommand;   // -1:1
     double throttleCommand; // -1:1
-};
-
-// TODO prob not needed, can be attributes in GPProgram
-class SimRun {
-  public:
-    SimRun() {
-      aircraft = new Aircraft(new AircraftState()); 
-    }
-    ~SimRun() {
-      delete aircraft;
-    }
-    Aircraft *aircraft;
-    unsigned long pathIndex = 0; // current entry on path
 };
 
 class Renderer : public vtkCommand {

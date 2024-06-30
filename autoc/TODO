@@ -14,4 +14,6 @@
 - turn white segment markers into arrows
 - each generation needs a series of test paths
 - llm fitness function evolution
-- how did steadyState used to reval on each gen?  seems not working now
+- how did steadyState used to eval on each gen?  seems not working now
+- is a mem leak on each generation -- this is steady state, maybe we have to delete a population?
+- but it seems that steady state now has collision with tasks
