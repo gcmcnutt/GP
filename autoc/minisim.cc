@@ -155,12 +155,7 @@ void Renderer::Execute(vtkObject* caller, unsigned long eventId, void* vtkNotUse
     vtkSmartPointer<vtkPolyDataMapper> mapper3 = vtkSmartPointer<vtkPolyDataMapper>::New();
     mapper3->SetInputConnection(segmentGaps->GetOutputPort());
 
-    // Create a mapper for the plane
-    vtkSmartPointer<vtkPolyDataMapper> planeMapper = vtkSmartPointer<vtkPolyDataMapper>::New();
-    planeMapper->SetInputConnection(planeData->GetOutputPort());
-
     // Update actors
-    planeActor->SetMapper(planeMapper);
     actor1->SetMapper(mapper1);
     actor2->SetMapper(mapper2);
     actor3->SetMapper(mapper3);
@@ -290,8 +285,8 @@ void Renderer::RenderInBackground(vtkSmartPointer<vtkRenderWindow> renderWindow)
 
   // create the checkerboards
   planeData = vtkSmartPointer<vtkAppendPolyData>::New();
-  for (int i = 0; i < NUM_PATHS_PER_GEN; i++) {
-    Eigen::Vector3d offset = renderingOffset(i);
+  for (int j = 0; j < NUM_PATHS_PER_GEN; j++) {
+    Eigen::Vector3d offset = renderingOffset(j);
 
     // Create a plane source at z = 0
     vtkSmartPointer<vtkPlaneSource> planeSource = vtkSmartPointer<vtkPlaneSource>::New();
@@ -322,6 +317,7 @@ void Renderer::RenderInBackground(vtkSmartPointer<vtkRenderWindow> renderWindow)
       }
     }
     planeSource->GetOutput()->GetCellData()->SetScalars(cellData);
+    planeSource->Update();
     planeData->AddInputData(planeSource->GetOutput());
   }
 
@@ -329,12 +325,16 @@ void Renderer::RenderInBackground(vtkSmartPointer<vtkRenderWindow> renderWindow)
   renderWindow->SetMultiSamples(4); // Use 4x MSAA
 
   // Enable depth peeling for proper transparency rendering
+  renderWindow->SetAlphaBitPlanes(1);
+  renderWindow->SetMultiSamples(0);
   renderer->SetUseDepthPeeling(1);
   renderer->SetMaximumNumberOfPeels(100);  // Maximum number of depth peels
   renderer->SetOcclusionRatio(0.1);        // Occlusion ratio
 
   // Create an actor for the plane
-  planeActor = vtkSmartPointer<vtkActor>::New();
+  planeActor = vtkSmartPointer<vtkActor>::New();vtkSmartPointer<vtkPolyDataMapper> planeMapper = vtkSmartPointer<vtkPolyDataMapper>::New();
+  planeMapper->SetInputConnection(planeData->GetOutputPort());
+  planeActor->SetMapper(planeMapper);
 
   renderer->AddActor(planeActor);
   renderer->AddActor(actor1);
