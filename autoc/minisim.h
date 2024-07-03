@@ -30,6 +30,12 @@
 #include <vtkMinimalStandardRandomSequence.h>
 #include <vtkInteractorStyleTrackballCamera.h>
 #include <vtkLine.h>
+#include <vtkAppendPolyData.h>
+
+#define NUM_PATHS_PER_GEN 2
+#define NUM_SEGMENTS_PER_PATH 18
+#define FIELD_SIZE 100.0
+#define FIELD_GAP 10.0
 
 #define MAX_ROLL_RATE_RADSEC (M_PI / 2.0)
 #define MAX_PITCH_RATE_RADSEC (M_PI / 3.0)
@@ -89,31 +95,43 @@ class Aircraft {
 
 class Renderer : public vtkCommand {
   public:
-    void update(std::vector<Eigen::Vector3d> path, std::vector<Eigen::Vector3d> actual);
+    void update();
     void start();
     bool isRunning();
     virtual void Execute(vtkObject* caller, unsigned long eventId, void* vtkNotUsed(callData));
+    void addPathElementList(std::vector<Path> plan, std::vector<Path> actual);
+    
+    std::recursive_mutex dataMutex;
+      
+    // the path(s) a population will attempt
+    std::vector<std::vector<Path>> generationPaths;
+
+    // intermediate paths and results
+    std::vector<std::vector<Path>> pathList;
+    std::vector<std::vector<Path>> actualList;
 
   private:
     
     // Shared resources
-    std::mutex dataMutex;
     bool newDataAvailable = false;
     bool exitFlag = false;
-    vtkSmartPointer<vtkPolyData> path;
-    vtkSmartPointer<vtkPolyData> actual;
-    vtkSmartPointer<vtkPolyData> segmentGap;
+
+    vtkSmartPointer<vtkAppendPolyData> paths;
+    vtkSmartPointer<vtkAppendPolyData> actuals;
+    vtkSmartPointer<vtkAppendPolyData> segmentGaps;
+    vtkSmartPointer<vtkAppendPolyData> planeData;
+
     vtkSmartPointer<vtkActor> actor1;
     vtkSmartPointer<vtkActor> actor2;
     vtkSmartPointer<vtkActor> actor3;
     vtkSmartPointer<vtkActor> planeActor;
-    vtkSmartPointer<vtkPlaneSource> planeSource;
 
-    int TimerCount;
-
-    vtkSmartPointer<vtkPolyData> createPointSet(const std::vector<Eigen::Vector3d> points);
-    vtkSmartPointer<vtkPolyData> createSegmentSet(const std::vector<Eigen::Vector3d> start, const std::vector<Eigen::Vector3d> end);
+    Eigen::Vector3d renderingOffset(int i); // locate a coordinate offset for our rendering screen
+    vtkSmartPointer<vtkPolyData> createPointSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> points);
+    vtkSmartPointer<vtkPolyData> createSegmentSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> start, const std::vector<Eigen::Vector3d> end);
+    std::vector<Eigen::Vector3d> pathToVector(const std::vector<Path> path);
     void RenderInBackground(vtkSmartPointer<vtkRenderWindow> renderWindow);
+
 };
 
 #endif

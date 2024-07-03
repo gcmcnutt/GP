@@ -28,7 +28,6 @@ Eigen::Vector3d cubicInterpolate(const Eigen::Vector3d& p0, const Eigen::Vector3
     return Eigen::Vector3d(x, y, z);
 }
 
-// Function to generate a smooth random path within a half-sphere
 std::vector<Path> generateSmoothPath(int numPoints, double radius) {
     std::vector<Eigen::Vector3d> controlPoints;
     std::vector<Path> path;
@@ -38,7 +37,7 @@ std::vector<Path> generateSmoothPath(int numPoints, double radius) {
     controlPoints.push_back(initialPoint);
     controlPoints.push_back(initialPoint); // XXX seems first point gap isn't interpolated
 
-#define PATHGEN_FIXED_PATH 1
+// #define PATHGEN_FIXED_PATH 1
 #ifdef PATHGEN_FIXED_PATH
     // Sin
     double x, y, z;
@@ -79,6 +78,17 @@ std::vector<Path> generateSmoothPath(int numPoints, double radius) {
     controlPoints.clear();
 
     return path;
+}
+
+// Function to generate a smooth random paths within a half-sphere
+std::vector<std::vector<Path>> generateSmoothPaths(int numPaths, int numPoints, double radius) {
+    std::vector<std::vector<Path>> paths;
+
+    for (size_t i = 0; i < numPaths; ++i) {
+        paths.push_back(generateSmoothPath(numPoints, radius));
+    }
+
+    return paths;
 }
 
 void Path::toString(char* output) {

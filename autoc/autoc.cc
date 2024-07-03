@@ -65,11 +65,9 @@ const int MyGeneID=GPUserID;
 const int MyGPID=GPUserID+1;
 const int MyPopulationID=GPUserID+2;
 
-// the path(s) a population will attempt
-std::vector<Path> path = std::vector<Path>();
-bool printEval = false; // verbose (used for rendering best of population)
+std::atomic_bool printEval = false; // verbose (used for rendering best of population)
 std::ofstream fout;
-Renderer renderer = Renderer();
+Renderer renderer;
 
 class MyGP;
 
@@ -88,7 +86,7 @@ public:
 
   // Tree evaluation (not mandatory, but somehow the trees must be
   // parsed to evaluate the fitness)
-  double evaluate (MyGP &gp, double arg);
+  double evaluate (std::vector<Path> &path, MyGP &gp, double arg);
 
   // Load and save (not mandatory)
   MyGene () {}
@@ -137,7 +135,7 @@ public:
     return (MyGene*) GPContainer::Nth (n); }
 
   // async evaluator
-  void evalTask(unsigned long taskIndex);
+  void evalTask(int gpIndex);
 
   Aircraft aircraft = Aircraft(0, Eigen::Quaterniond::Identity(), Eigen::Vector3d(0, 0, 0), 0, 0, 0);
   unsigned long pathIndex = 0; // current entry on path
@@ -195,7 +193,7 @@ public:
     return (MyGP*) GPContainer::Nth (n); }
 };
 
-int getIndex(MyGP &gp, double arg) {
+int getIndex(std::vector<Path> &path, MyGP &gp, double arg) {
   if (isnan(arg)) {
     return gp.pathIndex;
   }
@@ -207,35 +205,35 @@ int getIndex(MyGP &gp, double arg) {
 
 // This function evaluates the fitness of a genetic tree.  We have the
 // freedom to define this function in any way we like.  
-double MyGene::evaluate (MyGP &run, double arg)
+double MyGene::evaluate (std::vector<Path> &path, MyGP &run, double arg)
 {
   double returnValue = 0.0;
 
   switch (node->value ())
     {
-      case ADD: returnValue=NthMyChild(0)->evaluate (run, arg)+NthMyChild(1)->evaluate (run, arg); break;
-      case NEG: returnValue=-NthMyChild(0)->evaluate (run, arg); break;
-      case MUL: returnValue=NthMyChild(0)->evaluate (run, arg)*NthMyChild(1)->evaluate (run, arg); break;
+      case ADD: returnValue=NthMyChild(0)->evaluate (path, run, arg)+NthMyChild(1)->evaluate (path, run, arg); break;
+      case NEG: returnValue=-NthMyChild(0)->evaluate (path, run, arg); break;
+      case MUL: returnValue=NthMyChild(0)->evaluate (path, run, arg)*NthMyChild(1)->evaluate (path, run, arg); break;
       case INV: {
-                double div = NthMyChild(0)->evaluate (run, arg);
+                double div = NthMyChild(0)->evaluate (path, run, arg);
                 returnValue = (div == 0) ? 0 : 1 / div;
                 break;
       }
-      case IF: returnValue = NthMyChild(0)->evaluate (run, arg) ? NthMyChild(1)->evaluate (run, arg) : NthMyChild(2)->evaluate (run, arg); break;
-      case EQ: returnValue = NthMyChild(0)->evaluate (run, arg) == NthMyChild(1)->evaluate (run, arg); break;
-      case GT: returnValue = NthMyChild(0)->evaluate (run, arg) > NthMyChild(1)->evaluate (run, arg); break;
-      case PITCH: returnValue = run.aircraft.setPitchCommand(NthMyChild(0)->evaluate (run, arg)); break;
-      case ROLL: returnValue = run.aircraft.setRollCommand(NthMyChild(0)->evaluate (run, arg)); break;
-      case THROTTLE: returnValue = run.aircraft.setThrottleCommand(NthMyChild(0)->evaluate (run, arg)); break;
-      case SIN: returnValue = sin(NthMyChild(0)->evaluate (run, arg)); break;
-      case COS: returnValue = cos(NthMyChild(0)->evaluate (run, arg)); break;
+      case IF: returnValue = NthMyChild(0)->evaluate (path, run, arg) ? NthMyChild(1)->evaluate (path, run, arg) : NthMyChild(2)->evaluate (path, run, arg); break;
+      case EQ: returnValue = NthMyChild(0)->evaluate (path, run, arg) == NthMyChild(1)->evaluate (path, run, arg); break;
+      case GT: returnValue = NthMyChild(0)->evaluate (path, run, arg) > NthMyChild(1)->evaluate (path, run, arg); break;
+      case PITCH: returnValue = run.aircraft.setPitchCommand(NthMyChild(0)->evaluate (path, run, arg)); break;
+      case ROLL: returnValue = run.aircraft.setRollCommand(NthMyChild(0)->evaluate (path, run, arg)); break;
+      case THROTTLE: returnValue = run.aircraft.setThrottleCommand(NthMyChild(0)->evaluate (path, run, arg)); break;
+      case SIN: returnValue = sin(NthMyChild(0)->evaluate (path, run, arg)); break;
+      case COS: returnValue = cos(NthMyChild(0)->evaluate (path, run, arg)); break;
       case PI: returnValue = M_PI; break;
       case ZERO: returnValue = 0; break;
       case ONE: returnValue = 1; break;
       case TWO: returnValue = 2; break;
       case PROGN: {
-                  NthMyChild(0)->evaluate (run, arg);
-                  returnValue = NthMyChild(1)->evaluate (run, arg);
+                  NthMyChild(0)->evaluate (path, run, arg);
+                  returnValue = NthMyChild(1)->evaluate (path, run, arg);
                   break;
       }
       case GETMX: returnValue = run.aircraft.position[0]; break;
@@ -252,7 +250,7 @@ double MyGene::evaluate (MyGP &run, double arg)
                     Eigen::Vector3d aircraft_position = run.aircraft.position;
 
                     // Target's position (in world frame)
-                    int idx = getIndex(run, NthMyChild(0)->evaluate (run, arg));
+                    int idx = getIndex(path, run, NthMyChild(0)->evaluate (path, run, arg));
                     Eigen::Vector3d target_position(path.at(idx).start[0], path.at(idx).start[1], path.at(idx).start[2]);
 
                     // Compute the vector from the aircraft to the target
@@ -280,7 +278,7 @@ double MyGene::evaluate (MyGP &run, double arg)
                     Eigen::Vector3d aircraft_position = run.aircraft.position;
 
                     // Target's position (in world frame)
-                    int idx = getIndex(run, NthMyChild(0)->evaluate (run, arg));
+                    int idx = getIndex(path, run, NthMyChild(0)->evaluate (path, run, arg));
                     Eigen::Vector3d target_position(path.at(idx).start[0], path.at(idx).start[1], path.at(idx).start[2]);
 
                     // Compute the vector from the aircraft to the target
@@ -304,7 +302,7 @@ double MyGene::evaluate (MyGP &run, double arg)
 
       case GETDS: // get distance to the next point
                   {
-                    int idx = getIndex(run, NthMyChild(0)->evaluate (run, arg));
+                    int idx = getIndex(path, run, NthMyChild(0)->evaluate (path, run, arg));
                     returnValue = (path.at(idx).start - run.aircraft.position).norm();
                     break;
                   }
@@ -330,162 +328,182 @@ void MyGP::evaluate()
 
 // Evaluate the fitness of a GP and save it into the class variable
 // fitness.
-void MyGP::evalTask(unsigned long taskIndex)
+void MyGP::evalTask(int gpIndex)
 {
-  // deal with pre.path on the initial eval..
-  if (path.size() == 0) {
-    stdFitness = 1000001;
-    return;
-  } else {
-    stdFitness = 0.0;
-  }
 
-  // north (+x), 5m/s at 10m
-  Eigen::Quaterniond aircraft_orientation =
-      Eigen::AngleAxisd(SIM_INITIAL_HEADING, Eigen::Vector3d::UnitZ()) *
-      Eigen::AngleAxisd(0.0, Eigen::Vector3d::UnitY()) *
-      Eigen::AngleAxisd(0.0, Eigen::Vector3d::UnitX());
+  double evalFitness = 0;
 
-  Eigen::Vector3d initialPosition = Eigen::Vector3d(0, 0, SIM_INITIAL_ALTITUDE);
-  aircraft = Aircraft(SIM_INITIAL_VELOCITY, aircraft_orientation, initialPosition, 0.0, 0.0, 0.0);
+  for (auto &path : renderer.generationPaths) {    
+    double localFitness = 0;
+    std::vector<Eigen::Vector3d> planPath = std::vector<Eigen::Vector3d>();
+    std::vector<Eigen::Vector3d> actualPath = std::vector<Eigen::Vector3d>();
 
-  aircraft.setPitchCommand(0.0);
-  aircraft.setRollCommand(0.0);
-  aircraft.setThrottleCommand(SIM_INITIAL_THROTTLE);
-  
-  // char output[200];
-  // aircraft.toString(output);
-  // cout << output << endl;
-
-  // iterate the simulator
-  double duration = 0.0; // how long have we been running
-  pathIndex = 0; // where are we on the path?
-  bool printHeader = true;
-
-  std::vector<Eigen::Vector3d> planPath = std::vector<Eigen::Vector3d>();
-  std::vector<Eigen::Vector3d> actualPath = std::vector<Eigen::Vector3d>();
-
-  planPath.push_back(path.at(pathIndex).start); // XXX push the full path
-  actualPath.push_back(aircraft.position);
-
-  // as long as we are within the time limit and have not reached the end of the path
-  bool hasCrashed = false; 
-  while (duration < SIM_TOTAL_TIME && pathIndex < path.size() && !hasCrashed) {
-
-    // walk path looking for next item around TIME_STEP seconds later
-    double minDistance = path.at(pathIndex).distanceFromStart + (SIM_TIME_STEP * SIM_INITIAL_VELOCITY);
-    int newPathIndex = pathIndex;
-    while (newPathIndex < path.size() && (path.at(newPathIndex).distanceFromStart < minDistance)) {
-      newPathIndex++;
+    // deal with pre.path on the initial eval..
+    if (path.size() == 0) {
+      evalFitness = 1000001;
+      continue;
     }
-    // are we off the end?
-    if (newPathIndex >= path.size()) {
-      break;
-    }
+    // north (+x), 5m/s at 10m
+    Eigen::Quaterniond aircraft_orientation =
+        Eigen::AngleAxisd(SIM_INITIAL_HEADING, Eigen::Vector3d::UnitZ()) *
+        Eigen::AngleAxisd(0.0, Eigen::Vector3d::UnitY()) *
+        Eigen::AngleAxisd(0.0, Eigen::Vector3d::UnitX());
 
-    // ok, how far is this point from the last point?
-    double distance = path.at(newPathIndex).distanceFromStart - path.at(pathIndex).distanceFromStart;
-    // so this is the real dT
-    double dT = distance / SIM_INITIAL_VELOCITY;
+    Eigen::Vector3d initialPosition = Eigen::Vector3d(0, 0, SIM_INITIAL_ALTITUDE);
+    aircraft = Aircraft(SIM_INITIAL_VELOCITY, aircraft_orientation, initialPosition, 0.0, 0.0, 0.0);
 
-    // advance the simulator
-    duration += dT;
-    pathIndex = newPathIndex;
+    aircraft.setPitchCommand(0.0);
+    aircraft.setRollCommand(0.0);
+    aircraft.setThrottleCommand(SIM_INITIAL_THROTTLE);
+    
+    // char output[200];
+    // aircraft.toString(output);
+    // cout << output << endl;
 
-    // GP determine control input
-    NthMyGene (0)->evaluate (*this, 0);
+    // iterate the simulator
+    double duration = 0.0; // how long have we been running
+    pathIndex = 0; // where are we on the path?
+    bool printHeader = true;
 
-    // and advances the aircract
-    aircraft.advanceState(dT);
+    // as long as we are within the time limit and have not reached the end of the path
+    bool hasCrashed = false; 
+    while (duration < SIM_TOTAL_TIME && pathIndex < path.size() && !hasCrashed) {
 
-    // how did we do?
-    // compute the delta vector from the aircraft vector to the goal vector based on
-    // alignment (vector direction diff to velocity vector) and distance
-
-    // Aircraft's current x-axis normalized velocity vector in world frame
-    Eigen::Vector3d aircraft_velocity(1, 0, 0); // Assuming unit vector along the x-axis
-    aircraft_velocity = aircraft.aircraft_orientation * aircraft_velocity;
-    Eigen::Vector3d aircraft_velocity_normalized = aircraft_velocity.normalized();
-
-    // Target's direction normalized vector (in world frame)
-    Eigen::Vector3d target_direction(path.at(pathIndex).start - path.at(pathIndex-1).start);
-    target_direction.normalize();
-
-    // Compute the dot product of the two normalized vectors
-    double dot_product = target_direction.dot(aircraft_velocity_normalized);
-
-    // Clamp the dot product to avoid numerical issues with acos
-    dot_product = std::clamp(dot_product, -1.0, 1.0);
-    double angle_rad = std::acos(dot_product);
-
-    // Compute the distance between the aircraft and the goal
-    double distanceFromGoal = (path.at(pathIndex).start - aircraft.position).norm();
-
-    // Compute the fitness value (distance * some power function) + (angle penalty * some power function)
-    double anglePenalty = pow(SIM_ANGLE_SCALE_FACTOR * fabs(angle_rad), SIM_ANGLE_PENALTY_FACTOR);
-    double distancePenalty = pow(distanceFromGoal, SIM_DISTANCE_PENALTY_FACTOR);
-    double fitness = distancePenalty + anglePenalty;
-
-    // add in distance component
-    if (!isnan(fitness)) {
-      stdFitness += fitness;
-    } else {
-      stdFitness += 1000000;
-    }
-
-    // but have we crashed outside the sphere?
-    double distanceFromOrigin = (aircraft.position - Eigen::Vector3d(0, 0, SIM_INITIAL_ALTITUDE)).norm();
-    if (aircraft.position[2] > SIM_MIN_ELEVATION || distanceFromOrigin > SIM_PATH_RADIUS_LIMIT) {
-      // ok we are outside the bounds -- penalize at whatever rate of error we had so far
-      double timeRemaining = max(0.0, SIM_TOTAL_TIME - duration);
-      double preCrashFitness = stdFitness / duration;
-      double projectedFitness = preCrashFitness * timeRemaining;
-      stdFitness += pow(projectedFitness, SIM_CRASH_FITNESS_PENALTY_FACTOR);
-      hasCrashed = true;
-    }
-
-    if (printEval) {
-      if (printHeader) {
-        fout << "    Time Idx       dT  totDist   pathX    pathY    pathZ        X        Y        Z       dW       dX       dY       dZ   relVel       dG     roll    pitch    power  fitness   angleP    distP\n";
-        printHeader = false;
+      // walk path looking for next item around TIME_STEP seconds later
+      double minDistance = path.at(pathIndex).distanceFromStart + (SIM_TIME_STEP * SIM_INITIAL_VELOCITY);
+      int newPathIndex = pathIndex;
+      while (newPathIndex < path.size() && (path.at(newPathIndex).distanceFromStart < minDistance)) {
+        newPathIndex++;
+      }
+      // are we off the end?
+      if (newPathIndex >= path.size()) {
+        break;
       }
 
-      char outbuf[1000]; // XXX use c++20
-      sprintf(outbuf, "% 8.2f %3ld % 8.2f % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f\n", 
-        duration, pathIndex, dT, 
-        path.at(pathIndex).distanceFromStart,
-        path.at(pathIndex).start[0],
-        path.at(pathIndex).start[1],
-        path.at(pathIndex).start[2],
-        aircraft.position[0],
-        aircraft.position[1],
-        aircraft.position[2],
-        aircraft.aircraft_orientation.w(),
-        aircraft.aircraft_orientation.x(),
-        aircraft.aircraft_orientation.y(),
-        aircraft.aircraft_orientation.z(),
-        aircraft.dRelVel,
-        distanceFromGoal,
-        aircraft.getRollCommand(),
-        aircraft.getPitchCommand(),
-        aircraft.getThrottleCommand(),
-        stdFitness,
-        anglePenalty,
-        distancePenalty
-        );
-        fout << outbuf;
+      // ok, how far is this point from the last point?
+      double distance = path.at(newPathIndex).distanceFromStart - path.at(pathIndex).distanceFromStart;
+      // so this is the real dT
+      double dT = distance / SIM_INITIAL_VELOCITY;
 
-      // now update points for Renderer
-      planPath.push_back(path.at(pathIndex).start); // XXX push the full path
-      actualPath.push_back(aircraft.position);
+      // advance the simulator
+      duration += dT;
+      pathIndex = newPathIndex;
+
+      // GP determine control input
+      NthMyGene (0)->evaluate (path, *this, 0);
+
+      // and advances the aircract
+      aircraft.advanceState(dT);
+
+      // how did we do?
+      // compute the delta vector from the aircraft vector to the goal vector based on
+      // alignment (vector direction diff to velocity vector) and distance
+
+      // Aircraft's current x-axis normalized velocity vector in world frame
+      Eigen::Vector3d aircraft_velocity(1, 0, 0); // Assuming unit vector along the x-axis
+      aircraft_velocity = aircraft.aircraft_orientation * aircraft_velocity;
+      Eigen::Vector3d aircraft_velocity_normalized = aircraft_velocity.normalized();
+
+      // Target's direction normalized vector (in world frame)
+      Eigen::Vector3d target_direction(path.at(pathIndex).start - path.at(pathIndex-1).start);
+      target_direction.normalize();
+
+      // Compute the dot product of the two normalized vectors
+      double dot_product = target_direction.dot(aircraft_velocity_normalized);
+
+      // Clamp the dot product to avoid numerical issues with acos
+      dot_product = std::clamp(dot_product, -1.0, 1.0);
+      double angle_rad = std::acos(dot_product);
+
+      // Compute the distance between the aircraft and the goal
+      double distanceFromGoal = (path.at(pathIndex).start - aircraft.position).norm();
+
+      // Compute the fitness value (distance * some power function) + (angle penalty * some power function)
+      double anglePenalty = pow(SIM_ANGLE_SCALE_FACTOR * fabs(angle_rad), SIM_ANGLE_PENALTY_FACTOR);
+      double distancePenalty = pow(distanceFromGoal, SIM_DISTANCE_PENALTY_FACTOR);
+      double fitness = distancePenalty + anglePenalty;
+
+      // add in distance component
+      if (!isnan(fitness)) {
+        localFitness += fitness;
+      } else {
+        localFitness += 1000000;
+      }
+
+      // but have we crashed outside the sphere?
+      double distanceFromOrigin = (aircraft.position - Eigen::Vector3d(0, 0, SIM_INITIAL_ALTITUDE)).norm();
+      if (aircraft.position[2] > SIM_MIN_ELEVATION || distanceFromOrigin > SIM_PATH_RADIUS_LIMIT) {
+        // ok we are outside the bounds -- penalize at whatever rate of error we had so far
+        double timeRemaining = max(0.0, SIM_TOTAL_TIME - duration);
+        double preCrashFitness = localFitness / duration;
+        double projectedFitness = preCrashFitness * timeRemaining;
+        localFitness += pow(projectedFitness, SIM_CRASH_FITNESS_PENALTY_FACTOR);
+        hasCrashed = true;
+      }
+
+      if (printEval) {
+        if (printHeader) {
+          fout << "    Time Idx       dT  totDist   pathX    pathY    pathZ        X        Y        Z       dW       dX       dY       dZ   relVel       dG     roll    pitch    power  fitness   angleP    distP\n";
+          printHeader = false;
+        }
+
+        char outbuf[1000]; // XXX use c++20
+        sprintf(outbuf, "% 8.2f %3ld % 8.2f % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f\n", 
+          duration, pathIndex, dT, 
+          path.at(pathIndex).distanceFromStart,
+          path.at(pathIndex).start[0],
+          path.at(pathIndex).start[1],
+          path.at(pathIndex).start[2],
+          aircraft.position[0],
+          aircraft.position[1],
+          aircraft.position[2],
+          aircraft.aircraft_orientation.w(),
+          aircraft.aircraft_orientation.x(),
+          aircraft.aircraft_orientation.y(),
+          aircraft.aircraft_orientation.z(),
+          aircraft.dRelVel,
+          distanceFromGoal,
+          aircraft.getRollCommand(),
+          aircraft.getPitchCommand(),
+          aircraft.getThrottleCommand(),
+          localFitness,
+          anglePenalty,
+          distancePenalty
+          );
+          fout << outbuf;
+
+        // now update points for Renderer
+        planPath.push_back(path.at(pathIndex).start); // XXX push the full path
+        actualPath.push_back(aircraft.position);
+      }
     }
+          
+    if (printEval) {
+      // now update actual list of lists
+      std::vector<Path> actualElementList;
+      for (auto& actualElement : actualPath) {
+        actualElementList.push_back({actualElement, 0});
+      }
+
+      // now update plan list of lists
+      std::vector<Path> planElementList;
+      for (auto& planElement : planPath) {
+        planElementList.push_back({planElement, 0});
+      }
+      renderer.addPathElementList(planElementList, actualElementList);
+
+      planPath.clear();
+      actualPath.clear();
+    }
+
+    evalFitness += localFitness;
   }
 
   if (printEval) {
-    renderer.update(planPath, actualPath);
-    planPath.clear();
-    actualPath.clear();
+    renderer.update();
   }
+
+  stdFitness = evalFitness;
 }
 
 
@@ -575,6 +593,9 @@ int main ()
   // start rendering screen
   renderer.start();
   
+  // prime the paths?
+  renderer.generationPaths = generateSmoothPaths(NUM_PATHS_PER_GEN, NUM_SEGMENTS_PER_PATH, SIM_PATH_BOUNDS);
+  
   // Create a population with this configuration
   cout << "Creating initial population ..." << endl;
   MyPopulation* pop=new MyPopulation (cfg, adfNs);
@@ -590,7 +611,7 @@ int main ()
   for (int gen=1; gen<=cfg.NumberOfGenerations; gen++)
   {
     // For this generation, build a smooth path goal
-    path = generateSmoothPath(18, SIM_PATH_BOUNDS); // TODO parameterize points
+    renderer.generationPaths = generateSmoothPaths(NUM_PATHS_PER_GEN, NUM_SEGMENTS_PER_PATH, SIM_PATH_BOUNDS);
     
     // Create a new generation from the old one by applying the genetic operators
     if (!cfg.SteadyState)
@@ -612,9 +633,6 @@ int main ()
 
     // Create a report of this generation and how well it is doing
     pop->createGenerationReport (0, gen, fout, bout);
-
-    // clean out prior fitness case
-    path.clear();
 
     // sleep a bit
     std::this_thread::sleep_for(std::chrono::milliseconds(20));

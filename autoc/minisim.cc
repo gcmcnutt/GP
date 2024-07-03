@@ -91,31 +91,73 @@ void Aircraft::toString(char *output) {
     pitchCommand, rollCommand, throttleCommand);
 }
 
+void PrintPolyDataInfo(vtkPolyData* polyData)
+{
+    vtkPoints* points = polyData->GetPoints();
+    vtkCellArray* cells = polyData->GetPolys();
+    vtkIdList* idList = vtkIdList::New();
 
+    if (points == NULL) {
+        printf("No points in the polydata\n");
+    } else {
+      printf("Number of Points: %lld\n", static_cast<long long>(points->GetNumberOfPoints()));
+      printf("Points:\n");
+      for (vtkIdType i = 0; i < points->GetNumberOfPoints(); ++i)
+      {
+          double p[3];
+          points->GetPoint(i, p);
+          printf("  Point %lld: (%f, %f, %f)\n", static_cast<long long>(i), p[0], p[1], p[2]);
+      }
+    } 
 
+    printf("Number of Cells: %lld\n", static_cast<long long>(cells->GetNumberOfCells()));
+    printf("Cells:\n");
+    cells->InitTraversal();
+    while (cells->GetNextCell(idList))
+    {
+        printf("  Cell with %lld points: ", static_cast<long long>(idList->GetNumberOfIds()));
+        for (vtkIdType j = 0; j < idList->GetNumberOfIds(); ++j)
+        {
+            printf("%lld ", static_cast<long long>(idList->GetId(j)));
+        }
+        printf("\n");
+    }
+
+    idList->Delete();
+}
+
+Eigen::Vector3d Renderer::renderingOffset(int i) {
+  double x = 0;
+  double y = 0;
+  double z = 0;
+
+  // for now put them in a line
+  double xOffset = i * (FIELD_SIZE + FIELD_GAP);
+
+  return Eigen::Vector3d(x + xOffset, y, z);
+}
 
 // VTK timer event callback
 void Renderer::Execute(vtkObject* caller, unsigned long eventId, void* vtkNotUsed(callData)) {
-  std::lock_guard<std::mutex> lock(dataMutex);
+  std::lock_guard<std::recursive_mutex> lock(dataMutex);
   if (vtkCommand::TimerEvent == eventId) {
-
     if (!newDataAvailable) {
       return;
     }
 
     // Update mappers
     vtkSmartPointer<vtkPolyDataMapper> mapper1 = vtkSmartPointer<vtkPolyDataMapper>::New();
-    mapper1->SetInputData(path);
+    mapper1->SetInputConnection(paths->GetOutputPort());
 
     vtkSmartPointer<vtkPolyDataMapper> mapper2 = vtkSmartPointer<vtkPolyDataMapper>::New();
-    mapper2->SetInputData(actual);
+    mapper2->SetInputConnection(actuals->GetOutputPort());
 
     vtkSmartPointer<vtkPolyDataMapper> mapper3 = vtkSmartPointer<vtkPolyDataMapper>::New();
-    mapper3->SetInputData(segmentGap);
+    mapper3->SetInputConnection(segmentGaps->GetOutputPort());
 
     // Create a mapper for the plane
     vtkSmartPointer<vtkPolyDataMapper> planeMapper = vtkSmartPointer<vtkPolyDataMapper>::New();
-    planeMapper->SetInputConnection(planeSource->GetOutputPort());
+    planeMapper->SetInputConnection(planeData->GetOutputPort());
 
     // Update actors
     planeActor->SetMapper(planeMapper);
@@ -135,10 +177,11 @@ void Renderer::Execute(vtkObject* caller, unsigned long eventId, void* vtkNotUse
 }
 
 
-vtkSmartPointer<vtkPolyData> Renderer::createPointSet(const std::vector<Eigen::Vector3d> points) {
+vtkSmartPointer<vtkPolyData> Renderer::createPointSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> points) {
   vtkSmartPointer<vtkPoints> vtp = vtkSmartPointer<vtkPoints>::New();
   for (const auto& point : points) {
-      vtp->InsertNextPoint(point[0], point[1], point[2]);
+      Eigen::Vector3d rPoint = point + offset;
+      vtp->InsertNextPoint(rPoint[0], rPoint[1], rPoint[2]);
   }
 
   vtkSmartPointer<vtkPolyLine> lines = vtkSmartPointer<vtkPolyLine>::New();
@@ -164,11 +207,13 @@ vtkSmartPointer<vtkPolyData> Renderer::createPointSet(const std::vector<Eigen::V
   return polyData;
 }
 
-vtkSmartPointer<vtkPolyData> Renderer::createSegmentSet(const std::vector<Eigen::Vector3d> start, const std::vector<Eigen::Vector3d> end) {
+vtkSmartPointer<vtkPolyData> Renderer::createSegmentSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> start, const std::vector<Eigen::Vector3d> end) {
   vtkSmartPointer<vtkPoints> points = vtkSmartPointer<vtkPoints>::New();
   for (int i = 0; i < start.size(); i++) {
-    points->InsertNextPoint(start[i][0], start[i][1], start[i][2]);
-    points->InsertNextPoint(end[i][0], end[i][1], end[i][2]);
+    Eigen::Vector3d rStart = start[i] + offset;
+    Eigen::Vector3d rEnd = end[i] + offset;
+    points->InsertNextPoint(rStart[0], rStart[1], rStart[2]);
+    points->InsertNextPoint(rEnd[0], rEnd[1], rEnd[2]);
   }
 
   vtkSmartPointer<vtkCellArray> lines = vtkSmartPointer<vtkCellArray>::New();
@@ -184,6 +229,12 @@ vtkSmartPointer<vtkPolyData> Renderer::createSegmentSet(const std::vector<Eigen:
   polyData->SetLines(lines);
 
   return polyData;
+}
+
+void Renderer::addPathElementList(std::vector<Path> plan, std::vector<Path> actual) {
+  std::lock_guard<std::recursive_mutex> lock(dataMutex);
+  actualList.push_back(actual);
+  pathList.push_back(plan);
 }
 
 void Renderer::RenderInBackground(vtkSmartPointer<vtkRenderWindow> renderWindow) {
@@ -237,35 +288,42 @@ void Renderer::RenderInBackground(vtkSmartPointer<vtkRenderWindow> renderWindow)
 
   renderer->SetBackground(colors->GetColor3d("Black").GetData());
 
-  // Create a plane source at z = 0
-  planeSource = vtkSmartPointer<vtkPlaneSource>::New();
+  // create the checkerboards
+  planeData = vtkSmartPointer<vtkAppendPolyData>::New();
+  for (int i = 0; i < NUM_PATHS_PER_GEN; i++) {
+    Eigen::Vector3d offset = renderingOffset(i);
 
-  double width = 100.0;
-  double height = 100.0;
-  int resolution = 10;
-  planeSource->SetOrigin(-width / 2.0, -height / 2.0, 0.0);
-  planeSource->SetPoint1(width / 2.0, -height / 2.0, 0.0);
-  planeSource->SetPoint2(-width / 2.0, height / 2.0, 0.0);
-  planeSource->SetXResolution(resolution);
-  planeSource->SetYResolution(resolution);
-  planeSource->Update();
+    // Create a plane source at z = 0
+    vtkSmartPointer<vtkPlaneSource> planeSource = vtkSmartPointer<vtkPlaneSource>::New();
 
-  // Create cell data.
-  vtkSmartPointer<vtkUnsignedCharArray> cellData = vtkSmartPointer<vtkUnsignedCharArray>::New();
-  cellData->SetNumberOfComponents(4);
-  cellData->SetNumberOfTuples(planeSource->GetOutput()->GetNumberOfCells());
+    double width = FIELD_SIZE;
+    double height = FIELD_SIZE;
+    int resolution = FIELD_SIZE / 10.0;
+    planeSource->SetOrigin(offset[0] - width / 2.0, offset[1] - height / 2.0, 0.0);
+    planeSource->SetPoint1(offset[0] + width / 2.0, offset[1] - height / 2.0, 0.0);
+    planeSource->SetPoint2(offset[0] - width / 2.0, offset[1] + height / 2.0, 0.0);
+    planeSource->SetXResolution(resolution);
+    planeSource->SetYResolution(resolution);
+    planeSource->Update();
 
-  // checkerboard
-  for (int i = 0; i < planeSource->GetOutput()->GetNumberOfCells(); i++) {
-    if (i % 2 ^ (i / 10) % 2) {
-      double rgb[4] = {255.0, 255.0, 255.0, 100.0};
-      cellData->InsertTuple(i, rgb);
-    } else {      
-      double rgb[4] = {0.0, 0.0, 0.0, 100.0};
-      cellData->InsertTuple(i, rgb);
+    // Create cell data.
+    vtkSmartPointer<vtkUnsignedCharArray> cellData = vtkSmartPointer<vtkUnsignedCharArray>::New();
+    cellData->SetNumberOfComponents(4);
+    cellData->SetNumberOfTuples(planeSource->GetOutput()->GetNumberOfCells());
+
+    // checkerboard
+    for (int i = 0; i < planeSource->GetOutput()->GetNumberOfCells(); i++) {
+      if (i % 2 ^ (i / 10) % 2) {
+        double rgb[4] = {255.0, 255.0, 255.0, 100.0};
+        cellData->InsertTuple(i, rgb);
+      } else {      
+        double rgb[4] = {0.0, 0.0, 0.0, 100.0};
+        cellData->InsertTuple(i, rgb);
+      }
     }
+    planeSource->GetOutput()->GetCellData()->SetScalars(cellData);
+    planeData->AddInputData(planeSource->GetOutput());
   }
-  planeSource->GetOutput()->GetCellData()->SetScalars(cellData);
 
   // Enable anti-aliasing (multi-sampling)
   renderWindow->SetMultiSamples(4); // Use 4x MSAA
@@ -293,11 +351,39 @@ void Renderer::RenderInBackground(vtkSmartPointer<vtkRenderWindow> renderWindow)
   renderWindowInteractor->Start();
 }
 
-void Renderer::update(std::vector<Eigen::Vector3d> path, std::vector<Eigen::Vector3d> actual) {
-  std::lock_guard<std::mutex> lock(dataMutex);
-  this->path = createPointSet(path);
-  this->actual = createPointSet(actual);
-  this->segmentGap = createSegmentSet(actual, path);
+std::vector<Eigen::Vector3d> Renderer::pathToVector(std::vector<Path> path) {
+  std::vector<Eigen::Vector3d> points;
+  for (const auto& p : path) {
+    points.push_back(p.start);
+  }
+  return points;
+}
+
+void Renderer::update() {
+  std::lock_guard<std::recursive_mutex> lock(dataMutex);
+  this->paths = vtkSmartPointer<vtkAppendPolyData>::New();
+  this->actuals = vtkSmartPointer<vtkAppendPolyData>::New();
+  this->segmentGaps = vtkSmartPointer<vtkAppendPolyData>::New();
+
+  for (int i = 0; i < actualList.size(); i++) {
+    Eigen::Vector3d offset = renderingOffset(i);
+
+    // paths
+    std::vector<Eigen::Vector3d> p = pathToVector(pathList[i]);
+    this->paths->AddInputData(createPointSet(offset, p));
+    this->paths->Update();
+
+    // actuals
+    std::vector<Eigen::Vector3d> a = pathToVector(actualList[i]);
+    this->actuals->AddInputData(createPointSet(offset, a));
+    this->actuals->Update();
+
+    // segment gaps
+    this->segmentGaps->AddInputData(createSegmentSet(offset, a, p));
+    this->segmentGaps->Update();
+  }
+  actualList.clear();
+  pathList.clear();
 
   newDataAvailable = true;
 }
@@ -308,12 +394,9 @@ void Renderer::start() {
 
   std::thread renderThread([this, renderWindow]() { RenderInBackground(renderWindow); });
   renderThread.detach(); // Detach the thread to run independently
-
-  // TODO
-  // renderThread.join();
 }
 
 bool Renderer::isRunning() {
-  std::lock_guard<std::mutex> lock(dataMutex);
+  std::lock_guard<std::recursive_mutex> lock(dataMutex);
   return !exitFlag;
 }

@@ -13,6 +13,6 @@ class Path {
         void toString(char* output);
 };
 
-std::vector<Path> generateSmoothPath(int numPoints, double radius);
+std::vector<std::vector<Path>> generateSmoothPaths(int numPaths, int numPoints, double radius);
 
 #endif
