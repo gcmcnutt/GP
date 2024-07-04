@@ -1,4 +1,3 @@
-- slight memory leak on iterations -- find out where
 - figure out how to have directional icon (little triange) on the path
 - random launch points and orientations
 - random start point of path and update the dynamic goal
@@ -13,6 +12,5 @@
 - need to walk the path at a velocity -- so maybe another representation of the path
 - turn white segment markers into arrows
 - llm fitness function evolution
-- is a mem leak on each generation -- this is steady state, maybe we have to delete a population?
 - try to simplify the eval tree by passing a class reference instead of N args
 - troubleshoot the missing checkerboards

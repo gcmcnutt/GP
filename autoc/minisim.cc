@@ -126,15 +126,20 @@ void PrintPolyDataInfo(vtkPolyData* polyData)
     idList->Delete();
 }
 
+// Function to lay out the squares
+// given i, and NUM_PATHS_PER_GEN, compute the offsets for this particular square
 Eigen::Vector3d Renderer::renderingOffset(int i) {
-  double x = 0;
-  double y = 0;
-  double z = 0;
+  // Calculate the dimension of the larger square
+  int sideLength = std::ceil(std::sqrt(NUM_PATHS_PER_GEN));
+  
+  int row = i / sideLength;
+  int col = i % sideLength;
 
   // for now put them in a line
-  double xOffset = i * (FIELD_SIZE + FIELD_GAP);
+  double xOffset = col * (FIELD_SIZE + FIELD_GAP);
+  double yOffset = row * (FIELD_SIZE + FIELD_GAP);
 
-  return Eigen::Vector3d(x + xOffset, y, z);
+  return Eigen::Vector3d(xOffset, yOffset, 0.0);
 }
 
 // VTK timer event callback
