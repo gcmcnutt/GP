@@ -138,7 +138,7 @@ public:
   void evalTask(int gpIndex);
 
   Aircraft aircraft = Aircraft(0, Eigen::Quaterniond::Identity(), Eigen::Vector3d(0, 0, 0), 0, 0, 0);
-  unsigned long pathIndex = 0; // current entry on path
+  long pathIndex = 0; // current entry on path
 };
 
 // Create a Boost.Asio io_context
@@ -198,9 +198,10 @@ int getIndex(std::vector<Path> &path, MyGP &gp, double arg) {
     return gp.pathIndex;
   }
 
-  int idx = min(max((int) arg, -1), 5) + gp.pathIndex;
-
-  return idx < path.size()-1 ? idx : path.size()-1;
+  // between now and -10 steps to check, can't go lower than the beginning index
+  // TODO this checks path next, not the actual simulation steps...
+  int idx = max(min(max((long) arg, -10L), 0L) + gp.pathIndex, 0L);
+  return idx;
 }
 
 // This function evaluates the fitness of a genetic tree.  We have the
@@ -370,20 +371,20 @@ void MyGP::evalTask(int gpIndex)
     while (duration < SIM_TOTAL_TIME && pathIndex < path.size() && !hasCrashed) {
 
       // walk path looking for next item around TIME_STEP seconds later
-      double minDistance = path.at(pathIndex).distanceFromStart + (SIM_TIME_STEP * SIM_INITIAL_VELOCITY);
+      double minDistance = path.at(pathIndex).distanceFromStart + (SIM_TIME_STEP * aircraft.dRelVel);
       int newPathIndex = pathIndex;
       while (newPathIndex < path.size() && (path.at(newPathIndex).distanceFromStart < minDistance)) {
         newPathIndex++;
       }
       // are we off the end?
-      if (newPathIndex >= path.size()) {
+      if (newPathIndex >= path.size()-1) {
         break;
       }
 
       // ok, how far is this point from the last point?
       double distance = path.at(newPathIndex).distanceFromStart - path.at(pathIndex).distanceFromStart;
       // so this is the real dT
-      double dT = distance / SIM_INITIAL_VELOCITY;
+      double dT = distance / aircraft.dRelVel;
 
       // advance the simulator
       duration += dT;
@@ -396,20 +397,18 @@ void MyGP::evalTask(int gpIndex)
       aircraft.advanceState(dT);
 
       // how did we do?
-      // compute the delta vector from the aircraft vector to the goal vector based on
-      // alignment (vector direction diff to velocity vector) and distance
+      // difference between target direction and relative position of aircraft and target
 
-      // Aircraft's current x-axis normalized velocity vector in world frame
-      Eigen::Vector3d aircraft_velocity(1, 0, 0); // Assuming unit vector along the x-axis
-      aircraft_velocity = aircraft.aircraft_orientation * aircraft_velocity;
-      Eigen::Vector3d aircraft_velocity_normalized = aircraft_velocity.normalized();
+      // Aircraft's position to target
+      Eigen::Vector3d offset = path.at(pathIndex).start - aircraft.position;
+      offset.normalize();
 
       // Target's direction normalized vector (in world frame)
-      Eigen::Vector3d target_direction(path.at(pathIndex).start - path.at(pathIndex-1).start);
+      Eigen::Vector3d target_direction(path.at(pathIndex+1).start - path.at(pathIndex).start);
       target_direction.normalize();
 
       // Compute the dot product of the two normalized vectors
-      double dot_product = target_direction.dot(aircraft_velocity_normalized);
+      double dot_product = target_direction.dot(offset);
 
       // Clamp the dot product to avoid numerical issues with acos
       dot_product = std::clamp(dot_product, -1.0, 1.0);
@@ -421,7 +420,7 @@ void MyGP::evalTask(int gpIndex)
       // Compute the fitness value (distance * some power function) + (angle penalty * some power function)
       double anglePenalty = pow(SIM_ANGLE_SCALE_FACTOR * fabs(angle_rad), SIM_ANGLE_PENALTY_FACTOR);
       double distancePenalty = pow(distanceFromGoal, SIM_DISTANCE_PENALTY_FACTOR);
-      double fitness = distancePenalty + anglePenalty;
+      double fitness = distancePenalty * anglePenalty;
 
       // add in distance component
       if (!isnan(fitness)) {
