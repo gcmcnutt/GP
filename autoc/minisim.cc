@@ -29,7 +29,7 @@ double Aircraft::setPitchCommand(double pitchCommand) {
 }
 
 double Aircraft::getPitchCommand() {
-  return pitchCommand;
+  return std::clamp(pitchCommand, -1.0, 1.0);
 }
 
 double Aircraft::setRollCommand(double rollCommand) {
@@ -38,7 +38,7 @@ double Aircraft::setRollCommand(double rollCommand) {
 }
 
 double Aircraft::getRollCommand() {
-  return rollCommand;
+  return std::clamp(rollCommand, -1.0, 1.0);
 }
 
 double Aircraft::setThrottleCommand(double throttleCommand) {
@@ -47,21 +47,18 @@ double Aircraft::setThrottleCommand(double throttleCommand) {
 }
 
 double Aircraft::getThrottleCommand() {
-  return throttleCommand;
+  return std::clamp(throttleCommand, -1.0, +1.0);
 }
 
 void Aircraft::advanceState(double dt) {
   // get current roll state, compute left/right force (positive roll is right)
-  double rollCommand = std::clamp(getRollCommand(), -1.0, 1.0);
-  double delta_roll = remainder(rollCommand * dt * MAX_ROLL_RATE_RADSEC, M_PI);
+  double delta_roll = remainder(getRollCommand() * dt * MAX_ROLL_RATE_RADSEC, M_PI);
 
   // get current pitch state, compute up/down force (positive pitch is up)
-  double pitchCommand = std::clamp(getPitchCommand(), -1.0, 1.0);
-  double delta_pitch = remainder(pitchCommand * dt * MAX_PITCH_RATE_RADSEC, M_PI);
+  double delta_pitch = remainder(getPitchCommand() * dt * MAX_PITCH_RATE_RADSEC, M_PI);
 
   // adjust velocity as a function of throttle (-1:1)
-  double throttle = std::clamp(getThrottleCommand(), -1.0, +1.0);
-  dRelVel = SIM_INITIAL_VELOCITY + (throttle * SIM_THROTTLE_SCALE);
+  dRelVel = SIM_INITIAL_VELOCITY + (getThrottleCommand() * SIM_THROTTLE_SCALE);
 
   // Convert pitch and roll updates to quaternions (in the body frame)
   Eigen::Quaterniond delta_pitch_quat(Eigen::AngleAxisd(delta_pitch, Eigen::Vector3d::UnitY()));

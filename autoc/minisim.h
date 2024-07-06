@@ -32,7 +32,7 @@
 #include <vtkLine.h>
 #include <vtkAppendPolyData.h>
 
-#define NUM_PATHS_PER_GEN 64
+#define NUM_PATHS_PER_GEN 1
 #define NUM_SEGMENTS_PER_PATH 18
 #define FIELD_SIZE 100.0
 #define FIELD_GAP 10.0
@@ -53,10 +53,6 @@
 #define SIM_TOTAL_TIME 75.0
 #define SIM_TIME_STEP 0.2
 
-#define SIM_CRASH_FITNESS_PENALTY_FACTOR 2.0
-#define SIM_DISTANCE_PENALTY_FACTOR 2.0
-#define SIM_ANGLE_PENALTY_FACTOR 1.5
-#define SIM_ANGLE_SCALE_FACTOR (3.0 / M_PI)
 
 class Aircraft {
   public:

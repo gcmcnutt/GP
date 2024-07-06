@@ -331,8 +331,7 @@ void MyGP::evaluate()
 // fitness.
 void MyGP::evalTask(int gpIndex)
 {
-
-  double evalFitness = 0;
+  std::vector<double> fitnesses;
 
   for (auto &path : renderer.generationPaths) {    
     double localFitness = 0;
@@ -341,7 +340,7 @@ void MyGP::evalTask(int gpIndex)
 
     // deal with pre.path on the initial eval..
     if (path.size() == 0) {
-      evalFitness = 1000001;
+      fitnesses.push_back(1000001);
       continue;
     }
     // north (+x), 5m/s at 10m
@@ -357,10 +356,6 @@ void MyGP::evalTask(int gpIndex)
     aircraft.setRollCommand(0.0);
     aircraft.setThrottleCommand(SIM_INITIAL_THROTTLE);
     
-    // char output[200];
-    // aircraft.toString(output);
-    // cout << output << endl;
-
     // iterate the simulator
     double duration = 0.0; // how long have we been running
     pathIndex = 0; // where are we on the path?
@@ -368,6 +363,14 @@ void MyGP::evalTask(int gpIndex)
 
     // as long as we are within the time limit and have not reached the end of the path
     bool hasCrashed = false; 
+    double distance_error_sum = 0;
+    double velocity_align_sum = 0;
+    double control_smoothness_sum = 0;
+
+    double roll_prev = aircraft.getRollCommand();
+    double pitch_prev = aircraft.getPitchCommand();
+    double throttle_prev = aircraft.getThrottleCommand();
+    
     while (duration < SIM_TOTAL_TIME && pathIndex < path.size() && !hasCrashed) {
 
       // walk path looking for next item around TIME_STEP seconds later
@@ -396,53 +399,42 @@ void MyGP::evalTask(int gpIndex)
       // and advances the aircract
       aircraft.advanceState(dT);
 
-      // how did we do?
-      // difference between target direction and relative position of aircraft and target
-
-      // Aircraft's position to target
-      Eigen::Vector3d offset = path.at(pathIndex).start - aircraft.position;
-      offset.normalize();
+      // ---------------------- how did we do?
+      
+      // Compute the distance between the aircraft and the goal
+      double distanceFromGoal = (path.at(pathIndex).start - aircraft.position).norm();
 
       // Target's direction normalized vector (in world frame)
       Eigen::Vector3d target_direction(path.at(pathIndex+1).start - path.at(pathIndex).start);
       target_direction.normalize();
 
       // Compute the dot product of the two normalized vectors
-      double dot_product = target_direction.dot(offset);
+      double dot_product = target_direction.dot(aircraft_orientation * Eigen::Vector3d(1, 0, 0));
 
       // Clamp the dot product to avoid numerical issues with acos
       dot_product = std::clamp(dot_product, -1.0, 1.0);
       double angle_rad = std::acos(dot_product);
 
-      // Compute the distance between the aircraft and the goal
-      double distanceFromGoal = (path.at(pathIndex).start - aircraft.position).norm();
+      // control smoothness -- internal vector distance
+      double smoothness = pow(std::clamp(abs(roll_prev - aircraft.getRollCommand()), 0.0, 2.0), 2.0);
+      smoothness += pow(std::clamp(abs(pitch_prev - aircraft.getPitchCommand()), 0.0, 2.0), 2.0);
+      smoothness += pow(std::clamp(abs(throttle_prev - aircraft.getThrottleCommand()), 0.0, 2.0), 2.0);
+      smoothness = sqrt(smoothness);
 
-      // Compute the fitness value (distance * some power function) + (angle penalty * some power function)
-      double anglePenalty = pow(SIM_ANGLE_SCALE_FACTOR * fabs(angle_rad), SIM_ANGLE_PENALTY_FACTOR);
-      double distancePenalty = pow(distanceFromGoal, SIM_DISTANCE_PENALTY_FACTOR);
-      double fitness = distancePenalty * anglePenalty;
-
-      // add in distance component
-      if (!isnan(fitness)) {
-        localFitness += fitness;
-      } else {
-        localFitness += 1000000;
-      }
+      // redy for next cycle
+      roll_prev = aircraft.getRollCommand();
+      pitch_prev = aircraft.getPitchCommand();
+      throttle_prev = aircraft.getThrottleCommand();
 
       // but have we crashed outside the sphere?
       double distanceFromOrigin = (aircraft.position - Eigen::Vector3d(0, 0, SIM_INITIAL_ALTITUDE)).norm();
       if (aircraft.position[2] > SIM_MIN_ELEVATION || distanceFromOrigin > SIM_PATH_RADIUS_LIMIT) {
-        // ok we are outside the bounds -- penalize at whatever rate of error we had so far
-        double timeRemaining = max(0.0, SIM_TOTAL_TIME - duration);
-        double preCrashFitness = localFitness / duration;
-        double projectedFitness = preCrashFitness * timeRemaining;
-        localFitness += pow(projectedFitness, SIM_CRASH_FITNESS_PENALTY_FACTOR);
         hasCrashed = true;
       }
 
       if (printEval) {
         if (printHeader) {
-          fout << "    Time Idx       dT  totDist   pathX    pathY    pathZ        X        Y        Z       dW       dX       dY       dZ   relVel       dG     roll    pitch    power  fitness   angleP    distP\n";
+          fout << "    Time Idx       dT  totDist   pathX    pathY    pathZ        X        Y        Z       dW       dX       dY       dZ   relVel       dG     roll    pitch    power    distP   angleP controlP\n";
           printHeader = false;
         }
 
@@ -465,9 +457,9 @@ void MyGP::evalTask(int gpIndex)
           aircraft.getRollCommand(),
           aircraft.getPitchCommand(),
           aircraft.getThrottleCommand(),
-          localFitness,
-          anglePenalty,
-          distancePenalty
+          distanceFromGoal,
+          angle_rad,
+          smoothness
           );
           fout << outbuf;
 
@@ -475,6 +467,20 @@ void MyGP::evalTask(int gpIndex)
         planPath.push_back(path.at(pathIndex).start); // XXX push the full path
         actualPath.push_back(aircraft.position);
       }
+
+      distance_error_sum += distanceFromGoal;
+      velocity_align_sum += angle_rad;
+      control_smoothness_sum += smoothness;
+    }
+
+    // tally up the fitness
+    double fractionTravelled = path.at(pathIndex).distanceFromStart / path.at(path.size()-1).distanceFromStart;
+    double normalized_distance_error = distance_error_sum / SIM_PATH_BOUNDS / fractionTravelled;
+    double normalized_velocity_align = velocity_align_sum / M_PI / fractionTravelled;
+    double normalized_control_smoothness = control_smoothness_sum/ 6.0 / fractionTravelled;
+    localFitness = normalized_distance_error + normalized_velocity_align + normalized_control_smoothness;
+    if (hasCrashed) {
+      localFitness += 1000; // TODO
     }
           
     if (printEval) {
@@ -495,14 +501,16 @@ void MyGP::evalTask(int gpIndex)
       actualPath.clear();
     }
 
-    evalFitness += localFitness;
+    fitnesses.push_back(localFitness);
   }
+
+  // median value is the fitness for this bunch
+  std::sort(fitnesses.begin(), fitnesses.end());
+  stdFitness = fitnesses.at(fitnesses.size() / 2);
 
   if (printEval) {
     renderer.update();
   }
-
-  stdFitness = evalFitness;
 }
 
 
