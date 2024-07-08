@@ -9,6 +9,7 @@ class Path {
     public:
         Eigen::Vector3d start;
         double distanceFromStart;
+        double radiansFromStart;
 
         void toString(char* output);
 };

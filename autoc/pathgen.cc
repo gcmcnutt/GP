@@ -35,9 +35,8 @@ std::vector<Path> generateSmoothPath(int numPoints, double radius) {
     // Initial control points in forward direction
     Eigen::Vector3d initialPoint = {0, 0, SIM_INITIAL_ALTITUDE};
     controlPoints.push_back(initialPoint);
-    controlPoints.push_back(initialPoint); // XXX seems first point gap isn't interpolated
 
-#define PATHGEN_FIXED_PATH 1
+// #define PATHGEN_FIXED_PATH 1
 #ifdef PATHGEN_FIXED_PATH
     // Sin
     double x, y, z;
@@ -61,19 +60,53 @@ std::vector<Path> generateSmoothPath(int numPoints, double radius) {
 #endif
 
     // Ensure the path is continuous by looping through control points
-    double distance = 0;
-    Eigen::Vector3d lastPoint = controlPoints[0];
-    path.push_back({lastPoint, distance});
+    double odometer = 0;
+    double turnmeter = 0;
+    Eigen::Vector3d lastPoint;
+    Eigen::Vector3d lastDirection;
+    bool first = true;
+
     for (size_t i = 1; i < controlPoints.size() - 3; ++i) {
         for (double t = 0; t <= 1; t += 0.05) {
             Eigen::Vector3d interpolatedPoint = cubicInterpolate(controlPoints[i - 1], controlPoints[i], controlPoints[i + 1], controlPoints[i + 2], t);
-            double newDistance = std::sqrt(std::pow(interpolatedPoint[0] - lastPoint[0], 2) + std::pow(interpolatedPoint[1] - lastPoint[1], 2) + std::pow(interpolatedPoint[2] - lastPoint[2], 2));
-            Path pathSegment = {interpolatedPoint, distance};
-            path.push_back(pathSegment);
+            Eigen::Vector3d newDirection;
+
+            if (!first) {
+                // Compute the new distance
+                double newDistance = (interpolatedPoint - lastPoint).norm();
+
+                // Compute new new direction
+                newDirection = (interpolatedPoint - lastPoint).normalized();
+
+                // difference to prior direction
+                double dVector = lastDirection.dot(newDirection);
+                double dAngle = std::acos(std::clamp(dVector / (lastDirection.norm() * newDirection.norm()), -1.0, 1.0));
+
+                // add next segment            
+                Path pathSegment = {interpolatedPoint, odometer, turnmeter};
+                path.push_back(pathSegment);
+
+                // char output[200];
+                // pathSegment.toString(output);
+                // cout << output << endl;
+                
+                odometer += newDistance;
+                turnmeter += dAngle;
+            } else {
+                newDirection = {1.0, 0.0, 0.0};
+                first = false;
+            }
+
             lastPoint = interpolatedPoint;
-            distance += newDistance;
+            lastDirection = newDirection;
+
+            // stop around what should be 75 seconds of data
+            if (odometer > SIM_TOTAL_TIME * SIM_INITIAL_VELOCITY) {
+                goto exitLoop;
+            }
         }
     }
+exitLoop:
 
     controlPoints.clear();
 
@@ -92,6 +125,6 @@ std::vector<std::vector<Path>> generateSmoothPaths(int numPaths, int numPoints, 
 }
 
 void Path::toString(char* output) {
-    sprintf(output, "Path: (%f, %f, %f), Distance: %f", start[0], start[1], start[2], distanceFromStart);
+    sprintf(output, "Path: (%f, %f, %f), Odometer: %f, Turnmeter: %f", start[0], start[1], start[2], distanceFromStart, radiansFromStart);
 }
 

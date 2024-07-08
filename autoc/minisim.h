@@ -32,7 +32,6 @@
 #include <vtkLine.h>
 #include <vtkAppendPolyData.h>
 
-#define NUM_PATHS_PER_GEN 1
 #define NUM_SEGMENTS_PER_PATH 18
 #define FIELD_SIZE 100.0
 #define FIELD_GAP 10.0
@@ -53,6 +52,16 @@
 #define SIM_TOTAL_TIME 75.0
 #define SIM_TIME_STEP 0.2
 
+class ExtraConfig {
+  public:
+    int simNumPathsPerGen = 1;
+    
+    // // Custom implementation of the << operator for the extraCfg type
+    // std::ostream& operator << (std::ostream& os) {
+    //   os << "simNumPathsPerGen: " + simNumPathsPerGen;
+    //   return os;
+    // }
+};
 
 class Aircraft {
   public:
@@ -91,6 +100,8 @@ class Aircraft {
 
 class Renderer : public vtkCommand {
   public:
+    Renderer(ExtraConfig &extraCfg) : extraCfg(extraCfg) {};
+
     void update();
     void start();
     bool isRunning();
@@ -105,6 +116,8 @@ class Renderer : public vtkCommand {
     // intermediate paths and results
     std::vector<std::vector<Path>> pathList;
     std::vector<std::vector<Path>> actualList;
+
+    ExtraConfig &extraCfg;
 
   private:
     

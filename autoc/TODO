@@ -12,6 +12,4 @@
 - turn white segment markers into arrows
 - llm fitness function evolution
 - try to simplify the eval tree by passing a class reference instead of N args
-- many parameters 'tuned' in the system should now be in autoc.ini
-- try adding fitness progress as #radians gone through vs the path -- sum all step cross products -- use this in addition to the control stability
 

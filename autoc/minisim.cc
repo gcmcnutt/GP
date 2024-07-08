@@ -127,7 +127,7 @@ void PrintPolyDataInfo(vtkPolyData* polyData)
 // given i, and NUM_PATHS_PER_GEN, compute the offsets for this particular square
 Eigen::Vector3d Renderer::renderingOffset(int i) {
   // Calculate the dimension of the larger square
-  int sideLength = std::ceil(std::sqrt(NUM_PATHS_PER_GEN));
+  int sideLength = std::ceil(std::sqrt(extraCfg.simNumPathsPerGen));
   
   int row = i / sideLength;
   int col = i % sideLength;
@@ -287,7 +287,7 @@ void Renderer::RenderInBackground(vtkSmartPointer<vtkRenderWindow> renderWindow)
 
   // create the checkerboards
   planeData = vtkSmartPointer<vtkAppendPolyData>::New();
-  for (int j = 0; j < NUM_PATHS_PER_GEN; j++) {
+  for (int j = 0; j < extraCfg.simNumPathsPerGen; j++) {
     Eigen::Vector3d offset = renderingOffset(j);
 
     // Create a plane source at z = 0

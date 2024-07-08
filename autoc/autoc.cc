@@ -28,6 +28,7 @@ using namespace std;
 // variables, just add them below and insert an entry in the
 // configArray.
 GPVariables cfg;
+ExtraConfig extraCfg;
 struct GPConfigVarInformation configArray[]=
 {
   {"PopulationSize", DATAINT, &cfg.PopulationSize},
@@ -46,6 +47,7 @@ struct GPConfigVarInformation configArray[]=
   {"ShrinkMutationProbability", DATADOUBLE, &cfg.ShrinkMutationProbability},
   {"AddBestToNewPopulation", DATAINT, &cfg.AddBestToNewPopulation},
   {"SteadyState", DATAINT, &cfg.SteadyState},
+  {"SimNumPathsPerGeneration", DATAINT, &extraCfg.simNumPathsPerGen},
   {"", DATAINT, NULL}
 };
 
@@ -67,7 +69,7 @@ const int MyPopulationID=GPUserID+2;
 
 std::atomic_bool printEval = false; // verbose (used for rendering best of population)
 std::ofstream fout;
-Renderer renderer;
+Renderer renderer(extraCfg);
 
 class MyGP;
 
@@ -145,6 +147,7 @@ public:
 boost::asio::io_context ioContext;
 std::unique_ptr<boost::asio::thread_pool> threadPool = std::make_unique<boost::asio::thread_pool>(4);
 std::atomic_ulong taskId(0);
+std::atomic_ulong nanDetector(0);
 std::vector<MyGP*> tasks = std::vector<MyGP*>();
 
 class MyPopulation : public GPPopulation
@@ -200,7 +203,9 @@ int getIndex(std::vector<Path> &path, MyGP &gp, double arg) {
 
   // between now and -10 steps to check, can't go lower than the beginning index
   // TODO this checks path next, not the actual simulation steps...
-  int idx = max(min(max((long) arg, -10L), 0L) + gp.pathIndex, 0L);
+  // XXX for now, this allows forecasting the future path
+  int idx = std::clamp((int) arg, -10, 10) + gp.pathIndex;
+  idx = std::clamp(idx, 0, (int) path.size()-1);
   return idx;
 }
 
@@ -362,14 +367,19 @@ void MyGP::evalTask(int gpIndex)
     bool printHeader = true;
 
     // as long as we are within the time limit and have not reached the end of the path
-    bool hasCrashed = false; 
+    bool hasCrashed = false;
+
+    // error accumulators
     double distance_error_sum = 0;
     double velocity_align_sum = 0;
     double control_smoothness_sum = 0;
+    double total_pitch_sum = 0;
 
+    // initial states
     double roll_prev = aircraft.getRollCommand();
     double pitch_prev = aircraft.getPitchCommand();
     double throttle_prev = aircraft.getThrottleCommand();
+    Eigen::Vector3d dirPrev = aircraft_orientation * Eigen::Vector3d(1, 0, 0);
     
     while (duration < SIM_TOTAL_TIME && pathIndex < path.size() && !hasCrashed) {
 
@@ -387,7 +397,7 @@ void MyGP::evalTask(int gpIndex)
       // ok, how far is this point from the last point?
       double distance = path.at(newPathIndex).distanceFromStart - path.at(pathIndex).distanceFromStart;
       // so this is the real dT
-      double dT = distance / aircraft.dRelVel;
+      double dT = distance / SIM_INITIAL_VELOCITY; // assume a constant speed trajectory
 
       // advance the simulator
       duration += dT;
@@ -404,27 +414,28 @@ void MyGP::evalTask(int gpIndex)
       // Compute the distance between the aircraft and the goal
       double distanceFromGoal = (path.at(pathIndex).start - aircraft.position).norm();
 
-      // Target's direction normalized vector (in world frame)
-      Eigen::Vector3d target_direction(path.at(pathIndex+1).start - path.at(pathIndex).start);
-      target_direction.normalize();
-
-      // Compute the dot product of the two normalized vectors
-      double dot_product = target_direction.dot(aircraft_orientation * Eigen::Vector3d(1, 0, 0));
-
-      // Clamp the dot product to avoid numerical issues with acos
-      dot_product = std::clamp(dot_product, -1.0, 1.0);
-      double angle_rad = std::acos(dot_product);
+      // Compute direction from aircraft to target, then compute delta from target's direction
+      Eigen::Vector3d target_direction = (path.at(pathIndex+1).start - path.at(pathIndex).start).normalized();
+      Eigen::Vector3d aircraft_to_target = (path.at(pathIndex).start - aircraft.position).normalized();
+      double dot_product = target_direction.dot(aircraft_to_target);
+      double angle_rad = std::acos(std::clamp(dot_product / (target_direction.norm() * aircraft_to_target.norm()), -1.0, 1.0));
 
       // control smoothness -- internal vector distance
-      double smoothness = pow(std::clamp(abs(roll_prev - aircraft.getRollCommand()), 0.0, 2.0), 2.0);
-      smoothness += pow(std::clamp(abs(pitch_prev - aircraft.getPitchCommand()), 0.0, 2.0), 2.0);
-      smoothness += pow(std::clamp(abs(throttle_prev - aircraft.getThrottleCommand()), 0.0, 2.0), 2.0);
+      double smoothness = pow(roll_prev - aircraft.getRollCommand(), 2.0);
+      smoothness += pow(pitch_prev - aircraft.getPitchCommand(), 2.0);
+      smoothness += pow(throttle_prev - aircraft.getThrottleCommand(), 2.0);
       smoothness = sqrt(smoothness);
 
-      // redy for next cycle
+      // and total pitch changes
+      Eigen::Vector3d aircraft_dir = aircraft.aircraft_orientation * Eigen::Vector3d(1, 0, 0);
+      double dVector = dirPrev.dot(aircraft_dir);
+      double dAngle = std::acos(std::clamp(dVector / (dirPrev.norm() * aircraft_dir.norm()), -1.0, 1.0));
+
+      // ready for next cycle
       roll_prev = aircraft.getRollCommand();
       pitch_prev = aircraft.getPitchCommand();
       throttle_prev = aircraft.getThrottleCommand();
+      dirPrev = aircraft_dir;
 
       // but have we crashed outside the sphere?
       double distanceFromOrigin = (aircraft.position - Eigen::Vector3d(0, 0, SIM_INITIAL_ALTITUDE)).norm();
@@ -434,7 +445,7 @@ void MyGP::evalTask(int gpIndex)
 
       if (printEval) {
         if (printHeader) {
-          fout << "    Time Idx       dT  totDist   pathX    pathY    pathZ        X        Y        Z       dW       dX       dY       dZ   relVel       dG     roll    pitch    power    distP   angleP controlP\n";
+          fout << "    Time Idx       dT  totDist   pathX    pathY    pathZ        X        Y        Z       dW       dX       dY       dZ   relVel     roll    pitch    power    distP   angleP controlP    turnP\n";
           printHeader = false;
         }
 
@@ -453,13 +464,13 @@ void MyGP::evalTask(int gpIndex)
           aircraft.aircraft_orientation.y(),
           aircraft.aircraft_orientation.z(),
           aircraft.dRelVel,
-          distanceFromGoal,
           aircraft.getRollCommand(),
           aircraft.getPitchCommand(),
           aircraft.getThrottleCommand(),
           distanceFromGoal,
           angle_rad,
-          smoothness
+          smoothness,
+          dAngle
           );
           fout << outbuf;
 
@@ -471,14 +482,23 @@ void MyGP::evalTask(int gpIndex)
       distance_error_sum += distanceFromGoal;
       velocity_align_sum += angle_rad;
       control_smoothness_sum += smoothness;
+      total_pitch_sum += dAngle;
     }
 
-    // tally up the fitness
-    double fractionTravelled = path.at(pathIndex).distanceFromStart / path.at(path.size()-1).distanceFromStart;
-    double normalized_distance_error = distance_error_sum / SIM_PATH_BOUNDS / fractionTravelled;
-    double normalized_velocity_align = velocity_align_sum / M_PI / fractionTravelled;
-    double normalized_control_smoothness = control_smoothness_sum/ 6.0 / fractionTravelled;
-    localFitness = normalized_distance_error + normalized_velocity_align + normalized_control_smoothness;
+    // tally up the normlized fitness
+    double fractionCourseCovered = path.at(pathIndex).distanceFromStart / path.at(path.size()-1).distanceFromStart;
+    double normalized_distance_error = (distance_error_sum / SIM_PATH_BOUNDS) / fractionCourseCovered;
+    double normalized_velocity_align = (velocity_align_sum / M_PI) / fractionCourseCovered;
+    double normalized_control_smoothness = (control_smoothness_sum / 3.46) / fractionCourseCovered; // 3.46 is sort of worst case control flips
+    double fractionPitchTravelled = path.at(pathIndex).radiansFromStart / path.at(path.size()-1).radiansFromStart;
+    double normalized_total_pitch = (abs((total_pitch_sum - path.at(pathIndex).radiansFromStart)) / M_PI) / fractionPitchTravelled;
+
+    localFitness = normalized_distance_error + normalized_velocity_align + normalized_control_smoothness + normalized_total_pitch;
+
+    if (isnan(localFitness)) {
+      nanDetector++;
+    }
+
     if (hasCrashed) {
       localFitness += 1000; // TODO
     }
@@ -579,9 +599,11 @@ int main ()
   
   // Read configuration file.
   GPConfiguration config (cout, "autoc.ini", configArray);
+  renderer.extraCfg = extraCfg;
   
   // Print the configuration
   cout << cfg << endl;
+  cout << "SimNumPathsPerGen: " << extraCfg.simNumPathsPerGen << endl;
   
   // Create the adf function/terminal set and print it out.
   GPAdfNodeSet adfNs;
@@ -601,7 +623,7 @@ int main ()
   renderer.start();
   
   // prime the paths?
-  renderer.generationPaths = generateSmoothPaths(NUM_PATHS_PER_GEN, NUM_SEGMENTS_PER_PATH, SIM_PATH_BOUNDS);
+  renderer.generationPaths = generateSmoothPaths(extraCfg.simNumPathsPerGen, NUM_SEGMENTS_PER_PATH, SIM_PATH_BOUNDS);
   
   // Create a population with this configuration
   cout << "Creating initial population ..." << endl;
@@ -618,7 +640,7 @@ int main ()
   for (int gen=1; gen<=cfg.NumberOfGenerations; gen++)
   {
     // For this generation, build a smooth path goal
-    renderer.generationPaths = generateSmoothPaths(NUM_PATHS_PER_GEN, NUM_SEGMENTS_PER_PATH, SIM_PATH_BOUNDS);
+    renderer.generationPaths = generateSmoothPaths(extraCfg.simNumPathsPerGen, NUM_SEGMENTS_PER_PATH, SIM_PATH_BOUNDS);
     
     // Create a new generation from the old one by applying the genetic operators
     if (!cfg.SteadyState)
@@ -639,6 +661,9 @@ int main ()
     }
 
     // Create a report of this generation and how well it is doing
+    if (nanDetector > 0) {
+      cout << "NanDetector count: " << nanDetector << endl;
+    }
     pop->createGenerationReport (0, gen, fout, bout);
 
     // sleep a bit
