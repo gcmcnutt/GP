@@ -36,7 +36,7 @@ std::vector<Path> generateSmoothPath(int numPoints, double radius) {
     Eigen::Vector3d initialPoint = {0, 0, SIM_INITIAL_ALTITUDE};
     controlPoints.push_back(initialPoint);
 
-// #define PATHGEN_FIXED_PATH 1
+#define PATHGEN_FIXED_PATH 1
 #ifdef PATHGEN_FIXED_PATH
     // Sin
     double x, y, z;

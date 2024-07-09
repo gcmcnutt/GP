@@ -371,15 +371,14 @@ void MyGP::evalTask(int gpIndex)
 
     // error accumulators
     double distance_error_sum = 0;
-    double velocity_align_sum = 0;
+    double angle_error_sum = 0;
     double control_smoothness_sum = 0;
-    double total_pitch_sum = 0;
+    int simulation_steps = 0;
 
     // initial states
     double roll_prev = aircraft.getRollCommand();
     double pitch_prev = aircraft.getPitchCommand();
     double throttle_prev = aircraft.getThrottleCommand();
-    Eigen::Vector3d dirPrev = aircraft_orientation * Eigen::Vector3d(1, 0, 0);
     
     while (duration < SIM_TOTAL_TIME && pathIndex < path.size() && !hasCrashed) {
 
@@ -414,9 +413,9 @@ void MyGP::evalTask(int gpIndex)
       // Compute the distance between the aircraft and the goal
       double distanceFromGoal = (path.at(pathIndex).start - aircraft.position).norm();
 
-      // Compute direction from aircraft to target, then compute delta from target's direction
-      Eigen::Vector3d target_direction = (path.at(pathIndex+1).start - path.at(pathIndex).start).normalized();
-      Eigen::Vector3d aircraft_to_target = (path.at(pathIndex).start - aircraft.position).normalized();
+      // Compute vector from target to current aircraft position
+      Eigen::Vector3d target_direction = (path.at(pathIndex+1).start - path.at(pathIndex).start);
+      Eigen::Vector3d aircraft_to_target = (path.at(pathIndex).start - aircraft.position);
       double dot_product = target_direction.dot(aircraft_to_target);
       double angle_rad = std::acos(std::clamp(dot_product / (target_direction.norm() * aircraft_to_target.norm()), -1.0, 1.0));
 
@@ -426,16 +425,10 @@ void MyGP::evalTask(int gpIndex)
       smoothness += pow(throttle_prev - aircraft.getThrottleCommand(), 2.0);
       smoothness = sqrt(smoothness);
 
-      // and total pitch changes
-      Eigen::Vector3d aircraft_dir = aircraft.aircraft_orientation * Eigen::Vector3d(1, 0, 0);
-      double dVector = dirPrev.dot(aircraft_dir);
-      double dAngle = std::acos(std::clamp(dVector / (dirPrev.norm() * aircraft_dir.norm()), -1.0, 1.0));
-
       // ready for next cycle
       roll_prev = aircraft.getRollCommand();
       pitch_prev = aircraft.getPitchCommand();
       throttle_prev = aircraft.getThrottleCommand();
-      dirPrev = aircraft_dir;
 
       // but have we crashed outside the sphere?
       double distanceFromOrigin = (aircraft.position - Eigen::Vector3d(0, 0, SIM_INITIAL_ALTITUDE)).norm();
@@ -445,12 +438,12 @@ void MyGP::evalTask(int gpIndex)
 
       if (printEval) {
         if (printHeader) {
-          fout << "    Time Idx       dT  totDist   pathX    pathY    pathZ        X        Y        Z       dW       dX       dY       dZ   relVel     roll    pitch    power    distP   angleP controlP    turnP\n";
+          fout << "    Time Idx       dT  totDist   pathX    pathY    pathZ        X        Y        Z       dW       dX       dY       dZ   relVel     roll    pitch    power    distP   angleP controlP\n";
           printHeader = false;
         }
 
         char outbuf[1000]; // XXX use c++20
-        sprintf(outbuf, "% 8.2f %3ld % 8.2f % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f\n", 
+        sprintf(outbuf, "% 8.2f %3ld % 8.2f % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f\n", 
           duration, pathIndex, dT, 
           path.at(pathIndex).distanceFromStart,
           path.at(pathIndex).start[0],
@@ -469,9 +462,8 @@ void MyGP::evalTask(int gpIndex)
           aircraft.getThrottleCommand(),
           distanceFromGoal,
           angle_rad,
-          smoothness,
-          dAngle
-          );
+          smoothness
+        );
           fout << outbuf;
 
         // now update points for Renderer
@@ -480,20 +472,18 @@ void MyGP::evalTask(int gpIndex)
       }
 
       distance_error_sum += distanceFromGoal;
-      velocity_align_sum += angle_rad;
+      angle_error_sum += angle_rad;
       control_smoothness_sum += smoothness;
-      total_pitch_sum += dAngle;
+      simulation_steps++;
+
     }
 
     // tally up the normlized fitness
-    double fractionCourseCovered = path.at(pathIndex).distanceFromStart / path.at(path.size()-1).distanceFromStart;
-    double normalized_distance_error = (distance_error_sum / SIM_PATH_BOUNDS) / fractionCourseCovered;
-    double normalized_velocity_align = (velocity_align_sum / M_PI) / fractionCourseCovered;
-    double normalized_control_smoothness = (control_smoothness_sum / 3.46) / fractionCourseCovered; // 3.46 is sort of worst case control flips
-    double fractionPitchTravelled = path.at(pathIndex).radiansFromStart / path.at(path.size()-1).radiansFromStart;
-    double normalized_total_pitch = (abs((total_pitch_sum - path.at(pathIndex).radiansFromStart)) / M_PI) / fractionPitchTravelled;
+    double normalized_distance_error = (distance_error_sum / simulation_steps) * FITNESS_DISTANCE_WEIGHT;
+    double normalized_velocity_align = (angle_error_sum / simulation_steps) * FITNESS_ALIGNMENT_WEIGHT;
+    double normalized_control_smoothness = (control_smoothness_sum / simulation_steps) * FITNESS_CONTROL_WEIGHT;
 
-    localFitness = normalized_distance_error + normalized_velocity_align + normalized_control_smoothness + normalized_total_pitch;
+    localFitness = normalized_distance_error + normalized_velocity_align + normalized_control_smoothness;
 
     if (isnan(localFitness)) {
       nanDetector++;
