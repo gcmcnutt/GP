@@ -15,7 +15,7 @@ Eigen::Vector3d randomPointInHalfSphere(double radius) {
 
     double x = r * std::sin(phi) * std::cos(theta);
     double y = r * std::sin(phi) * std::sin(theta);
-    double z = (SIM_MIN_ELEVATION - r) * std::cos(phi);
+    double z = (2 * SIM_MIN_ELEVATION - r) * std::cos(phi);
 
     return Eigen::Vector3d(x, y, z);
 }
@@ -33,10 +33,11 @@ std::vector<Path> generateSmoothPath(int numPoints, double radius) {
     std::vector<Path> path;
 
     // Initial control points in forward direction
-    Eigen::Vector3d initialPoint = {0, 0, SIM_INITIAL_ALTITUDE};
-    controlPoints.push_back(initialPoint);
+    controlPoints.push_back({0, 0, SIM_INITIAL_ALTITUDE});
+    controlPoints.push_back({0, 0, SIM_INITIAL_ALTITUDE});
+    controlPoints.push_back({SIM_INITIAL_VELOCITY, 0, SIM_INITIAL_ALTITUDE});
 
-#define PATHGEN_FIXED_PATH 1
+// #define PATHGEN_FIXED_PATH 1
 #ifdef PATHGEN_FIXED_PATH
     // Sin
     double x, y, z;
@@ -54,7 +55,7 @@ std::vector<Path> generateSmoothPath(int numPoints, double radius) {
     }
 #else
     // Generate random control points
-    for (size_t i = 1; i <= numPoints; ++i) {
+    for (size_t i = 0; i < numPoints; ++i) {
         controlPoints.push_back(randomPointInHalfSphere(radius));
     }
 #endif
