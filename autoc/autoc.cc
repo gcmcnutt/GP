@@ -56,7 +56,7 @@ struct GPConfigVarInformation configArray[]=
 enum Operators {ADD=0, NEG, MUL, INV,
                 IF, EQ, GT, 
                 SIN, COS,
-                GETDPHI, GETDTHETA, GETDS, GETMX, GETMY, GETMZ, GETOX, GETOY, GETOZ, GETOW,
+                GETDPHI, GETDTHETA, GETDS, GETMX, GETMY, GETMZ, GETOX, GETOY, GETOZ, GETOW, GETVEL,
                 PITCH, ROLL, THROTTLE, 
                 PI, ZERO, ONE, TWO, PROGN, _END};
 const int OPERATORS_NR_ITEM=_END;
@@ -249,60 +249,41 @@ double MyGene::evaluate (std::vector<Path> &path, MyGP &run, double arg)
       case GETOY: returnValue = run.aircraft.aircraft_orientation.y(); break;
       case GETOZ: returnValue = run.aircraft.aircraft_orientation.z(); break;
       case GETOW: returnValue = run.aircraft.aircraft_orientation.w(); break;
+      case GETVEL: returnValue = run.aircraft.dRelVel; break;
 
       case GETDPHI: // compute roll goal from current to target
                   {
-                    // Aircraft's initial position and orientation (in world frame)
-                    Eigen::Vector3d aircraft_position = run.aircraft.position;
-
-                    // Target's position (in world frame)
+                    // Calculate the vector from craft to target in world frame
                     int idx = getIndex(path, run, NthMyChild(0)->evaluate (path, run, arg));
-                    Eigen::Vector3d target_position(path.at(idx).start[0], path.at(idx).start[1], path.at(idx).start[2]);
+                    Eigen::Vector3d craftToTarget = path.at(idx).start - run.aircraft.position;
+                    craftToTarget.normalize();
 
-                    // Compute the vector from the aircraft to the target
-                    Eigen::Vector3d target_vector = target_position - aircraft_position;
+                    // Transform the craft-to-target vector to body frame
+                    Eigen::Vector3d craftToTargetBody = run.aircraft.aircraft_orientation.inverse() * craftToTarget;
 
-                    // Normalize the target vector to get the direction
-                    Eigen::Vector3d target_direction = target_vector.normalized();
+                    // Project the craft-to-target vector onto the body YZ plane
+                    Eigen::Vector3d projectedVector(0, craftToTargetBody.y(), craftToTargetBody.z());
+                    projectedVector.normalize();
 
-                    // Aircraft's current z-axis vector in world frame
-                    Eigen::Vector3d aircraft_z_axis(0, 0, 1); // Assuming unit vector along the z-axis
-                    aircraft_z_axis = run.aircraft.aircraft_orientation * aircraft_z_axis;
-
-                    // Compute the quaternion representing the rotation from aircraft z-axis to target direction
-                    Eigen::Quaterniond quat_current_to_target = Eigen::Quaterniond::FromTwoVectors(aircraft_z_axis, target_direction);
-
-                    // Extract the roll delta from the quaternion
-                    Eigen::Vector3d euler_angles_delta = quat_current_to_target.toRotationMatrix().eulerAngles(2, 1, 0); // ZYX order: yaw, pitch, roll
-                    double returnValue = euler_angles_delta(2);
+                    // Calculate the angle between the projected vector and the body Z-axis
+                    returnValue = std::atan2(-projectedVector.y(), projectedVector.z());
                     break;
                   }
 
       case GETDTHETA: // compute pitch goal from current to target
                   {
-                    // Aircraft's initial position and orientation (in world frame)
-                    Eigen::Vector3d aircraft_position = run.aircraft.position;
-
-                    // Target's position (in world frame)
+                    // Calculate the vector from craft to target in world frame
                     int idx = getIndex(path, run, NthMyChild(0)->evaluate (path, run, arg));
-                    Eigen::Vector3d target_position(path.at(idx).start[0], path.at(idx).start[1], path.at(idx).start[2]);
+                    Eigen::Vector3d craftToTarget = path.at(idx).start - run.aircraft.position;
+                    craftToTarget.normalize();
 
-                    // Compute the vector from the aircraft to the target
-                    Eigen::Vector3d target_vector = target_position - aircraft_position;
+                    // Transform the craft-to-target vector to body frame
+                    Eigen::Vector3d craftToTargetBody = run.aircraft.aircraft_orientation.inverse() * craftToTarget;
 
-                    // Normalize the target vector to get the direction
-                    Eigen::Vector3d target_direction = target_vector.normalized();
-
-                    // Aircraft's current x-axis velocity vector in world frame
-                    Eigen::Vector3d aircraft_velocity(1, 0, 0); // Assuming unit vector along the x-axis
-                    aircraft_velocity = run.aircraft.aircraft_orientation * aircraft_velocity;
-
-                    // Compute the quaternion representing the rotation from aircraft velocity to target direction
-                    Eigen::Quaterniond quat_current_to_target = Eigen::Quaterniond::FromTwoVectors(aircraft_velocity, target_direction);
-
-                    // Extract the pitch delta from the quaternion
-                    Eigen::Vector3d euler_angles_delta = quat_current_to_target.toRotationMatrix().eulerAngles(2, 1, 0); // ZYX order: yaw, pitch, roll
-                    double returnValue = euler_angles_delta(1);
+                    // Calculate pitch angle
+                    returnValue = std::atan2(-craftToTargetBody.x(), 
+                                                  std::sqrt(craftToTargetBody.y() * craftToTargetBody.y() + 
+                                                            craftToTargetBody.z() * craftToTargetBody.z()));
                     break;
                   }
 
@@ -566,6 +547,7 @@ void createNodeSet (GPAdfNodeSet& adfNs)
   ns.putNode (*new GPNode (GETOY, "GETOY"));
   ns.putNode (*new GPNode (GETOZ, "GETOZ"));
   ns.putNode (*new GPNode (GETOW, "GETOW"));
+  ns.putNode (*new GPNode (GETVEL, "GETVEL"));
 }
 
 
