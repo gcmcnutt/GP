@@ -34,26 +34,28 @@ std::vector<Path> generateSmoothPath(int numPoints, double radius) {
 
     // Initial control points in forward direction
     controlPoints.push_back({0, 0, SIM_INITIAL_ALTITUDE});
-    controlPoints.push_back({0, 0, SIM_INITIAL_ALTITUDE});
-    controlPoints.push_back({SIM_INITIAL_VELOCITY, 0, SIM_INITIAL_ALTITUDE});
 
 // #define PATHGEN_FIXED_PATH 1
 #ifdef PATHGEN_FIXED_PATH
     // Sin
     double x, y, z;
     for (size_t i = 0; i < numPoints; ++i) {
+        x = -(cos(2 * M_PI * i / numPoints) * SIM_PATH_BOUNDS/2 - SIM_PATH_BOUNDS/2);
+        y = sin(2 * M_PI * i / numPoints) * SIM_PATH_BOUNDS/2;
+        controlPoints.push_back(Eigen::Vector3d(x, y, z)); 
+        z = SIM_INITIAL_ALTITUDE - i;
+    }
+    for (size_t i = 0; i < numPoints; ++i) {
         x = sin(2 * M_PI * i / numPoints) * SIM_PATH_BOUNDS/2;
         z = SIM_INITIAL_ALTITUDE - SIM_PATH_BOUNDS/2 + cos(2 * M_PI * i / numPoints) * SIM_PATH_BOUNDS/2;
         y = i;
         controlPoints.push_back(Eigen::Vector3d(x, y, z)); 
     }
-    for (size_t i = 0; i < numPoints; ++i) {
-        x = sin(2 * M_PI * i / numPoints) * SIM_PATH_BOUNDS/2;
-        y = cos(2 * M_PI * i / numPoints) * SIM_PATH_BOUNDS/2;
-        controlPoints.push_back(Eigen::Vector3d(x, y, z)); 
-        z = SIM_INITIAL_ALTITUDE - i;
-    }
+
 #else
+    controlPoints.push_back({0, 0, SIM_INITIAL_ALTITUDE});
+    controlPoints.push_back({SIM_INITIAL_VELOCITY, 0, SIM_INITIAL_ALTITUDE});
+
     // Generate random control points
     for (size_t i = 0; i < numPoints; ++i) {
         controlPoints.push_back(randomPointInHalfSphere(radius));

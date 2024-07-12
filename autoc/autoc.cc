@@ -393,18 +393,24 @@ void MyGP::evalTask(int gpIndex)
       
       // Compute the distance between the aircraft and the goal
       double distanceFromGoal = (path.at(pathIndex).start - aircraft.position).norm();
+      // normalize [100:0]
+      distanceFromGoal = distanceFromGoal * 100.0 / SIM_PATH_RADIUS_LIMIT;
 
       // Compute vector from target to current aircraft position
       Eigen::Vector3d target_direction = (path.at(pathIndex+1).start - path.at(pathIndex).start);
       Eigen::Vector3d aircraft_to_target = (path.at(pathIndex).start - aircraft.position);
       double dot_product = target_direction.dot(aircraft_to_target);
       double angle_rad = std::acos(std::clamp(dot_product / (target_direction.norm() * aircraft_to_target.norm()), -1.0, 1.0));
+      // normalize
+      angle_rad = angle_rad * 100.0 / M_PI;
 
       // control smoothness -- internal vector distance
       double smoothness = pow(roll_prev - aircraft.getRollCommand(), 2.0);
       smoothness += pow(pitch_prev - aircraft.getPitchCommand(), 2.0);
       smoothness += pow(throttle_prev - aircraft.getThrottleCommand(), 2.0);
       smoothness = sqrt(smoothness);
+      // normalize
+      smoothness = smoothness * 100.0 / 3.46;
 
       // ready for next cycle
       roll_prev = aircraft.getRollCommand();
@@ -452,17 +458,19 @@ void MyGP::evalTask(int gpIndex)
         actualPath.push_back(aircraft.position);
       }
 
-      distance_error_sum += distanceFromGoal;
-      angle_error_sum += angle_rad;
-      control_smoothness_sum += smoothness;
+      distance_error_sum += pow(distanceFromGoal, FITNESS_DISTANCE_WEIGHT);
+      angle_error_sum += pow(angle_rad, FITNESS_ALIGNMENT_WEIGHT);
+      control_smoothness_sum += pow(smoothness, FITNESS_CONTROL_WEIGHT);
       simulation_steps++;
 
     }
 
     // tally up the normlized fitness
-    double normalized_distance_error = (distance_error_sum / simulation_steps) * FITNESS_DISTANCE_WEIGHT;
-    double normalized_velocity_align = (angle_error_sum / simulation_steps) * FITNESS_ALIGNMENT_WEIGHT;
-    double normalized_control_smoothness = (control_smoothness_sum / simulation_steps) * FITNESS_CONTROL_WEIGHT;
+    // ok, how far did we travel compared to total distance
+    double fraction_distance_completed = (path.at(pathIndex).distanceFromStart / path.at(path.size()-1).distanceFromStart);
+    double normalized_distance_error = (distance_error_sum / fraction_distance_completed);
+    double normalized_velocity_align = (angle_error_sum / fraction_distance_completed);
+    double normalized_control_smoothness = (control_smoothness_sum / fraction_distance_completed);
 
     localFitness = normalized_distance_error + normalized_velocity_align + normalized_control_smoothness;
 
@@ -471,7 +479,7 @@ void MyGP::evalTask(int gpIndex)
     }
 
     if (hasCrashed) {
-      localFitness += 1000; // TODO
+      localFitness += 1000000;
     }
           
     if (printEval) {
