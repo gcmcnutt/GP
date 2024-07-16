@@ -48,14 +48,15 @@ struct GPConfigVarInformation configArray[]=
   {"AddBestToNewPopulation", DATAINT, &cfg.AddBestToNewPopulation},
   {"SteadyState", DATAINT, &cfg.SteadyState},
   {"SimNumPathsPerGeneration", DATAINT, &extraCfg.simNumPathsPerGen},
+  {"EvalThreads", DATAINT, &extraCfg.evalThreads},
   {"", DATAINT, NULL}
 };
 
 
 // Define function and terminal identifiers
-enum Operators {ADD=0, NEG, MUL, INV,
+enum Operators {ADD=0, SUB, MUL, DIV,
                 IF, EQ, GT, 
-                SIN, COS,
+                SIN, COS, ASIN, ACOS, ATAN, ATAN2,
                 GETDPHI, GETDTHETA, GETDS, GETMX, GETMY, GETMZ, GETOX, GETOY, GETOZ, GETOW, GETVEL,
                 PITCH, ROLL, THROTTLE, 
                 PI, ZERO, ONE, TWO, PROGN, _END};
@@ -145,7 +146,7 @@ public:
 
 // Create a Boost.Asio io_context
 boost::asio::io_context ioContext;
-std::unique_ptr<boost::asio::thread_pool> threadPool = std::make_unique<boost::asio::thread_pool>(4);
+std::unique_ptr<boost::asio::thread_pool> threadPool;
 std::atomic_ulong taskId(0);
 std::atomic_ulong nanDetector(0);
 std::vector<MyGP*> tasks = std::vector<MyGP*>();
@@ -185,7 +186,7 @@ public:
     tasks.clear();
     
     // TODO how to clean this nasty reload of a thread pool to reactivate after join()
-    threadPool  = std::make_unique<boost::asio::thread_pool>(4); // TODO parameter number of cores
+    threadPool  = std::make_unique<boost::asio::thread_pool>(extraCfg.evalThreads);
   }
 
   // Print (not mandatory) 
@@ -201,7 +202,7 @@ int getIndex(std::vector<Path> &path, MyGP &gp, double arg) {
     return gp.pathIndex;
   }
 
-  // between now and -10 steps to check, can't go lower than the beginning index
+  // between ahead +10 and back -10 steps to check, can't go lower than the beginning index
   // TODO this checks path next, not the actual simulation steps...
   // XXX for now, this allows forecasting the future path
   int idx = std::clamp((int) arg, -10, 10) + gp.pathIndex;
@@ -218,11 +219,12 @@ double MyGene::evaluate (std::vector<Path> &path, MyGP &run, double arg)
   switch (node->value ())
     {
       case ADD: returnValue=NthMyChild(0)->evaluate (path, run, arg)+NthMyChild(1)->evaluate (path, run, arg); break;
-      case NEG: returnValue=-NthMyChild(0)->evaluate (path, run, arg); break;
+      case SUB: returnValue=-NthMyChild(0)->evaluate (path, run, arg)-NthMyChild(1)->evaluate (path, run, arg); break;
       case MUL: returnValue=NthMyChild(0)->evaluate (path, run, arg)*NthMyChild(1)->evaluate (path, run, arg); break;
-      case INV: {
-                double div = NthMyChild(0)->evaluate (path, run, arg);
-                returnValue = (div == 0) ? 0 : 1 / div;
+      case DIV: {
+                double dividend = NthMyChild(0)->evaluate (path, run, arg);
+                double divisor = NthMyChild(1)->evaluate (path, run, arg);
+                returnValue = (divisor == 0) ? 0 : dividend / divisor;
                 break;
       }
       case IF: returnValue = NthMyChild(0)->evaluate (path, run, arg) ? NthMyChild(1)->evaluate (path, run, arg) : NthMyChild(2)->evaluate (path, run, arg); break;
@@ -233,6 +235,10 @@ double MyGene::evaluate (std::vector<Path> &path, MyGP &run, double arg)
       case THROTTLE: returnValue = run.aircraft.setThrottleCommand(NthMyChild(0)->evaluate (path, run, arg)); break;
       case SIN: returnValue = sin(NthMyChild(0)->evaluate (path, run, arg)); break;
       case COS: returnValue = cos(NthMyChild(0)->evaluate (path, run, arg)); break;
+      case ASIN: returnValue = asin(std::clamp(NthMyChild(0)->evaluate (path, run, arg), -1.0, 1.0)); break;
+      case ACOS: returnValue = acos(std::clamp(NthMyChild(0)->evaluate (path, run, arg), -1.0, 1.0)); break;
+      case ATAN: returnValue = atan(NthMyChild(0)->evaluate (path, run, arg)); break;
+      case ATAN2: returnValue = atan2(NthMyChild(0)->evaluate (path, run, arg), NthMyChild(1)->evaluate (path, run, arg)); break;
       case PI: returnValue = M_PI; break;
       case ZERO: returnValue = 0; break;
       case ONE: returnValue = 1; break;
@@ -330,11 +336,7 @@ void MyGP::evalTask(int gpIndex)
       continue;
     }
     // north (+x), 5m/s at 10m
-    Eigen::Quaterniond aircraft_orientation =
-        Eigen::AngleAxisd(SIM_INITIAL_HEADING, Eigen::Vector3d::UnitZ()) *
-        Eigen::AngleAxisd(0.0, Eigen::Vector3d::UnitY()) *
-        Eigen::AngleAxisd(0.0, Eigen::Vector3d::UnitX());
-
+    Eigen::Quaterniond aircraft_orientation(Eigen::AngleAxisd(0.0, Eigen::Vector3d::UnitZ()));
     Eigen::Vector3d initialPosition = Eigen::Vector3d(0, 0, SIM_INITIAL_ALTITUDE);
     aircraft = Aircraft(SIM_INITIAL_VELOCITY, aircraft_orientation, initialPosition, 0.0, 0.0, 0.0);
 
@@ -401,7 +403,7 @@ void MyGP::evalTask(int gpIndex)
       Eigen::Vector3d aircraft_to_target = (path.at(pathIndex).start - aircraft.position);
       double dot_product = target_direction.dot(aircraft_to_target);
       double angle_rad = std::acos(std::clamp(dot_product / (target_direction.norm() * aircraft_to_target.norm()), -1.0, 1.0));
-      // normalize
+      // normalize [100:0]
       angle_rad = angle_rad * 100.0 / M_PI;
 
       // control smoothness -- internal vector distance
@@ -409,7 +411,7 @@ void MyGP::evalTask(int gpIndex)
       smoothness += pow(pitch_prev - aircraft.getPitchCommand(), 2.0);
       smoothness += pow(throttle_prev - aircraft.getThrottleCommand(), 2.0);
       smoothness = sqrt(smoothness);
-      // normalize
+      // normalize [100:0]
       smoothness = smoothness * 100.0 / 3.46;
 
       // ready for next cycle
@@ -462,16 +464,12 @@ void MyGP::evalTask(int gpIndex)
       angle_error_sum += pow(angle_rad, FITNESS_ALIGNMENT_WEIGHT);
       control_smoothness_sum += pow(smoothness, FITNESS_CONTROL_WEIGHT);
       simulation_steps++;
-
     }
 
-    // tally up the normlized fitness
-    // ok, how far did we travel compared to total distance
-    double fraction_distance_completed = (path.at(pathIndex).distanceFromStart / path.at(path.size()-1).distanceFromStart);
-    double normalized_distance_error = (distance_error_sum / fraction_distance_completed);
-    double normalized_velocity_align = (angle_error_sum / fraction_distance_completed);
-    double normalized_control_smoothness = (control_smoothness_sum / fraction_distance_completed);
-
+    // tally up the normlized fitness based on steps and progress
+    double normalized_distance_error = (distance_error_sum / simulation_steps);
+    double normalized_velocity_align = (angle_error_sum / simulation_steps);
+    double normalized_control_smoothness = (control_smoothness_sum / simulation_steps);
     localFitness = normalized_distance_error + normalized_velocity_align + normalized_control_smoothness;
 
     if (isnan(localFitness)) {
@@ -479,7 +477,9 @@ void MyGP::evalTask(int gpIndex)
     }
 
     if (hasCrashed) {
-      localFitness += 1000000;
+      double fractional_distance_completed = path.at(pathIndex).distanceFromStart / path.back().distanceFromStart;
+      localFitness /= fractional_distance_completed;
+      localFitness *= SIM_CRASH_PENALTY;
     }
           
     if (printEval) {
@@ -529,9 +529,9 @@ void createNodeSet (GPAdfNodeSet& adfNs)
   // sets.  Terminals take two arguments, functions three (the third
   // parameter is the number of arguments the function has)
   ns.putNode (*new GPNode (ADD, "ADD", 2));
-  ns.putNode (*new GPNode (NEG, "NEG", 1));
+  ns.putNode (*new GPNode (SUB, "SUB", 2));
   ns.putNode (*new GPNode (MUL, "MUL", 2));
-  ns.putNode (*new GPNode (INV, "INV", 1));
+  ns.putNode (*new GPNode (DIV, "DIV", 2));
   ns.putNode (*new GPNode (IF, "IF", 3));
   ns.putNode (*new GPNode (EQ, "EQ", 2));
   ns.putNode (*new GPNode (GT, "GT", 2));
@@ -540,6 +540,10 @@ void createNodeSet (GPAdfNodeSet& adfNs)
   ns.putNode (*new GPNode (THROTTLE, "THROTTLE", 1));
   ns.putNode (*new GPNode (SIN, "SIN", 1));
   ns.putNode (*new GPNode (COS, "COS", 1));
+  ns.putNode (*new GPNode (ASIN, "ASIN", 1));
+  ns.putNode (*new GPNode (ACOS, "ACOS", 1));
+  ns.putNode (*new GPNode (ATAN, "ATAN", 1));
+  ns.putNode (*new GPNode (ATAN2, "ATAN2", 2));
   ns.putNode (*new GPNode (PI, "PI"));
   ns.putNode (*new GPNode (ZERO, "0"));
   ns.putNode (*new GPNode (ONE, "1"));
@@ -580,10 +584,13 @@ int main ()
   // Read configuration file.
   GPConfiguration config (cout, "autoc.ini", configArray);
   renderer.extraCfg = extraCfg;
+
+  threadPool = std::make_unique<boost::asio::thread_pool>(extraCfg.evalThreads);
   
   // Print the configuration
   cout << cfg << endl;
   cout << "SimNumPathsPerGen: " << extraCfg.simNumPathsPerGen << endl;
+  cout << "EvalThreads: " << extraCfg.evalThreads << endl;
   
   // Create the adf function/terminal set and print it out.
   GPAdfNodeSet adfNs;
@@ -620,7 +627,7 @@ int main ()
   for (int gen=1; gen<=cfg.NumberOfGenerations; gen++)
   {
     // For this generation, build a smooth path goal
-    renderer.generationPaths = generateSmoothPaths(extraCfg.simNumPathsPerGen, NUM_SEGMENTS_PER_PATH, SIM_PATH_BOUNDS);
+    // renderer.generationPaths = generateSmoothPaths(extraCfg.simNumPathsPerGen, NUM_SEGMENTS_PER_PATH, SIM_PATH_BOUNDS);
     
     // Create a new generation from the old one by applying the genetic operators
     if (!cfg.SteadyState)
@@ -649,6 +656,10 @@ int main ()
     // sleep a bit
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
   }
+
+  // go ahead and dump out the best of the best
+  ofstream bestGP("best.dat");
+  pop->NthMyGP(pop->bestOfPopulation)->save(bestGP);
 
   // wait for window close
   cout << "Close window to exit." << endl;

@@ -3,3 +3,4 @@ data.*
 *.a
 .vscode
 build
+*.dat

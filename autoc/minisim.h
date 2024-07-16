@@ -32,7 +32,7 @@
 #include <vtkLine.h>
 #include <vtkAppendPolyData.h>
 
-#define FITNESS_DISTANCE_WEIGHT 2.0
+#define FITNESS_DISTANCE_WEIGHT 1.5
 #define FITNESS_ALIGNMENT_WEIGHT 1.3
 #define FITNESS_CONTROL_WEIGHT 1.0
 
@@ -45,10 +45,9 @@
 
 #define SIM_INITIAL_VELOCITY 10.0
 #define SIM_THROTTLE_SCALE 5.0
-
+#define SIM_CRASH_PENALTY 0.8
 #define SIM_INITIAL_ALTITUDE -10.0
-#define SIM_INITIAL_HEADING 0.0
-#define SIM_INITIAL_THROTTLE 0.5
+#define SIM_INITIAL_THROTTLE 0.0
 #define SIM_PATH_BOUNDS 40.0
 #define SIM_PATH_RADIUS_LIMIT 60.0
 #define SIM_MIN_ELEVATION -3.0
@@ -59,6 +58,7 @@
 class ExtraConfig {
   public:
     int simNumPathsPerGen = 1;
+    int evalThreads = 1;
     
     // // Custom implementation of the << operator for the extraCfg type
     // std::ostream& operator << (std::ostream& os) {

@@ -65,8 +65,8 @@ void Aircraft::advanceState(double dt) {
   Eigen::Quaterniond delta_roll_quat(Eigen::AngleAxisd(delta_roll, Eigen::Vector3d::UnitX()));
 
   // Apply the pitch and roll adjustments to the aircraft's orientation
-  aircraft_orientation = delta_pitch_quat * aircraft_orientation;
   aircraft_orientation = delta_roll_quat * aircraft_orientation;
+  aircraft_orientation = delta_pitch_quat * aircraft_orientation;
 
   // Normalize the resulting quaternion
   aircraft_orientation.normalize();
