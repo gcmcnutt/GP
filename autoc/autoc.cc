@@ -56,8 +56,8 @@ struct GPConfigVarInformation configArray[]=
 // Define function and terminal identifiers
 enum Operators {ADD=0, SUB, MUL, DIV,
                 IF, EQ, GT, 
-                SIN, COS, ASIN, ACOS, ATAN, ATAN2,
-                GETDPHI, GETDTHETA, GETDS, GETMX, GETMY, GETMZ, GETOX, GETOY, GETOZ, GETOW, GETVEL,
+                SIN, COS,
+                GETDPHI, GETDTHETA, GETDTARGET, GETDHOME, GETVEL,
                 PITCH, ROLL, THROTTLE, 
                 PI, ZERO, ONE, TWO, PROGN, _END};
 const int OPERATORS_NR_ITEM=_END;
@@ -202,10 +202,10 @@ int getIndex(std::vector<Path> &path, MyGP &gp, double arg) {
     return gp.pathIndex;
   }
 
-  // between ahead +10 and back -10 steps to check, can't go lower than the beginning index
+  // a range of steps to check, can't go lower than the beginning index
   // TODO this checks path next, not the actual simulation steps...
   // XXX for now, this allows forecasting the future path
-  int idx = std::clamp((int) arg, -10, 10) + gp.pathIndex;
+  int idx = std::clamp((int) arg, -5, 5) + gp.pathIndex;
   idx = std::clamp(idx, 0, (int) path.size()-1);
   return idx;
 }
@@ -235,10 +235,6 @@ double MyGene::evaluate (std::vector<Path> &path, MyGP &run, double arg)
       case THROTTLE: returnValue = run.aircraft.setThrottleCommand(NthMyChild(0)->evaluate (path, run, arg)); break;
       case SIN: returnValue = sin(NthMyChild(0)->evaluate (path, run, arg)); break;
       case COS: returnValue = cos(NthMyChild(0)->evaluate (path, run, arg)); break;
-      case ASIN: returnValue = asin(std::clamp(NthMyChild(0)->evaluate (path, run, arg), -1.0, 1.0)); break;
-      case ACOS: returnValue = acos(std::clamp(NthMyChild(0)->evaluate (path, run, arg), -1.0, 1.0)); break;
-      case ATAN: returnValue = atan(NthMyChild(0)->evaluate (path, run, arg)); break;
-      case ATAN2: returnValue = atan2(NthMyChild(0)->evaluate (path, run, arg), NthMyChild(1)->evaluate (path, run, arg)); break;
       case PI: returnValue = M_PI; break;
       case ZERO: returnValue = 0; break;
       case ONE: returnValue = 1; break;
@@ -248,13 +244,6 @@ double MyGene::evaluate (std::vector<Path> &path, MyGP &run, double arg)
                   returnValue = NthMyChild(1)->evaluate (path, run, arg);
                   break;
       }
-      case GETMX: returnValue = run.aircraft.position[0]; break;
-      case GETMY: returnValue = run.aircraft.position[1]; break;
-      case GETMZ: returnValue = run.aircraft.position[2]; break;
-      case GETOX: returnValue = run.aircraft.aircraft_orientation.x(); break;
-      case GETOY: returnValue = run.aircraft.aircraft_orientation.y(); break;
-      case GETOZ: returnValue = run.aircraft.aircraft_orientation.z(); break;
-      case GETOW: returnValue = run.aircraft.aircraft_orientation.w(); break;
       case GETVEL: returnValue = run.aircraft.dRelVel; break;
 
       case GETDPHI: // compute roll goal from current to target
@@ -293,10 +282,16 @@ double MyGene::evaluate (std::vector<Path> &path, MyGP &run, double arg)
                     break;
                   }
 
-      case GETDS: // get distance to the next point
+      case GETDTARGET: // get distance to the next point
                   {
                     int idx = getIndex(path, run, NthMyChild(0)->evaluate (path, run, arg));
                     returnValue = (path.at(idx).start - run.aircraft.position).norm();
+                    break;
+                  }
+
+      case GETDHOME: // get distance to the home point
+                  {
+                    returnValue = (Eigen::Vector3d(0, 0, SIM_INITIAL_ALTITUDE) - run.aircraft.position).norm();
                     break;
                   }
       
@@ -323,16 +318,23 @@ void MyGP::evaluate()
 // fitness.
 void MyGP::evalTask(int gpIndex)
 {
-  std::vector<double> fitnesses;
+  stdFitness = 0;
 
   for (auto &path : renderer.generationPaths) {    
     double localFitness = 0;
     std::vector<Eigen::Vector3d> planPath = std::vector<Eigen::Vector3d>();
     std::vector<Eigen::Vector3d> actualPath = std::vector<Eigen::Vector3d>();
 
+    // double maxX = 0, maxY = 0;
+    // double minX = 0, minY = 0;
+    // double maxZ = SIM_INITIAL_ALTITUDE, minZ = SIM_INITIAL_ALTITUDE;
+    // double minP = 0, maxP = 0;
+    // double minR = 0, maxR = 0;
+    // double minT = SIM_INITIAL_THROTTLE, maxT = SIM_INITIAL_THROTTLE;
+
     // deal with pre.path on the initial eval..
     if (path.size() == 0) {
-      fitnesses.push_back(1000001);
+      stdFitness = 1000001;
       continue;
     }
     // north (+x), 5m/s at 10m
@@ -391,6 +393,20 @@ void MyGP::evalTask(int gpIndex)
       // and advances the aircract
       aircraft.advanceState(dT);
 
+      // tracks the bounds
+      // maxX = std::max(maxX, aircraft.position[0]);
+      // maxY = std::max(maxY, aircraft.position[1]);
+      // maxZ = std::max(maxZ, aircraft.position[2]);
+      // minX = std::min(minX, aircraft.position[0]);
+      // minY = std::min(minY, aircraft.position[1]);
+      // minZ = std::min(minZ, aircraft.position[2]);
+      // minP = std::min(minP, aircraft.getPitchCommand());
+      // maxP = std::max(maxP, aircraft.getPitchCommand());
+      // minR = std::min(minR, aircraft.getRollCommand());
+      // maxR = std::max(maxR, aircraft.getRollCommand());
+      // minT = std::min(minT, aircraft.getThrottleCommand());
+      // maxT = std::max(maxT, aircraft.getThrottleCommand());
+
       // ---------------------- how did we do?
       
       // Compute the distance between the aircraft and the goal
@@ -398,7 +414,7 @@ void MyGP::evalTask(int gpIndex)
       // normalize [100:0]
       distanceFromGoal = distanceFromGoal * 100.0 / SIM_PATH_RADIUS_LIMIT;
 
-      // Compute vector from target to current aircraft position
+      // Compute vector from me to target
       Eigen::Vector3d target_direction = (path.at(pathIndex+1).start - path.at(pathIndex).start);
       Eigen::Vector3d aircraft_to_target = (path.at(pathIndex).start - aircraft.position);
       double dot_product = target_direction.dot(aircraft_to_target);
@@ -477,10 +493,22 @@ void MyGP::evalTask(int gpIndex)
     }
 
     if (hasCrashed) {
-      double fractional_distance_completed = path.at(pathIndex).distanceFromStart / path.back().distanceFromStart;
-      localFitness /= fractional_distance_completed;
-      localFitness *= SIM_CRASH_PENALTY;
+      double fractional_distance_remaining = 1.0 - path.at(pathIndex).distanceFromStart / path.back().distanceFromStart;
+      localFitness += SIM_CRASH_PENALTY * fractional_distance_remaining;
     }
+
+// #define TRACE
+#ifdef TRACE
+    // dump details on this run
+    char outbuf[1000]; // XXX use c++20
+    sprintf(outbuf, ">>>> %p, crsh:%d, dur:% 8.2f, pidx:%4ld, steps:%4d, fit:% 8.2f, len:%4d, depth:%4d, x{%4.2f:%4.2f}, y{%4.2f:%4.2f}, z{%4.2f:%4.2f}, p{%4.2f:%4.2f}, r{%4.2f:%4.2f}, t{%4.2f:%4.2f}\n", 
+          this, hasCrashed, duration, pathIndex, simulation_steps,
+          localFitness, length(), depth(),
+          minX, maxX, minY, maxY, minZ, maxZ,
+          minP, maxP, minR, maxR, minT, maxT);
+    fout << outbuf;
+
+#endif
           
     if (printEval) {
       // now update actual list of lists
@@ -500,12 +528,12 @@ void MyGP::evalTask(int gpIndex)
       actualPath.clear();
     }
 
-    fitnesses.push_back(localFitness);
+    stdFitness += localFitness; 
   }
+  
+  // normalize
+  stdFitness /= renderer.generationPaths.size();
 
-  // median value is the fitness for this bunch
-  std::sort(fitnesses.begin(), fitnesses.end());
-  stdFitness = fitnesses.at(fitnesses.size() / 2);
 
   if (printEval) {
     renderer.update();
@@ -540,10 +568,6 @@ void createNodeSet (GPAdfNodeSet& adfNs)
   ns.putNode (*new GPNode (THROTTLE, "THROTTLE", 1));
   ns.putNode (*new GPNode (SIN, "SIN", 1));
   ns.putNode (*new GPNode (COS, "COS", 1));
-  ns.putNode (*new GPNode (ASIN, "ASIN", 1));
-  ns.putNode (*new GPNode (ACOS, "ACOS", 1));
-  ns.putNode (*new GPNode (ATAN, "ATAN", 1));
-  ns.putNode (*new GPNode (ATAN2, "ATAN2", 2));
   ns.putNode (*new GPNode (PI, "PI"));
   ns.putNode (*new GPNode (ZERO, "0"));
   ns.putNode (*new GPNode (ONE, "1"));
@@ -551,15 +575,9 @@ void createNodeSet (GPAdfNodeSet& adfNs)
   ns.putNode (*new GPNode (PROGN, "PROGN", 2));
   ns.putNode (*new GPNode (GETDPHI, "GETDPHI", 1));
   ns.putNode (*new GPNode (GETDTHETA, "GETDTHETA", 1));
-  ns.putNode (*new GPNode (GETDS, "GETDS", 1));
-  ns.putNode (*new GPNode (GETMX, "GETMX"));
-  ns.putNode (*new GPNode (GETMY, "GETMY"));
-  ns.putNode (*new GPNode (GETMZ, "GETMZ"));
-  ns.putNode (*new GPNode (GETOX, "GETOX"));
-  ns.putNode (*new GPNode (GETOY, "GETOY"));
-  ns.putNode (*new GPNode (GETOZ, "GETOZ"));
-  ns.putNode (*new GPNode (GETOW, "GETOW"));
+  ns.putNode (*new GPNode (GETDTARGET, "GETDTARGET", 1));
   ns.putNode (*new GPNode (GETVEL, "GETVEL"));
+  ns.putNode (*new GPNode (GETDHOME, "GETDHOME"));
 }
 
 
@@ -658,8 +676,8 @@ int main ()
   }
 
   // go ahead and dump out the best of the best
-  ofstream bestGP("best.dat");
-  pop->NthMyGP(pop->bestOfPopulation)->save(bestGP);
+  // ofstream bestGP("best.dat");
+  // pop->NthMyGP(pop->bestOfPopulation)->save(bestGP);
 
   // wait for window close
   cout << "Close window to exit." << endl;

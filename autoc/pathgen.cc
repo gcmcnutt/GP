@@ -15,7 +15,7 @@ Eigen::Vector3d randomPointInHalfSphere(double radius) {
 
     double x = r * std::sin(phi) * std::cos(theta);
     double y = r * std::sin(phi) * std::sin(theta);
-    double z = (2 * SIM_MIN_ELEVATION - r) * std::cos(phi);
+    double z = (3 * SIM_MIN_ELEVATION - r) * std::cos(phi);
 
     return Eigen::Vector3d(x, y, z);
 }
