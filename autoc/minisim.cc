@@ -61,12 +61,12 @@ void Aircraft::advanceState(double dt) {
   dRelVel = SIM_INITIAL_VELOCITY + (getThrottleCommand() * SIM_THROTTLE_SCALE);
 
   // Convert pitch and roll updates to quaternions (in the body frame)
-  Eigen::Quaterniond delta_pitch_quat(Eigen::AngleAxisd(delta_pitch, Eigen::Vector3d::UnitY()));
   Eigen::Quaterniond delta_roll_quat(Eigen::AngleAxisd(delta_roll, Eigen::Vector3d::UnitX()));
+  Eigen::Quaterniond delta_pitch_quat(Eigen::AngleAxisd(delta_pitch, Eigen::Vector3d::UnitY()));
 
-  // Apply the pitch and roll adjustments to the aircraft's orientation
-  aircraft_orientation = delta_roll_quat * aircraft_orientation;
-  aircraft_orientation = delta_pitch_quat * aircraft_orientation;
+  // Apply the roll and pitch adjustments to the aircraft's orientation
+  aircraft_orientation = aircraft_orientation * delta_roll_quat;
+  aircraft_orientation = aircraft_orientation * delta_pitch_quat;
 
   // Normalize the resulting quaternion
   aircraft_orientation.normalize();

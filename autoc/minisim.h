@@ -32,6 +32,8 @@
 #include <vtkLine.h>
 #include <vtkAppendPolyData.h>
 
+// #define TRACE
+
 #define FITNESS_DISTANCE_WEIGHT 1.5
 #define FITNESS_ALIGNMENT_WEIGHT 1.3
 #define FITNESS_CONTROL_WEIGHT 1.0
@@ -41,8 +43,12 @@
 #define FIELD_GAP 10.0
 
 #define MAX_ROLL_RATE_RADSEC (M_PI)
-#define MAX_PITCH_RATE_RADSEC (M_PI  * 0.75)
+#define MAX_PITCH_RATE_RADSEC (M_PI)
 
+// orientation order is yaw, pitch, roll
+#define SIM_INITIAL_PITCH (0)
+#define SIM_INITIAL_ROLL (0)
+#define SIM_INITIAL_YAW (0)
 #define SIM_INITIAL_VELOCITY 10.0
 #define SIM_THROTTLE_SCALE 5.0
 #define SIM_CRASH_PENALTY (100.0 + 100.0 + 100.0)

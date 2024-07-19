@@ -58,7 +58,8 @@ enum Operators {ADD=0, SUB, MUL, DIV,
                 IF, EQ, GT, 
                 SIN, COS,
                 GETDPHI, GETDTHETA, GETDTARGET, GETDHOME, GETVEL,
-                PITCH, ROLL, THROTTLE, 
+                GETPITCH, GETROLL, GETTHROTTLE,
+                SETPITCH, SETROLL, SETTHROTTLE,
                 PI, ZERO, ONE, TWO, PROGN, _END};
 const int OPERATORS_NR_ITEM=_END;
 
@@ -230,9 +231,12 @@ double MyGene::evaluate (std::vector<Path> &path, MyGP &run, double arg)
       case IF: returnValue = NthMyChild(0)->evaluate (path, run, arg) ? NthMyChild(1)->evaluate (path, run, arg) : NthMyChild(2)->evaluate (path, run, arg); break;
       case EQ: returnValue = NthMyChild(0)->evaluate (path, run, arg) == NthMyChild(1)->evaluate (path, run, arg); break;
       case GT: returnValue = NthMyChild(0)->evaluate (path, run, arg) > NthMyChild(1)->evaluate (path, run, arg); break;
-      case PITCH: returnValue = run.aircraft.setPitchCommand(NthMyChild(0)->evaluate (path, run, arg)); break;
-      case ROLL: returnValue = run.aircraft.setRollCommand(NthMyChild(0)->evaluate (path, run, arg)); break;
-      case THROTTLE: returnValue = run.aircraft.setThrottleCommand(NthMyChild(0)->evaluate (path, run, arg)); break;
+      case SETPITCH: returnValue = run.aircraft.setPitchCommand(NthMyChild(0)->evaluate (path, run, arg)); break;
+      case SETROLL: returnValue = run.aircraft.setRollCommand(NthMyChild(0)->evaluate (path, run, arg)); break;
+      case SETTHROTTLE: returnValue = run.aircraft.setThrottleCommand(NthMyChild(0)->evaluate (path, run, arg)); break;
+      case GETPITCH: returnValue = run.aircraft.getPitchCommand(); break;
+      case GETROLL: returnValue = run.aircraft.getRollCommand(); break;
+      case GETTHROTTLE: returnValue = run.aircraft.getThrottleCommand(); break;
       case SIN: returnValue = sin(NthMyChild(0)->evaluate (path, run, arg)); break;
       case COS: returnValue = cos(NthMyChild(0)->evaluate (path, run, arg)); break;
       case PI: returnValue = M_PI; break;
@@ -251,17 +255,15 @@ double MyGene::evaluate (std::vector<Path> &path, MyGP &run, double arg)
                     // Calculate the vector from craft to target in world frame
                     int idx = getIndex(path, run, NthMyChild(0)->evaluate (path, run, arg));
                     Eigen::Vector3d craftToTarget = path.at(idx).start - run.aircraft.position;
-                    craftToTarget.normalize();
 
                     // Transform the craft-to-target vector to body frame
-                    Eigen::Vector3d craftToTargetBody = run.aircraft.aircraft_orientation.inverse() * craftToTarget;
+                    Eigen::Vector3d target_local = run.aircraft.aircraft_orientation.inverse() * craftToTarget;
 
                     // Project the craft-to-target vector onto the body YZ plane
-                    Eigen::Vector3d projectedVector(0, craftToTargetBody.y(), craftToTargetBody.z());
-                    projectedVector.normalize();
+                    Eigen::Vector3d projectedVector(0, target_local.y(), target_local.z());
 
                     // Calculate the angle between the projected vector and the body Z-axis
-                    returnValue = std::atan2(-projectedVector.y(), projectedVector.z());
+                    returnValue = std::atan2(projectedVector.y(), -projectedVector.z());
                     break;
                   }
 
@@ -270,15 +272,12 @@ double MyGene::evaluate (std::vector<Path> &path, MyGP &run, double arg)
                     // Calculate the vector from craft to target in world frame
                     int idx = getIndex(path, run, NthMyChild(0)->evaluate (path, run, arg));
                     Eigen::Vector3d craftToTarget = path.at(idx).start - run.aircraft.position;
-                    craftToTarget.normalize();
 
                     // Transform the craft-to-target vector to body frame
-                    Eigen::Vector3d craftToTargetBody = run.aircraft.aircraft_orientation.inverse() * craftToTarget;
+                    Eigen::Vector3d target_local = run.aircraft.aircraft_orientation.inverse() * craftToTarget;
 
                     // Calculate pitch angle
-                    returnValue = std::atan2(-craftToTargetBody.x(), 
-                                                  std::sqrt(craftToTargetBody.y() * craftToTargetBody.y() + 
-                                                            craftToTargetBody.z() * craftToTargetBody.z()));
+                    returnValue = std::atan2(-target_local.z(), target_local.x());
                     break;
                   }
 
@@ -325,12 +324,14 @@ void MyGP::evalTask(int gpIndex)
     std::vector<Eigen::Vector3d> planPath = std::vector<Eigen::Vector3d>();
     std::vector<Eigen::Vector3d> actualPath = std::vector<Eigen::Vector3d>();
 
-    // double maxX = 0, maxY = 0;
-    // double minX = 0, minY = 0;
-    // double maxZ = SIM_INITIAL_ALTITUDE, minZ = SIM_INITIAL_ALTITUDE;
-    // double minP = 0, maxP = 0;
-    // double minR = 0, maxR = 0;
-    // double minT = SIM_INITIAL_THROTTLE, maxT = SIM_INITIAL_THROTTLE;
+#ifdef TRACE
+    double maxX = 0, maxY = 0;
+    double minX = 0, minY = 0;
+    double maxZ = SIM_INITIAL_ALTITUDE, minZ = SIM_INITIAL_ALTITUDE;
+    double minP = 0, maxP = 0;
+    double minR = 0, maxR = 0;
+    double minT = SIM_INITIAL_THROTTLE, maxT = SIM_INITIAL_THROTTLE;
+#endif
 
     // deal with pre.path on the initial eval..
     if (path.size() == 0) {
@@ -338,7 +339,11 @@ void MyGP::evalTask(int gpIndex)
       continue;
     }
     // north (+x), 5m/s at 10m
-    Eigen::Quaterniond aircraft_orientation(Eigen::AngleAxisd(0.0, Eigen::Vector3d::UnitZ()));
+    Eigen::Quaterniond aircraft_orientation = 
+        Eigen::AngleAxisd(SIM_INITIAL_YAW, Eigen::Vector3d::UnitZ()) *
+        Eigen::AngleAxisd(SIM_INITIAL_PITCH, Eigen::Vector3d::UnitY()) *
+        Eigen::AngleAxisd(SIM_INITIAL_ROLL, Eigen::Vector3d::UnitX());
+
     Eigen::Vector3d initialPosition = Eigen::Vector3d(0, 0, SIM_INITIAL_ALTITUDE);
     aircraft = Aircraft(SIM_INITIAL_VELOCITY, aircraft_orientation, initialPosition, 0.0, 0.0, 0.0);
 
@@ -387,25 +392,60 @@ void MyGP::evalTask(int gpIndex)
       duration += dT;
       pathIndex = newPathIndex;
 
-      // GP determine control input
+      // ESTIMATE: pre-compute the estimated roll, pitch, throttle in prep for the evaluator
+
+      // *** ROLL: Calculate the vector from craft to target in world frame
+      Eigen::Vector3d craftToTarget = path.at(pathIndex).start - aircraft.position;
+
+      // Transform the craft-to-target vector to body frame
+      Eigen::Vector3d target_local = aircraft.aircraft_orientation.inverse() * craftToTarget;
+
+      // Project the craft-to-target vector onto the body YZ plane
+      Eigen::Vector3d projectedVector(0, target_local.y(), target_local.z());
+
+      // Calculate the angle between the projected vector and the body Z-axis 
+      double rollEstimate = std::atan2(projectedVector.y(), -projectedVector.z());
+      aircraft.setRollCommand(rollEstimate / M_PI);
+
+      // *** PITCH: Calculate the vector from craft to target in world frame if it did rotate
+      Eigen::Quaterniond rollRotation(Eigen::AngleAxisd(rollEstimate, Eigen::Vector3d::UnitX()));
+      Eigen::Quaterniond virtualOrientation = aircraft.aircraft_orientation * rollRotation;
+
+      // Transform target vector to new virtual orientation
+      Eigen::Vector3d newLocalTargetVector = virtualOrientation.inverse() * craftToTarget;
+
+      // Calculate pitch angle
+      double pitchEstimate = std::atan2(-newLocalTargetVector.z(), newLocalTargetVector.x());
+      aircraft.setPitchCommand(pitchEstimate / M_PI);
+
+      // *** Throttle estimate
+      {
+        double distance = (path.at(pathIndex).start - aircraft.position).norm();
+        double throttleEstimate = std::clamp((distance - 10) / aircraft.dRelVel, -1.0, 1.0);
+        aircraft.setThrottleCommand(throttleEstimate);
+      }
+
+      // GP determine control input adjustments
       NthMyGene (0)->evaluate (path, *this, 0);
 
       // and advances the aircract
       aircraft.advanceState(dT);
 
+#ifdef TRACE
       // tracks the bounds
-      // maxX = std::max(maxX, aircraft.position[0]);
-      // maxY = std::max(maxY, aircraft.position[1]);
-      // maxZ = std::max(maxZ, aircraft.position[2]);
-      // minX = std::min(minX, aircraft.position[0]);
-      // minY = std::min(minY, aircraft.position[1]);
-      // minZ = std::min(minZ, aircraft.position[2]);
-      // minP = std::min(minP, aircraft.getPitchCommand());
-      // maxP = std::max(maxP, aircraft.getPitchCommand());
-      // minR = std::min(minR, aircraft.getRollCommand());
-      // maxR = std::max(maxR, aircraft.getRollCommand());
-      // minT = std::min(minT, aircraft.getThrottleCommand());
-      // maxT = std::max(maxT, aircraft.getThrottleCommand());
+      maxX = std::max(maxX, aircraft.position[0]);
+      maxY = std::max(maxY, aircraft.position[1]);
+      maxZ = std::max(maxZ, aircraft.position[2]);
+      minX = std::min(minX, aircraft.position[0]);
+      minY = std::min(minY, aircraft.position[1]);
+      minZ = std::min(minZ, aircraft.position[2]);
+      minP = std::min(minP, aircraft.getPitchCommand());
+      maxP = std::max(maxP, aircraft.getPitchCommand());
+      minR = std::min(minR, aircraft.getRollCommand());
+      maxR = std::max(maxR, aircraft.getRollCommand());
+      minT = std::min(minT, aircraft.getThrottleCommand());
+      maxT = std::max(maxT, aircraft.getThrottleCommand());
+#endif
 
       // ---------------------- how did we do?
       
@@ -497,7 +537,6 @@ void MyGP::evalTask(int gpIndex)
       localFitness += SIM_CRASH_PENALTY * fractional_distance_remaining;
     }
 
-// #define TRACE
 #ifdef TRACE
     // dump details on this run
     char outbuf[1000]; // XXX use c++20
@@ -507,7 +546,6 @@ void MyGP::evalTask(int gpIndex)
           minX, maxX, minY, maxY, minZ, maxZ,
           minP, maxP, minR, maxR, minT, maxT);
     fout << outbuf;
-
 #endif
           
     if (printEval) {
@@ -533,7 +571,6 @@ void MyGP::evalTask(int gpIndex)
   
   // normalize
   stdFitness /= renderer.generationPaths.size();
-
 
   if (printEval) {
     renderer.update();
@@ -563,9 +600,12 @@ void createNodeSet (GPAdfNodeSet& adfNs)
   ns.putNode (*new GPNode (IF, "IF", 3));
   ns.putNode (*new GPNode (EQ, "EQ", 2));
   ns.putNode (*new GPNode (GT, "GT", 2));
-  ns.putNode (*new GPNode (PITCH, "PITCH", 1));
-  ns.putNode (*new GPNode (ROLL, "ROLL", 1));
-  ns.putNode (*new GPNode (THROTTLE, "THROTTLE", 1));
+  ns.putNode (*new GPNode (SETPITCH, "SETPITCH", 1));
+  ns.putNode (*new GPNode (SETROLL, "SETROLL", 1));
+  ns.putNode (*new GPNode (SETTHROTTLE, "SETTHROTTLE", 1));
+  ns.putNode (*new GPNode (GETPITCH, "GETPITCH"));
+  ns.putNode (*new GPNode (GETROLL, "GETROLL"));
+  ns.putNode (*new GPNode (GETTHROTTLE, "GETTHROTTLE"));
   ns.putNode (*new GPNode (SIN, "SIN", 1));
   ns.putNode (*new GPNode (COS, "COS", 1));
   ns.putNode (*new GPNode (PI, "PI"));

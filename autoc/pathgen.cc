@@ -120,6 +120,16 @@ exitLoop:
 std::vector<std::vector<Path>> generateSmoothPaths(int numPaths, int numPoints, double radius) {
     std::vector<std::vector<Path>> paths;
 
+    // std::vector<Path> path;
+    // double distance = 0.0;
+    // for (double i = 0; i <= SIM_PATH_RADIUS_LIMIT; i += 5) {
+    //     Eigen::Vector3d interpolatedPoint = {i, i, SIM_INITIAL_ALTITUDE};
+    //     Path pathSegment = {interpolatedPoint, distance, 0.0};
+    //     path.push_back(pathSegment);
+    //     distance += 5;
+    // }
+    // paths.push_back(path);
+
     for (size_t i = 0; i < numPaths; ++i) {
         paths.push_back(generateSmoothPath(numPoints, radius));
     }
