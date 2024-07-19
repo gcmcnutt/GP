@@ -7,16 +7,16 @@
 #include <cstdlib>
 
 
-// Function to generate a random point within a half-sphere
-Eigen::Vector3d randomPointInHalfSphere(double radius) {
-    double theta = ((double) GPrand() / RAND_MAX) * 2 * M_PI;
-    double phi = ((double) GPrand() / RAND_MAX) * M_PI / 2;
+// Function to generate a random point within a cylinder
+Eigen::Vector3d randomPointInCylinder(double radius, double height, double base = SIM_INITIAL_ALTITUDE) {
+    // Generate random values
     double r = radius * std::cbrt((double) GPrand() / RAND_MAX);
+    double theta = ((double) GPrand() / RAND_MAX) * M_PI * 2;
+    double z = base - ((double) GPrand() / RAND_MAX) * height;
 
-    double x = r * std::sin(phi) * std::cos(theta);
-    double y = r * std::sin(phi) * std::sin(theta);
-    double z = (3 * SIM_MIN_ELEVATION - r) * std::cos(phi);
-
+    // Convert to Cartesian coordinates
+    double x = r * std::cos(theta);
+    double y = r * std::sin(theta);
     return Eigen::Vector3d(x, y, z);
 }
 
@@ -28,37 +28,33 @@ Eigen::Vector3d cubicInterpolate(const Eigen::Vector3d& p0, const Eigen::Vector3
     return Eigen::Vector3d(x, y, z);
 }
 
-std::vector<Path> generateSmoothPath(int numPoints, double radius) {
+std::vector<Path> generateSmoothPath(int numPoints, double radius, double height, double base) {
     std::vector<Eigen::Vector3d> controlPoints;
     std::vector<Path> path;
 
-    // Initial control points in forward direction
-    controlPoints.push_back({0, 0, SIM_INITIAL_ALTITUDE});
-
 // #define PATHGEN_FIXED_PATH 1
 #ifdef PATHGEN_FIXED_PATH
+    controlPoints.push_back({0, 0, base});
+
     // Sin
     double x, y, z;
     for (size_t i = 0; i < numPoints; ++i) {
         x = -(cos(2 * M_PI * i / numPoints) * SIM_PATH_BOUNDS/2 - SIM_PATH_BOUNDS/2);
         y = sin(2 * M_PI * i / numPoints) * SIM_PATH_BOUNDS/2;
         controlPoints.push_back(Eigen::Vector3d(x, y, z)); 
-        z = SIM_INITIAL_ALTITUDE - i;
+        z = base - i;
     }
     for (size_t i = 0; i < numPoints; ++i) {
         x = sin(2 * M_PI * i / numPoints) * SIM_PATH_BOUNDS/2;
-        z = SIM_INITIAL_ALTITUDE - SIM_PATH_BOUNDS/2 + cos(2 * M_PI * i / numPoints) * SIM_PATH_BOUNDS/2;
+        z = base - SIM_PATH_BOUNDS/2 + cos(2 * M_PI * i / numPoints) * SIM_PATH_BOUNDS/2;
         y = i;
         controlPoints.push_back(Eigen::Vector3d(x, y, z)); 
     }
 
 #else
-    controlPoints.push_back({0, 0, SIM_INITIAL_ALTITUDE});
-    controlPoints.push_back({SIM_INITIAL_VELOCITY, 0, SIM_INITIAL_ALTITUDE});
-
     // Generate random control points
     for (size_t i = 0; i < numPoints; ++i) {
-        controlPoints.push_back(randomPointInHalfSphere(radius));
+        controlPoints.push_back(randomPointInCylinder(radius, height));
     }
 #endif
 
@@ -96,14 +92,13 @@ std::vector<Path> generateSmoothPath(int numPoints, double radius) {
                 odometer += newDistance;
                 turnmeter += dAngle;
             } else {
-                newDirection = {1.0, 0.0, 0.0};
                 first = false;
             }
 
             lastPoint = interpolatedPoint;
             lastDirection = newDirection;
 
-            // stop around what should be 75 seconds of data
+            // stop around what should be TOTAL_TIME seconds of data
             if (odometer > SIM_TOTAL_TIME * SIM_INITIAL_VELOCITY) {
                 goto exitLoop;
             }
@@ -117,7 +112,7 @@ exitLoop:
 }
 
 // Function to generate a smooth random paths within a half-sphere
-std::vector<std::vector<Path>> generateSmoothPaths(int numPaths, int numPoints, double radius) {
+std::vector<std::vector<Path>> generateSmoothPaths(int numPaths, int numPoints, double radius, double height) {
     std::vector<std::vector<Path>> paths;
 
     // std::vector<Path> path;
@@ -131,7 +126,7 @@ std::vector<std::vector<Path>> generateSmoothPaths(int numPaths, int numPoints, 
     // paths.push_back(path);
 
     for (size_t i = 0; i < numPaths; ++i) {
-        paths.push_back(generateSmoothPath(numPoints, radius));
+        paths.push_back(generateSmoothPath(numPoints, radius, height, SIM_INITIAL_ALTITUDE));
     }
 
     return paths;

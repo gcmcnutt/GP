@@ -45,20 +45,17 @@
 #define MAX_ROLL_RATE_RADSEC (M_PI)
 #define MAX_PITCH_RATE_RADSEC (M_PI)
 
-// orientation order is yaw, pitch, roll
-#define SIM_INITIAL_PITCH (0)
-#define SIM_INITIAL_ROLL (0)
-#define SIM_INITIAL_YAW (0)
 #define SIM_INITIAL_VELOCITY 10.0
 #define SIM_THROTTLE_SCALE 5.0
-#define SIM_CRASH_PENALTY (100.0 + 100.0 + 100.0)
+#define SIM_CRASH_PENALTY (1000.0)
 #define SIM_INITIAL_ALTITUDE -10.0
 #define SIM_INITIAL_THROTTLE 0.0
+#define SIM_INITIAL_LOCATION_DITHER 30.0
 #define SIM_PATH_BOUNDS 40.0
 #define SIM_PATH_RADIUS_LIMIT 60.0
 #define SIM_MIN_ELEVATION -3.0
 
-#define SIM_TOTAL_TIME 75.0
+#define SIM_TOTAL_TIME 50.0
 #define SIM_TIME_STEP 0.2
 
 class ExtraConfig {

@@ -72,6 +72,7 @@ const int MyPopulationID=GPUserID+2;
 std::atomic_bool printEval = false; // verbose (used for rendering best of population)
 std::ofstream fout;
 Renderer renderer(extraCfg);
+std::mutex evalMutex;
 
 class MyGP;
 
@@ -338,17 +339,25 @@ void MyGP::evalTask(int gpIndex)
       stdFitness = 1000001;
       continue;
     }
-    // north (+x), 5m/s at 10m
-    Eigen::Quaterniond aircraft_orientation = 
-        Eigen::AngleAxisd(SIM_INITIAL_YAW, Eigen::Vector3d::UnitZ()) *
-        Eigen::AngleAxisd(SIM_INITIAL_PITCH, Eigen::Vector3d::UnitY()) *
-        Eigen::AngleAxisd(SIM_INITIAL_ROLL, Eigen::Vector3d::UnitX());
 
-    Eigen::Vector3d initialPosition = Eigen::Vector3d(0, 0, SIM_INITIAL_ALTITUDE);
+    // random initial orientation
+    Eigen::Quaterniond aircraft_orientation;
+    Eigen::Vector3d initialPosition;
+    {
+      std::lock_guard<std::mutex> guard(evalMutex);
+      aircraft_orientation = 
+          Eigen::AngleAxisd(((double) GPrand() / RAND_MAX) * M_PI * 2, Eigen::Vector3d::UnitZ()) *
+          Eigen::AngleAxisd(((double) GPrand() / RAND_MAX) * M_PI * 2, Eigen::Vector3d::UnitY()) *
+          Eigen::AngleAxisd(((double) GPrand() / RAND_MAX) * M_PI * 2, Eigen::Vector3d::UnitX());
+
+      initialPosition = Eigen::Vector3d((((double) GPrand() / RAND_MAX) - 0.5) * SIM_INITIAL_LOCATION_DITHER,
+                                        (((double) GPrand() / RAND_MAX) - 0.5) * SIM_INITIAL_LOCATION_DITHER,
+                                        SIM_INITIAL_ALTITUDE - ((double) GPrand() / RAND_MAX) * SIM_INITIAL_LOCATION_DITHER);
+    }
+
     aircraft = Aircraft(SIM_INITIAL_VELOCITY, aircraft_orientation, initialPosition, 0.0, 0.0, 0.0);
-
     aircraft.setPitchCommand(0.0);
-    aircraft.setRollCommand(0.0);
+    aircraft.setRollCommand(0.0); 
     aircraft.setThrottleCommand(SIM_INITIAL_THROTTLE);
     
     // iterate the simulator
@@ -476,8 +485,11 @@ void MyGP::evalTask(int gpIndex)
       throttle_prev = aircraft.getThrottleCommand();
 
       // but have we crashed outside the sphere?
-      double distanceFromOrigin = (aircraft.position - Eigen::Vector3d(0, 0, SIM_INITIAL_ALTITUDE)).norm();
-      if (aircraft.position[2] > SIM_MIN_ELEVATION || distanceFromOrigin > SIM_PATH_RADIUS_LIMIT) {
+      double distanceFromOrigin = std::sqrt(aircraft.position[0] * aircraft.position[0] +
+                                          aircraft.position[1] * aircraft.position[1]);
+      if (aircraft.position[2] > SIM_MIN_ELEVATION ||
+          aircraft.position[2] < (SIM_MIN_ELEVATION - SIM_PATH_RADIUS_LIMIT) ||
+          distanceFromOrigin > SIM_PATH_RADIUS_LIMIT) {
         hasCrashed = true;
       }
 
@@ -668,7 +680,7 @@ int main ()
   renderer.start();
   
   // prime the paths?
-  renderer.generationPaths = generateSmoothPaths(extraCfg.simNumPathsPerGen, NUM_SEGMENTS_PER_PATH, SIM_PATH_BOUNDS);
+  renderer.generationPaths = generateSmoothPaths(extraCfg.simNumPathsPerGen, NUM_SEGMENTS_PER_PATH, SIM_PATH_BOUNDS, SIM_PATH_BOUNDS);
   
   // Create a population with this configuration
   cout << "Creating initial population ..." << endl;
@@ -685,7 +697,7 @@ int main ()
   for (int gen=1; gen<=cfg.NumberOfGenerations; gen++)
   {
     // For this generation, build a smooth path goal
-    renderer.generationPaths = generateSmoothPaths(extraCfg.simNumPathsPerGen, NUM_SEGMENTS_PER_PATH, SIM_PATH_BOUNDS);
+    renderer.generationPaths = generateSmoothPaths(extraCfg.simNumPathsPerGen, NUM_SEGMENTS_PER_PATH, SIM_PATH_BOUNDS, SIM_PATH_BOUNDS);
     
     // Create a new generation from the old one by applying the genetic operators
     if (!cfg.SteadyState)
