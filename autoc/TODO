@@ -1,5 +1,4 @@
 - figure out how to have directional icon (little triange) on the path
-- need to save generations
 - consider co-evolve the random paths
 - top level build script that builds debug/release
 - benchmark the impact of debug mode code
@@ -8,3 +7,12 @@
 - turn white segment markers into arrows
 - llm fitness function evolution
 - try to simplify the eval tree by passing a class reference instead of N args
+- need a way to dump progress for replays
+- need to save generations
+- recent changes may have a leak again!
+- replay functions
+  - select generation
+  - select board
+  - animate path, including tracking behind
+- split rendering from GP -- basically a second program that can replay
+- connect to crrcsim

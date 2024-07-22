@@ -64,7 +64,7 @@ void GPPopulation::evaluate ()
 #endif
 
       // If the evaluation is still valid, don't evaluate it again
-      if (!current->fitnessValid)
+      // if (!current->fitnessValid)
 	{
 	  // Evaluate genetic program
 	  current->evaluate ();

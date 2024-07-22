@@ -239,7 +239,7 @@ void GPPopulation::generate (GPPopulation& newPop)
 		      if (GPVar.SteadyState)
 			{
 			  // Is the fitness still valid?
-			  if (!newGP.fitnessValid)
+			  // if (!newGP.fitnessValid)
 			    {
 			      newGP.evaluate ();
 			      newGP.fitnessValid=1;

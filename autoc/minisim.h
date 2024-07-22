@@ -31,6 +31,7 @@
 #include <vtkInteractorStyleTrackballCamera.h>
 #include <vtkLine.h>
 #include <vtkAppendPolyData.h>
+#include <vtkTubeFilter.h>
 
 // #define TRACE
 
@@ -46,8 +47,9 @@
 #define MAX_PITCH_RATE_RADSEC (M_PI)
 
 #define SIM_INITIAL_VELOCITY 10.0
+#define SIM_RABBIT_VELOCITY 12.0
 #define SIM_THROTTLE_SCALE 5.0
-#define SIM_CRASH_PENALTY (1000.0)
+#define SIM_CRASH_PENALTY (100.0 + 100.0 + 100.0)
 #define SIM_INITIAL_ALTITUDE -10.0
 #define SIM_INITIAL_THROTTLE 0.0
 #define SIM_INITIAL_LOCATION_DITHER 30.0

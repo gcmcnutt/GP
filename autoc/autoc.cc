@@ -395,7 +395,7 @@ void MyGP::evalTask(int gpIndex)
       // ok, how far is this point from the last point?
       double distance = path.at(newPathIndex).distanceFromStart - path.at(pathIndex).distanceFromStart;
       // so this is the real dT
-      double dT = distance / SIM_INITIAL_VELOCITY; // assume a constant speed trajectory
+      double dT = distance / SIM_RABBIT_VELOCITY; // assume a constant speed trajectory
 
       // advance the simulator
       duration += dT;
@@ -414,7 +414,6 @@ void MyGP::evalTask(int gpIndex)
 
       // Calculate the angle between the projected vector and the body Z-axis 
       double rollEstimate = std::atan2(projectedVector.y(), -projectedVector.z());
-      aircraft.setRollCommand(rollEstimate / M_PI);
 
       // *** PITCH: Calculate the vector from craft to target in world frame if it did rotate
       Eigen::Quaterniond rollRotation(Eigen::AngleAxisd(rollEstimate, Eigen::Vector3d::UnitX()));
@@ -425,6 +424,14 @@ void MyGP::evalTask(int gpIndex)
 
       // Calculate pitch angle
       double pitchEstimate = std::atan2(-newLocalTargetVector.z(), newLocalTargetVector.x());
+
+      // now try to determine if pitch up or pitch down makes more sense
+      if (std::abs(pitchEstimate) > M_PI / 2) {
+        pitchEstimate = (pitchEstimate > 0) ? pitchEstimate - M_PI: pitchEstimate + M_PI;
+        rollEstimate = - rollEstimate;
+      }
+      
+      aircraft.setRollCommand(rollEstimate / M_PI);
       aircraft.setPitchCommand(pitchEstimate / M_PI);
 
       // *** Throttle estimate

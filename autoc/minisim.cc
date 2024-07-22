@@ -149,13 +149,25 @@ void Renderer::Execute(vtkObject* caller, unsigned long eventId, void* vtkNotUse
 
     // Update mappers
     vtkSmartPointer<vtkPolyDataMapper> mapper1 = vtkSmartPointer<vtkPolyDataMapper>::New();
-    mapper1->SetInputConnection(paths->GetOutputPort());
+    vtkSmartPointer<vtkTubeFilter> tubeFilter1 = vtkSmartPointer<vtkTubeFilter>::New();
+    tubeFilter1->SetInputConnection(paths->GetOutputPort());
+    tubeFilter1->SetRadius(0.2);
+    tubeFilter1->SetNumberOfSides(10);
+    mapper1->SetInputConnection(tubeFilter1->GetOutputPort());
 
     vtkSmartPointer<vtkPolyDataMapper> mapper2 = vtkSmartPointer<vtkPolyDataMapper>::New();
-    mapper2->SetInputConnection(actuals->GetOutputPort());
+    vtkSmartPointer<vtkTubeFilter> tubeFilter2 = vtkSmartPointer<vtkTubeFilter>::New();
+    tubeFilter2->SetInputConnection(actuals->GetOutputPort());
+    tubeFilter2->SetRadius(0.3);
+    tubeFilter2->SetNumberOfSides(10);
+    mapper2->SetInputConnection(tubeFilter2->GetOutputPort());
 
     vtkSmartPointer<vtkPolyDataMapper> mapper3 = vtkSmartPointer<vtkPolyDataMapper>::New();
-    mapper3->SetInputConnection(segmentGaps->GetOutputPort());
+    vtkSmartPointer<vtkTubeFilter> tubeFilter3 = vtkSmartPointer<vtkTubeFilter>::New();
+    tubeFilter3->SetInputConnection(segmentGaps->GetOutputPort());
+    tubeFilter3->SetRadius(0.1);
+    tubeFilter3->SetNumberOfSides(10);
+    mapper3->SetInputConnection(tubeFilter3->GetOutputPort());
 
     // Update actors
     actor1->SetMapper(mapper1);
