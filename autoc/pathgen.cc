@@ -99,7 +99,7 @@ std::vector<Path> generateSmoothPath(int numPoints, double radius, double height
             lastDirection = newDirection;
 
             // stop around what should be TOTAL_TIME seconds of data
-            if (odometer > SIM_TOTAL_TIME * SIM_INITIAL_VELOCITY) {
+            if (odometer > SIM_TOTAL_TIME * SIM_RABBIT_VELOCITY) {
                 goto exitLoop;
             }
         }
