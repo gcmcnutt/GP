@@ -5,6 +5,10 @@
 #include <vector>
 #include <Eigen/Dense>
 
+#define NUM_SEGMENTS_PER_PATH 16
+#define FIELD_SIZE 100.0
+#define FIELD_GAP 10.0
+
 class Path {
     public:
         Eigen::Vector3d start;

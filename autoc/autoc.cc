@@ -18,8 +18,10 @@ From skeleton/skeleton.cc
 
 #include "gp.h"
 #include "gpconfig.h"
+#include "autoc.h"
 #include "minisim.h"
 #include "pathgen.h"
+#include "renderer.h"
 
 using namespace std;
 
