@@ -154,7 +154,7 @@ public:
   // async evaluator
   void evalTask(WorkerContext& context);
 
-  AircraftState aircraftState{ 0, Eigen::Quaterniond::Identity(), Eigen::Vector3d(0, 0, 0), 0.0, 0.0, 0.0, 0 };
+  AircraftState aircraftState{ 0, Eigen::Quaterniond::Identity(), Eigen::Vector3d(0, 0, 0), 0.0, 0.0, 0.0, 0, false };
   long pathIndex = 0; // current entry on path
 };
 
@@ -319,6 +319,15 @@ void MyGP::evaluate()
   tasks.push_back(this);
 }
 
+std::string crashReasonToString(CrashReason type) {
+  switch (type) {
+  case CrashReason::Sim: return "Sim";
+  case CrashReason::Eval: return "Eval";
+  case CrashReason::None: return "None";
+  default: return "*?*";
+  }
+}
+
 // Evaluate the fitness of a GP and save it into the class variable
 // fitness.
 void MyGP::evalTask(WorkerContext& context)
@@ -353,7 +362,7 @@ void MyGP::evalTask(WorkerContext& context)
     receiveRPC<AircraftState>(*context.socket);
 
     // send initial state reset
-    aircraftState = AircraftState{ SIM_INITIAL_VELOCITY, aircraft_orientation, initialPosition, 0.0, 0.0, SIM_INITIAL_THROTTLE, 0 };
+    aircraftState = AircraftState{ SIM_INITIAL_VELOCITY, aircraft_orientation, initialPosition, 0.0, 0.0, SIM_INITIAL_THROTTLE, 0, false };
     sendRPC(*context.socket, MainToSim{ ControlType::AIRCRAFT_STATE, AircraftState{aircraftState} });
 
     // iterate the simulator
@@ -362,7 +371,7 @@ void MyGP::evalTask(WorkerContext& context)
     bool printHeader = true;
 
     // as long as we are within the time limit and have not reached the end of the path
-    bool hasCrashed = false;
+    CrashReason crashReason = CrashReason::None;
 
     // error accumulators
     double distance_error_sum = 0;
@@ -375,9 +384,14 @@ void MyGP::evalTask(WorkerContext& context)
     double pitch_prev = aircraftState.pitchCommand;
     double throttle_prev = aircraftState.throttleCommand;
 
-    while (duration_msec < SIM_TOTAL_TIME_MSEC && pathIndex < path.size() - 2 && !hasCrashed) {
+    while (duration_msec < SIM_TOTAL_TIME_MSEC && pathIndex < path.size() - 2 && crashReason == CrashReason::None) {
       // wait for next state update from sim
       aircraftState = receiveRPC<AircraftState>(*context.socket);
+
+      // did sim crash?
+      if (aircraftState.simCrashed) {
+        crashReason = CrashReason::Sim;
+      }
 
       // ---------------------- first how did we do?
       // Compute the distance between the aircraft and the goal
@@ -406,18 +420,17 @@ void MyGP::evalTask(WorkerContext& context)
       pitch_prev = aircraftState.pitchCommand;
       throttle_prev = aircraftState.throttleCommand;
 
-      // but have we crashed outside the sphere?
+      // but eval detected crashed outside the cylinder? (low elevation is detected from sim)
       double distanceFromOrigin = std::sqrt(aircraftState.position[0] * aircraftState.position[0] +
         aircraftState.position[1] * aircraftState.position[1]);
-      if (aircraftState.position[2] > SIM_MIN_ELEVATION ||
-        aircraftState.position[2] < (SIM_MIN_ELEVATION - SIM_PATH_RADIUS_LIMIT) ||
+      if (aircraftState.position[2] < (SIM_MIN_ELEVATION - SIM_PATH_RADIUS_LIMIT) ||
         distanceFromOrigin > SIM_PATH_RADIUS_LIMIT) {
-        hasCrashed = true;
+        crashReason = CrashReason::Eval;
       }
 
       if (printEval) {
         if (printHeader) {
-          fout << "    Time Idx totDist   pathX    pathY    pathZ        X        Y        Z       dW       dX       dY       dZ   relVel     roll    pitch    power    distP   angleP controlP\n";
+          fout << "  Time Idx  totDist   pathX    pathY    pathZ        X        Y        Z       dW       dX       dY       dZ   relVel     roll    pitch    power    distP   angleP controlP\n";
           printHeader = false;
         }
 
@@ -522,7 +535,7 @@ void MyGP::evalTask(WorkerContext& context)
       nanDetector++;
     }
 
-    if (hasCrashed) {
+    if (crashReason != CrashReason::None) {
       double fractional_distance_remaining = 1.0 - path.at(pathIndex).distanceFromStart / path.back().distanceFromStart;
       localFitness += SIM_CRASH_PENALTY * fractional_distance_remaining;
     }

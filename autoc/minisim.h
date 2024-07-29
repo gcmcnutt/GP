@@ -31,41 +31,6 @@ using boost::asio::ip::tcp;
 #define SIM_TOTAL_TIME_MSEC (50 * 1000)
 #define SIM_TIME_STEP_MSEC (200)
 
-class Aircraft {
-  public:
-    // TODO should be private
-    double dRelVel; // reltive forward velocity on +x airplane axis m/s
-
-    // world frame for now
-    Eigen::Quaterniond aircraft_orientation;
-
-    // NED convention for location x+ north, y+ east, z+ down
-    Eigen::Vector3d position;
-
-    // not used yet
-    double R_X;     // rotationX
-    double R_Y;     // rotationY
-    double R_Z;     // rotationZ
-
-    Aircraft(double dRelVel, Eigen::Quaterniond aircraft_orientation, Eigen::Vector3d position, double R_X, double R_Y, double R_Z);
-    
-    double setPitchCommand(double pitchCommand);
-    double getPitchCommand();
-    double setRollCommand(double rollCommand);
-    double getRollCommand();
-    double setThrottleCommand(double throttleCommand);
-    double getThrottleCommand();
-    void advanceState(double dt);
-    void toString(char * output);
-
-  private:
-
-    // aircraft command values
-    double pitchCommand;  // -1:1
-    double rollCommand;   // -1:1
-    double throttleCommand; // -1:1
-};
-
 namespace boost {
 namespace serialization {
 
@@ -109,6 +74,7 @@ struct AircraftState {
   double rollCommand;
   double throttleCommand;
   unsigned long int simTime;
+  bool simCrashed;
 
   template<class Archive>
   void serialize(Archive & ar, const unsigned int version) {
@@ -119,6 +85,7 @@ struct AircraftState {
     ar & rollCommand;
     ar & throttleCommand;
     ar & simTime;
+    ar & simCrashed;
   }
 };
 

@@ -8,6 +8,41 @@
 using namespace std;
 using boost::asio::ip::tcp;
 
+class Aircraft {
+  public:
+    // TODO should be private
+    double dRelVel; // reltive forward velocity on +x airplane axis m/s
+
+    // world frame for now
+    Eigen::Quaterniond aircraft_orientation;
+
+    // NED convention for location x+ north, y+ east, z+ down
+    Eigen::Vector3d position;
+
+    // not used yet
+    double R_X;     // rotationX
+    double R_Y;     // rotationY
+    double R_Z;     // rotationZ
+
+    Aircraft(double dRelVel, Eigen::Quaterniond aircraft_orientation, Eigen::Vector3d position, double R_X, double R_Y, double R_Z);
+    
+    double setPitchCommand(double pitchCommand);
+    double getPitchCommand();
+    double setRollCommand(double rollCommand);
+    double getRollCommand();
+    double setThrottleCommand(double throttleCommand);
+    double getThrottleCommand();
+    void advanceState(double dt);
+    void toString(char * output);
+
+  private:
+
+    // aircraft command values
+    double pitchCommand;  // -1:1
+    double rollCommand;   // -1:1
+    double throttleCommand; // -1:1
+};
+
 Aircraft::Aircraft(double dRelVel, Eigen::Quaterniond aircraft_orientation, Eigen::Vector3d position, double R_X, double R_Y, double R_Z) {
   this->dRelVel = dRelVel;
   this->aircraft_orientation = aircraft_orientation;
@@ -91,6 +126,7 @@ class SimProcess {
 public:
   Aircraft aircraft = Aircraft(0.0, Eigen::Quaterniond(1, 0, 0, 0), Eigen::Vector3d(0, 0, 0), 0.0, 0.0, 0.0);
   unsigned long int simTime = 0;
+  bool simCrashed = false;
   SimProcess(boost::asio::io_context& io_context, unsigned short port) : socket_(io_context) {
     tcp::resolver resolver(io_context);
     auto endpoints = resolver.resolve("localhost", std::to_string(port));
@@ -100,7 +136,7 @@ public:
   void run() {
     while (true) { // TODO have reply have a controlled loop exit
       AircraftState aircraftState{aircraft.dRelVel, aircraft.aircraft_orientation, aircraft.position, 
-          aircraft.getPitchCommand(), aircraft.getRollCommand(), aircraft.getThrottleCommand(), simTime}; 
+          aircraft.getPitchCommand(), aircraft.getRollCommand(), aircraft.getThrottleCommand(), simTime, simCrashed}; 
       // always send our state
       sendRPC(socket_, aircraftState);
 
@@ -108,27 +144,28 @@ public:
       MainToSim mainToSim = receiveRPC<MainToSim>(socket_);
 
       switch (mainToSim.controlType) {
-        // here we get a reset from the main controller, just update local state (reset, etc)
-        case ControlType::AIRCRAFT_STATE:
-          aircraft.dRelVel = mainToSim.aircraftState.dRelVel;
-          aircraft.aircraft_orientation = mainToSim.aircraftState.aircraft_orientation;
-          aircraft.position = mainToSim.aircraftState.position;
-          aircraft.setPitchCommand(mainToSim.aircraftState.pitchCommand);
-          aircraft.setRollCommand(mainToSim.aircraftState.rollCommand);
-          aircraft.setThrottleCommand(mainToSim.aircraftState.throttleCommand);
-          simTime = mainToSim.aircraftState.simTime;
-          break;
+      // here we get a reset from the main controller, just update local state (reset, etc)
+      case ControlType::AIRCRAFT_STATE:
+        aircraft.dRelVel = mainToSim.aircraftState.dRelVel;
+        aircraft.aircraft_orientation = mainToSim.aircraftState.aircraft_orientation;
+        aircraft.position = mainToSim.aircraftState.position;
+        aircraft.setPitchCommand(mainToSim.aircraftState.pitchCommand);
+        aircraft.setRollCommand(mainToSim.aircraftState.rollCommand);
+        aircraft.setThrottleCommand(mainToSim.aircraftState.throttleCommand);
+        simTime = mainToSim.aircraftState.simTime;
+        simCrashed = false;
+        break;
 
-        // here we get some control signals, simulate
-        case ControlType::CONTROL_SIGNAL:
-          // update controls
-          aircraft.setPitchCommand(mainToSim.controlSignal.pitchCommand);
-          aircraft.setRollCommand(mainToSim.controlSignal.rollCommand);
-          aircraft.setThrottleCommand(mainToSim.controlSignal.throttleCommand);
+      // here we get some control signals, simulate
+      case ControlType::CONTROL_SIGNAL:
+        // update controls
+        aircraft.setPitchCommand(mainToSim.controlSignal.pitchCommand);
+        aircraft.setRollCommand(mainToSim.controlSignal.rollCommand);
+        aircraft.setThrottleCommand(mainToSim.controlSignal.throttleCommand);
 
-          // bump simulation a step
-          aircraft.advanceState(SIM_TIME_STEP_MSEC / 1000.0);
-          simTime += SIM_TIME_STEP_MSEC;
+        // bump simulation a step
+        aircraft.advanceState(SIM_TIME_STEP_MSEC / 1000.0);
+        simTime += SIM_TIME_STEP_MSEC;
 
         // send our updated state to evaluator
         aircraftState.dRelVel = aircraft.dRelVel;
@@ -138,6 +175,13 @@ public:
         aircraftState.rollCommand = aircraft.getRollCommand();
         aircraftState.throttleCommand = aircraft.getThrottleCommand();
         aircraftState.simTime = simTime;
+
+        // for now simulate a simulator detected crash
+        if (aircraft.position[2] > SIM_MIN_ELEVATION) {
+          simCrashed = true;
+        } else {
+          simCrashed = false;
+        }
         break;
       }
     }

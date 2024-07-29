@@ -6,17 +6,23 @@
 #define FITNESS_CONTROL_WEIGHT 1.0
 
 class ExtraConfig {
-  public:
-    int simNumPathsPerGen = 1;
-    int evalThreads = 1;
-    std::string minisimProgram = "./build/minisim";
-    unsigned short minisimPortOverride = 0;
-    
-    // // Custom implementation of the << operator for the extraCfg type
-    // std::ostream& operator << (std::ostream& os) {
-    //   os << "simNumPathsPerGen: " + simNumPathsPerGen;
-    //   return os;
-    // }
+public:
+  int simNumPathsPerGen = 1;
+  int evalThreads = 1;
+  std::string minisimProgram = "./build/minisim";
+  unsigned short minisimPortOverride = 0;
+
+  // // Custom implementation of the << operator for the extraCfg type
+  // std::ostream& operator << (std::ostream& os) {
+  //   os << "simNumPathsPerGen: " + simNumPathsPerGen;
+  //   return os;
+  // }
+};
+
+enum class CrashReason {
+  None,
+  Sim,
+  Eval,
 };
 
 #endif

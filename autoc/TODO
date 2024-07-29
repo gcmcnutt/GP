@@ -19,3 +19,5 @@
 - consider fitness function for distance, alignment is ramped sensitivity for first couple of seconds (to allow capture from random start)
 - some memory leak is back...
 - control smoothness is maybe more about craft rotation as a function of optimal -- not control inputs
+- we have crash reason -- probably should record it
+- walk various classes for copy by reference, copy by pointer, copy by value == a smaller mem leak in autoc
