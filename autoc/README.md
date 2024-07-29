@@ -1,5 +1,10 @@
 # Building autoc
 
+need libboost-all-dev
+need Eigen
+need vtk
+...
+
 - First make sure top level GP is built
 - Generate local makefile
 ```

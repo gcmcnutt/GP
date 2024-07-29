@@ -10,12 +10,12 @@
 #define FIELD_GAP 10.0
 
 class Path {
-    public:
-        Eigen::Vector3d start;
-        double distanceFromStart;
-        double radiansFromStart;
+public:
+  Eigen::Vector3d start;
+  double distanceFromStart;
+  double radiansFromStart;
 
-        void toString(char* output);
+  void toString(char* output);
 };
 
 std::vector<std::vector<Path>> generateSmoothPaths(int numPaths, int numPoints, double radius, double height);

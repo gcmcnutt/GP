@@ -1,4 +1,4 @@
-- figure out how to have directional icon (little triange) on the path
+- figure out how to have directional icon (little triange) on the path -- and or have the actual path be a strip of paper oriented correctly according to z axis
 - consider co-evolve the random paths
 - top level build script that builds debug/release
 - benchmark the impact of debug mode code
@@ -16,3 +16,6 @@
   - animate path, including tracking behind
 - split rendering from GP -- basically a second program that can replay
 - connect to crrcsim
+- consider fitness function for distance, alignment is ramped sensitivity for first couple of seconds (to allow capture from random start)
+- some memory leak is back...
+- control smoothness is maybe more about craft rotation as a function of optimal -- not control inputs

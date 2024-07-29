@@ -5,6 +5,7 @@
 #include <thread>
 
 #include "pathgen.h"
+#include "autoc.h"
 
 #include <vtkPoints.h>
 #include <vtkSmartPointer.h>
@@ -30,18 +31,6 @@
 #include <vtkLine.h>
 #include <vtkAppendPolyData.h>
 #include <vtkTubeFilter.h>
-
-class ExtraConfig {
-  public:
-    int simNumPathsPerGen = 1;
-    int evalThreads = 1;
-    
-    // // Custom implementation of the << operator for the extraCfg type
-    // std::ostream& operator << (std::ostream& os) {
-    //   os << "simNumPathsPerGen: " + simNumPathsPerGen;
-    //   return os;
-    // }
-};
 
 class Renderer : public vtkCommand {
   public:
