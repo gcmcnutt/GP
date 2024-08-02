@@ -501,11 +501,11 @@ void MyGP::evalTask(WorkerContext& context)
       // Calculate pitch angle
       double pitchEstimate = std::atan2(-newLocalTargetVector.z(), newLocalTargetVector.x());
 
-      // now try to determine if pitch up or pitch down makes more sense
-      if (std::abs(pitchEstimate) > M_PI / 2) {
-        pitchEstimate = (pitchEstimate > 0) ? pitchEstimate - M_PI : pitchEstimate + M_PI;
-        rollEstimate = -rollEstimate;
-      }
+      // // now try to determine if pitch up or pitch down makes more sense
+      // if (std::abs(pitchEstimate) > M_PI / 2) {
+      //   pitchEstimate = (pitchEstimate > 0) ? pitchEstimate - M_PI : pitchEstimate + M_PI;
+      //   rollEstimate = -rollEstimate;
+      // }
 
       aircraftState.rollCommand = rollEstimate / M_PI;
       aircraftState.pitchCommand = pitchEstimate / M_PI;
