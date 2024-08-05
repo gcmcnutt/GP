@@ -423,8 +423,9 @@ void MyGP::evalTask(WorkerContext& context)
       // but eval detected crashed outside the cylinder? (low elevation is detected from sim)
       double distanceFromOrigin = std::sqrt(aircraftState.position[0] * aircraftState.position[0] +
         aircraftState.position[1] * aircraftState.position[1]);
-      if (aircraftState.position[2] < (SIM_MIN_ELEVATION - SIM_PATH_RADIUS_LIMIT) ||
-        distanceFromOrigin > SIM_PATH_RADIUS_LIMIT) {
+      if (aircraftState.position[2] < (SIM_MIN_ELEVATION - SIM_PATH_RADIUS_LIMIT) || // too high
+        aircraftState.position[2] > (SIM_MIN_ELEVATION) || // too low
+        distanceFromOrigin > SIM_PATH_RADIUS_LIMIT) { // too far
         crashReason = CrashReason::Eval;
       }
 
