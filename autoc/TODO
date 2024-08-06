@@ -27,3 +27,4 @@
 - split out evaluator to be standalone in prep for onboard execution
 - figure out how to use crrcsim robots to form lead plane
 - more accurate hb1 model
+- can crrcsim run at sim time, not real time?

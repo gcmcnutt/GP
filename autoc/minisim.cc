@@ -192,12 +192,13 @@ private:
 };
 
 int main(int argc, char* argv[]) {
-  if (argc != 2) {
+  if (argc != 3) {
     std::cerr << "Usage: subprocess <port>" << std::endl;
     return 1;
   }
 
-  unsigned short port = std::atoi(argv[1]);
+  unsigned int instance = std::atoi(argv[1]);
+  unsigned short port = std::atoi(argv[2]);
   boost::asio::io_context io_context;
   SimProcess sim_process(io_context, port);
   sim_process.run();
