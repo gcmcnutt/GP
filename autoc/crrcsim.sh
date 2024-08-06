@@ -1,21 +1,20 @@
-#! /bin/sh
+#! /bin/bash
 
-# ok we come in with a port -- let's adjust
-
-PROGDIR=../../crsim/crrcsim-0.9.13
-PROG=build/crrcsim
+# ok we come in with an instanceID and port -- let's adjust
 INSTANCE=$1
 PORT=$2
+
+PROGDIR=${HOME}/crsim/crrcsim-0.9.13
+PROG=build/crrcsim
 CRRCSIM_LOG=autoc_crrcsim.$$.log
 
 # point to an instance of Xvfb for all but the first
-
-INSTANCE=99
+# Xvfb :2 -screen 0 1024x768x8 &
 
 case "$INSTANCE" in
-  "0")
-    DISPLAY=:0
-    ;;
+  # "0")
+  #   DISPLAY=:0
+  #   ;;
   *)
     DISPLAY=:2
     ;;
