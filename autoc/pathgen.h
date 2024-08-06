@@ -5,13 +5,17 @@
 #include <vector>
 #include <Eigen/Dense>
 
-class Path {
-    public:
-        Eigen::Vector3d start;
-        double distanceFromStart;
-        double radiansFromStart;
+#define NUM_SEGMENTS_PER_PATH 16
+#define FIELD_SIZE 100.0
+#define FIELD_GAP 10.0
 
-        void toString(char* output);
+class Path {
+public:
+  Eigen::Vector3d start;
+  double distanceFromStart;
+  double radiansFromStart;
+
+  void toString(char* output);
 };
 
 std::vector<std::vector<Path>> generateSmoothPaths(int numPaths, int numPoints, double radius, double height);

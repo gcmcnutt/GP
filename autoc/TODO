@@ -1,4 +1,4 @@
-- figure out how to have directional icon (little triange) on the path
+- figure out how to have directional icon (little triange) on the path -- and or have the actual path be a strip of paper oriented correctly according to z axis
 - consider co-evolve the random paths
 - top level build script that builds debug/release
 - benchmark the impact of debug mode code
@@ -9,10 +9,21 @@
 - try to simplify the eval tree by passing a class reference instead of N args
 - need a way to dump progress for replays
 - need to save generations
-- recent changes may have a leak again!
 - replay functions
   - select generation
   - select board
   - animate path, including tracking behind
 - split rendering from GP -- basically a second program that can replay
-- connect to crrcsim
+- consider fitness function for distance, alignment is ramped sensitivity for first couple of seconds (to allow capture from random start)
+- some memory leak is back...
+- control smoothness is maybe more about craft rotation as a function of optimal -- not control inputs
+- we have crash reason -- probably should record it
+- walk various classes for copy by reference, copy by pointer, copy by value == a smaller mem leak in autoc
+- we can buffer the best run over a population vs re-running it -- save the final eval steps
+- can not interactively flip to autoc input as it attempts to use the callback port -- soften this dependency for when it is manually run (maybe if port not set, it falls back to Mouse)
+- probably need to do task queues per event type more than per GP -- especially with larger fanouts of test paths, we see long tail of evals
+- plumb stdout/stderr nicely for a build run -- perhaps hook this into archiving system too
+- get random start/orientation working in crrcsim
+- split out evaluator to be standalone in prep for onboard execution
+- figure out how to use crrcsim robots to form lead plane
+- more accurate hb1 model

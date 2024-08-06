@@ -2,49 +2,20 @@
 #ifndef MINISIM_H
 #define MINISIM_H
 
-#include <mutex>
+#include <boost/asio.hpp>
+#include <boost/serialization/serialization.hpp>
+#include <boost/serialization/array.hpp>
+#include <boost/serialization/split_free.hpp>
+#include <boost/archive/text_oarchive.hpp>
+#include <boost/archive/text_iarchive.hpp>
+
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
 
-#include "pathgen.h"
+using boost::asio::ip::tcp;
 
-#include <vtkPoints.h>
-#include <vtkSmartPointer.h>
-#include <vtkPolyData.h>
-#include <vtkCellArray.h>
-#include <vtkPolyLine.h>
-#include <vtkVertexGlyphFilter.h>
-#include <vtkPolyDataMapper.h>
-#include <vtkActor.h>
-#include <vtkRenderer.h>
-#include <vtkRenderWindow.h>
-#include <vtkRenderWindowInteractor.h>
-#include <vtkNamedColors.h>
-#include <vtkProperty.h>
-#include <vtkAxesActor.h>
-#include <vtkOrientationMarkerWidget.h>
-#include <vtkCommand.h>
-#include <vtkCamera.h>
-#include <vtkPlaneSource.h>
-#include <vtkCellData.h>
-#include <vtkMinimalStandardRandomSequence.h>
-#include <vtkInteractorStyleTrackballCamera.h>
-#include <vtkLine.h>
-#include <vtkAppendPolyData.h>
-#include <vtkTubeFilter.h>
-
-// #define TRACE
-
-#define FITNESS_DISTANCE_WEIGHT 1.5
-#define FITNESS_ALIGNMENT_WEIGHT 1.3
-#define FITNESS_CONTROL_WEIGHT 1.0
-
-#define NUM_SEGMENTS_PER_PATH 16
-#define FIELD_SIZE 100.0
-#define FIELD_GAP 10.0
-
-#define MAX_ROLL_RATE_RADSEC (M_PI)
-#define MAX_PITCH_RATE_RADSEC (M_PI)
+#define SIM_MAX_ROLL_RATE_RADSEC (M_PI)
+#define SIM_MAX_PITCH_RATE_RADSEC (M_PI)
 
 #define SIM_INITIAL_VELOCITY 10.0
 #define SIM_RABBIT_VELOCITY 12.0
@@ -57,99 +28,197 @@
 #define SIM_PATH_RADIUS_LIMIT 60.0
 #define SIM_MIN_ELEVATION -3.0
 
-#define SIM_TOTAL_TIME 50.0
-#define SIM_TIME_STEP 0.2
+#define SIM_TOTAL_TIME_MSEC (50 * 1000)
+#define SIM_TIME_STEP_MSEC (200)
 
-class ExtraConfig {
-  public:
-    int simNumPathsPerGen = 1;
-    int evalThreads = 1;
-    
-    // // Custom implementation of the << operator for the extraCfg type
-    // std::ostream& operator << (std::ostream& os) {
-    //   os << "simNumPathsPerGen: " + simNumPathsPerGen;
-    //   return os;
-    // }
+namespace boost {
+namespace serialization {
+
+// Serialization for Eigen::Vector3d
+template<class Archive>
+void serialize(Archive & ar, Eigen::Vector3d & v, const unsigned int version)
+{
+    ar & boost::serialization::make_array(v.data(), 3);
+}
+
+// Serialization for Eigen::Quaterniond
+template<class Archive>
+void save(Archive & ar, const Eigen::Quaterniond & q, const unsigned int version)
+{
+    ar & boost::serialization::make_array(q.coeffs().data(), 4);
+}
+
+template<class Archive>
+void load(Archive & ar, Eigen::Quaterniond & q, const unsigned int version)
+{
+    Eigen::Vector4d coeffs;
+    ar & boost::serialization::make_array(coeffs.data(), 4);
+    q = Eigen::Quaterniond(coeffs[3], coeffs[0], coeffs[1], coeffs[2]);
+}
+
+} // namespace serialization
+} // namespace boost
+
+// This macro tells boost to use the save/load functions we just defined for Quaterniond
+BOOST_SERIALIZATION_SPLIT_FREE(Eigen::Quaterniond)
+
+/*
+ * this is always sent from sim to main
+ * and occasionally sent as a rest from main to sim
+ */
+struct AircraftState {
+  double dRelVel;
+  Eigen::Quaterniond aircraft_orientation;
+  Eigen::Vector3d position;
+  double pitchCommand;
+  double rollCommand;
+  double throttleCommand;
+  unsigned long int simTime;
+  bool simCrashed;
+
+  template<class Archive>
+  void serialize(Archive & ar, const unsigned int version) {
+    ar & dRelVel;
+    ar & aircraft_orientation;
+    ar & position;
+    ar & pitchCommand;
+    ar & rollCommand;
+    ar & throttleCommand;
+    ar & simTime;
+    ar & simCrashed;
+  }
 };
 
-class Aircraft {
-  public:
-    // TODO should be private
-    double dRelVel; // reltive forward velocity on +x airplane axis m/s
+/*
+ * here we send our control signals to the aircraft
+ */
+struct ControlSignal {
+  double pitchCommand;
+  double rollCommand;
+  double throttleCommand;
 
-    // world frame for now
-    Eigen::Quaterniond aircraft_orientation;
-
-    // NED convention for location x+ north, y+ east, z+ down
-    Eigen::Vector3d position;
-
-    // not used yet
-    double R_X;     // rotationX
-    double R_Y;     // rotationY
-    double R_Z;     // rotationZ
-
-    Aircraft(double dRelVel, Eigen::Quaterniond aircraft_orientation, Eigen::Vector3d position, double R_X, double R_Y, double R_Z);
-    
-    double setPitchCommand(double pitchCommand);
-    double getPitchCommand();
-    double setRollCommand(double rollCommand);
-    double getRollCommand();
-    double setThrottleCommand(double throttleCommand);
-    double getThrottleCommand();
-    void advanceState(double dt);
-    void toString(char * output);
-
-  private:
-
-    // aircraft command values
-    double pitchCommand;  // -1:1
-    double rollCommand;   // -1:1
-    double throttleCommand; // -1:1
+  template<class Archive>
+  void serialize(Archive & ar, const unsigned int version) {
+    ar & pitchCommand;
+    ar & rollCommand;
+    ar & throttleCommand;
+  }
 };
 
-class Renderer : public vtkCommand {
-  public:
-    Renderer(ExtraConfig &extraCfg) : extraCfg(extraCfg) {};
-
-    void update();
-    void start();
-    bool isRunning();
-    virtual void Execute(vtkObject* caller, unsigned long eventId, void* vtkNotUsed(callData));
-    void addPathElementList(std::vector<Path> plan, std::vector<Path> actual);
-    
-    std::recursive_mutex dataMutex;
-      
-    // the path(s) a population will attempt
-    std::vector<std::vector<Path>> generationPaths;
-
-    // intermediate paths and results
-    std::vector<std::vector<Path>> pathList;
-    std::vector<std::vector<Path>> actualList;
-
-    ExtraConfig &extraCfg;
-
-  private:
-    
-    // Shared resources
-    bool newDataAvailable = false;
-    bool exitFlag = false;
-
-    vtkSmartPointer<vtkAppendPolyData> paths;
-    vtkSmartPointer<vtkAppendPolyData> actuals;
-    vtkSmartPointer<vtkAppendPolyData> segmentGaps;
-    vtkSmartPointer<vtkAppendPolyData> planeData;
-
-    vtkSmartPointer<vtkActor> actor1;
-    vtkSmartPointer<vtkActor> actor2;
-    vtkSmartPointer<vtkActor> actor3;
-    vtkSmartPointer<vtkActor> planeActor;
-
-    Eigen::Vector3d renderingOffset(int i); // locate a coordinate offset for our rendering screen
-    vtkSmartPointer<vtkPolyData> createPointSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> points);
-    vtkSmartPointer<vtkPolyData> createSegmentSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> start, const std::vector<Eigen::Vector3d> end);
-    std::vector<Eigen::Vector3d> pathToVector(const std::vector<Path> path);
-    void RenderInBackground(vtkSmartPointer<vtkRenderWindow> renderWindow);
-
+/*
+ * generic command from sim to main
+ */
+enum class ControlType {
+  CONTROL_SIGNAL,
+  AIRCRAFT_STATE
 };
+
+struct MainToSim {
+  ControlType controlType;
+  union {
+    ControlSignal controlSignal;
+    AircraftState aircraftState;
+  };
+
+  // Default constructor
+  MainToSim() : controlType(ControlType::CONTROL_SIGNAL), controlSignal() {}
+
+  // Constructor for ControlSignal
+  MainToSim(ControlType type, const ControlSignal& signal)
+    : controlType(type), controlSignal(signal) {
+    assert(type == ControlType::CONTROL_SIGNAL);
+  }
+
+  // Constructor for AircraftState
+  MainToSim(ControlType type, const AircraftState& state)
+    : controlType(type), aircraftState(state) {
+    assert(type == ControlType::AIRCRAFT_STATE);
+  }
+
+  // Destructor to handle union cleanup if necessary
+  ~MainToSim() {
+    if (controlType == ControlType::CONTROL_SIGNAL) {
+      controlSignal.~ControlSignal();
+    } else if (controlType == ControlType::AIRCRAFT_STATE) {
+      aircraftState.~AircraftState();
+    }
+  }
+
+  // Copy constructor
+  MainToSim(const MainToSim& other) : controlType(other.controlType) {
+    if (controlType == ControlType::CONTROL_SIGNAL) {
+      new (&controlSignal) ControlSignal(other.controlSignal);
+    } else if (controlType == ControlType::AIRCRAFT_STATE) {
+      new (&aircraftState) AircraftState(other.aircraftState);
+    }
+  }
+
+  // Move constructor
+  MainToSim(MainToSim&& other) noexcept : controlType(other.controlType) {
+    if (controlType == ControlType::CONTROL_SIGNAL) {
+      new (&controlSignal) ControlSignal(std::move(other.controlSignal));
+    } else if (controlType == ControlType::AIRCRAFT_STATE) {
+      new (&aircraftState) AircraftState(std::move(other.aircraftState));
+    }
+  }
+
+  // Assignment operator
+  MainToSim& operator=(const MainToSim& other) {
+    if (this != &other) {
+      this->~MainToSim();
+      new (this) MainToSim(other);
+    }
+    return *this;
+  }
+
+  // Move assignment operator
+  MainToSim& operator=(MainToSim&& other) noexcept {
+    if (this != &other) {
+      this->~MainToSim();
+      new (this) MainToSim(std::move(other));
+    }
+    return *this;
+  }
+
+  template<class Archive>
+  void serialize(Archive & ar, const unsigned int version) {
+    ar & controlType;
+    switch (controlType) {
+      case ControlType::CONTROL_SIGNAL:
+        ar & controlSignal;
+        break;
+      case ControlType::AIRCRAFT_STATE:
+        ar & aircraftState;
+        break;
+    }
+  }
+};
+
+
+/*
+ * generic RPC wrappers
+ */
+template<typename T>
+void sendRPC(tcp::socket& socket, const T& data) {
+  std::ostringstream archive_stream;
+  boost::archive::text_oarchive archive(archive_stream);
+  archive << data;
+  std::string outbound_data = archive_stream.str() + "\n";
+  boost::asio::write(socket, boost::asio::buffer(outbound_data));
+};
+
+template<typename T>
+T receiveRPC(tcp::socket& socket) {
+  boost::asio::streambuf buf;
+  boost::asio::read_until(socket, buf, '\n');
+  std::string archive_data((std::istreambuf_iterator<char>(&buf)),
+                            std::istreambuf_iterator<char>());
+  std::istringstream archive_stream(archive_data);
+  boost::archive::text_iarchive archive(archive_stream);
+  T data;
+  archive >> data;
+  return data;
+};
+
 
 #endif
