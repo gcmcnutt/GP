@@ -43,7 +43,7 @@ private:
     }
     else {
       std::string subprocess_path = extraCfg.minisimProgram;
-      std::vector<std::string> args = { std::to_string(port_) };
+      std::vector<std::string> args = { std::to_string(id), std::to_string(port_) };
       cout << "Launching: [" << id << "] " << subprocess_path << " " << port_ << endl;
 
       context.child_process = boost::process::child(

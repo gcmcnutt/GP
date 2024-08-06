@@ -1,8 +1,10 @@
 # Building autoc
 
-need libboost-all-dev
-need Eigen
-need vtk
+# on u22
+sudo apt-get update
+sudo apt-get install -y libboost-all-dev libeigen3-dev libvtk9-dev xvfb g++ cmake gdb qtbase5-dev qtchooser qt5-qmake qtbase5-dev-tools
+
+
 ...
 
 - First make sure top level GP is built

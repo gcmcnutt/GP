@@ -4,11 +4,22 @@
 
 PROGDIR=../../crsim/crrcsim-0.9.13
 PROG=build/crrcsim
-PORT=$1
+INSTANCE=$1
+PORT=$2
 CRRCSIM_LOG=autoc_crrcsim.$$.log
 
-# point to an instance of Xvfb
-export DISPLAY=:2
+# point to an instance of Xvfb for all but the first
+
+INSTANCE=99
+
+case "$INSTANCE" in
+  "0")
+    DISPLAY=:0
+    ;;
+  *)
+    DISPLAY=:2
+    ;;
+esac
 
 cd $PROGDIR
-$PROG -g autoc_config.xml -p "$PORT" -i AUTOC > $CRRCSIM_LOG 2>&1
+DISPLAY=$DISPLAY $PROG -g autoc_config.xml -p "$PORT" -i AUTOC > $CRRCSIM_LOG 2>&1
