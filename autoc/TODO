@@ -2,7 +2,6 @@
 - consider co-evolve the random paths
 - top level build script that builds debug/release
 - benchmark the impact of debug mode code
-- add general purpose logger
 - at exit need a top/cancel close function in the GUI -- sometimes race condition on render thread right now
 - turn white segment markers into arrows
 - llm fitness function evolution

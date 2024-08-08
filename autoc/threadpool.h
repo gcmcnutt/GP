@@ -13,6 +13,7 @@
 #include <atomic>
 
 #include "autoc.h"
+#include "logger.h"
 
 using namespace std;
 
@@ -39,12 +40,12 @@ private:
     tcp::acceptor acceptor_(io_service, tcp::endpoint(tcp::v4(), extraCfg.minisimPortOverride));
     unsigned short port_ = acceptor_.local_endpoint().port();
     if (extraCfg.minisimPortOverride > 0) {
-      cout << "Now manually launch sim on port " << port_ << endl;
+      *logger.info() << "Now manually launch sim on port " << port_ << endl;
     }
     else {
       std::string subprocess_path = extraCfg.minisimProgram;
       std::vector<std::string> args = { std::to_string(id), std::to_string(port_) };
-      cout << "Launching: [" << id << "] " << subprocess_path << " " << port_ << endl;
+      *logger.info() << "Launching: [" << id << "] " << subprocess_path << " " << port_ << endl;
 
       context.child_process = boost::process::child(
         subprocess_path,
