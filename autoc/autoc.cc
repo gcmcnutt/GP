@@ -23,8 +23,22 @@ From skeleton/skeleton.cc
 #include "pathgen.h"
 #include "renderer.h"
 #include "threadpool.h"
+#include "logger.h"
+
+#include <boost/log/trivial.hpp>
+#include <boost/log/sources/severity_logger.hpp>
+#include <boost/log/expressions.hpp>
+#include <boost/log/utility/setup/console.hpp>
+#include <boost/log/utility/setup/common_attributes.hpp>
+#include <boost/log/utility/setup/formatter_parser.hpp>
+#include <boost/date_time/posix_time/posix_time.hpp>
+#include <boost/log/core.hpp>
+#include <boost/log/support/date_time.hpp>
 
 using namespace std;
+namespace logging = boost::log;
+
+Logger logger;
 
 // Define configuration parameters and the neccessary array to
 // read/write the configuration to a file.  If you need more
@@ -334,7 +348,8 @@ void MyGP::evalTask(WorkerContext& context)
 {
   stdFitness = 0;
 
-  for (auto& path : renderer.generationPaths) {
+  for (int i = 0; i < renderer.generationPaths.size(); i++) {
+    auto& path = renderer.generationPaths.at(i);
     double localFitness = 0;
     std::vector<Eigen::Vector3d> planPath = std::vector<Eigen::Vector3d>();
     std::vector<Eigen::Vector3d> actualPath = std::vector<Eigen::Vector3d>();
@@ -560,6 +575,8 @@ void MyGP::evalTask(WorkerContext& context)
     }
 
     stdFitness += localFitness;
+
+    *logger.debug() << "MyGP: " << this << " path[" << i << "] complete." << endl;
   }
 
   // normalize
@@ -622,9 +639,25 @@ void newHandler()
 }
 
 
-
 int main()
 {
+  logging::add_console_log(
+    std::cout,
+    boost::log::keywords::format = (
+      boost::log::expressions::stream
+      << boost::log::expressions::format_date_time<boost::posix_time::ptime>("TimeStamp", "%Y-%m-%d %H:%M:%S")
+      << ": <" << logging::trivial::severity
+      << "> " << boost::log::expressions::smessage
+      )
+  );
+  logging::core::get()->set_filter(
+    logging::trivial::severity >= logging::trivial::info
+  );
+
+  logging::add_common_attributes();
+
+  logger = Logger();
+
   // Set up a new-handler, because we might need a lot of memory, and
   // we don't know it's there.
   set_new_handler(newHandler);
@@ -633,23 +666,23 @@ int main()
   GPInit(1, -1);
 
   // Read configuration file.
-  GPConfiguration config(cout, "autoc.ini", configArray);
+  GPConfiguration config(*logger.info(), "autoc.ini", configArray);
   renderer.extraCfg = extraCfg;
 
   // initialize workers
   threadPool = new ThreadPool(extraCfg);
 
   // Print the configuration
-  cout << cfg << endl;
-  cout << "SimNumPathsPerGen: " << extraCfg.simNumPathsPerGen << endl;
-  cout << "EvalThreads: " << extraCfg.evalThreads << endl;
-  cout << "MinisimProgram: " << extraCfg.minisimProgram << endl;
-  cout << "MinisimPortOverride: " << extraCfg.minisimPortOverride << endl << endl;
+  *logger.info() << cfg << endl;
+  *logger.info() << "SimNumPathsPerGen: " << extraCfg.simNumPathsPerGen << endl;
+  *logger.info() << "EvalThreads: " << extraCfg.evalThreads << endl;
+  *logger.info() << "MinisimProgram: " << extraCfg.minisimProgram << endl;
+  *logger.info() << "MinisimPortOverride: " << extraCfg.minisimPortOverride << endl << endl;
 
   // Create the adf function/terminal set and print it out.
   GPAdfNodeSet adfNs;
   createNodeSet(adfNs);
-  cout << adfNs << endl;
+  *logger.info() << adfNs << endl;
 
   // Open the main output file for the data and statistics file.
   // First set up names for data file.  Remember we should delete the
@@ -667,10 +700,10 @@ int main()
   renderer.generationPaths = generateSmoothPaths(extraCfg.simNumPathsPerGen, NUM_SEGMENTS_PER_PATH, SIM_PATH_BOUNDS, SIM_PATH_BOUNDS);
 
   // Create a population with this configuration
-  cout << "Creating initial population ..." << endl;
+  *logger.info() << "Creating initial population ..." << endl;
   MyPopulation* pop = new MyPopulation(cfg, adfNs);
   pop->create();
-  cout << "Ok." << endl;
+  *logger.info() << "Ok." << endl;
   pop->createGenerationReport(1, 0, fout, bout);
 
   // This next for statement is the actual genetic programming system
@@ -703,7 +736,7 @@ int main()
 
     // Create a report of this generation and how well it is doing
     if (nanDetector > 0) {
-      cout << "NanDetector count: " << nanDetector << endl;
+      *logger.warn() << "NanDetector count: " << nanDetector << endl;
     }
     pop->createGenerationReport(0, gen, fout, bout);
 
@@ -716,7 +749,7 @@ int main()
   // pop->NthMyGP(pop->bestOfPopulation)->save(bestGP);
 
   // wait for window close
-  cout << "Close window to exit." << endl;
+  *logger.info() << "Close window to exit." << endl;
   while (renderer.isRunning()) {
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
   }

@@ -85,10 +85,6 @@ std::vector<Path> generateSmoothPath(int numPoints, double radius, double height
         Path pathSegment = { interpolatedPoint, odometer, turnmeter };
         path.push_back(pathSegment);
 
-        // char output[200];
-        // pathSegment.toString(output);
-        // cout << output << endl;
-
         odometer += newDistance;
         turnmeter += dAngle;
       }
