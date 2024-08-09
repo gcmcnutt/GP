@@ -446,12 +446,15 @@ void MyGP::evalTask(WorkerContext& context)
 
       if (printEval) {
         if (printHeader) {
-          fout << "  Time Idx  totDist   pathX    pathY    pathZ        X        Y        Z       dW       dX       dY       dZ   relVel     roll    pitch    power    distP   angleP controlP\n";
+          fout << "  Time Idx  totDist   pathX    pathY    pathZ        X        Y        Z       dr       dp       dy   relVel     roll    pitch    power    distP   angleP controlP\n";
           printHeader = false;
         }
 
+        // convert aircraft_orientaton to euler
+        Eigen::Vector3d euler = aircraftState.aircraft_orientation.toRotationMatrix().eulerAngles(2, 1, 0);
+
         char outbuf[1000]; // XXX use c++20
-        sprintf(outbuf, "%06ld %3ld % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f\n",
+        sprintf(outbuf, "%06ld %3ld % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f\n",
           aircraftState.simTime, pathIndex,
           path.at(pathIndex).distanceFromStart,
           path.at(pathIndex).start[0],
@@ -460,10 +463,9 @@ void MyGP::evalTask(WorkerContext& context)
           aircraftState.position[0],
           aircraftState.position[1],
           aircraftState.position[2],
-          aircraftState.aircraft_orientation.w(),
-          aircraftState.aircraft_orientation.x(),
-          aircraftState.aircraft_orientation.y(),
-          aircraftState.aircraft_orientation.z(),
+          euler[2],
+          euler[1],
+          euler[0],
           aircraftState.dRelVel,
           aircraftState.rollCommand,
           aircraftState.pitchCommand,
