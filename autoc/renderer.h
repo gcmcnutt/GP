@@ -33,47 +33,47 @@
 #include <vtkTubeFilter.h>
 
 class Renderer : public vtkCommand {
-  public:
-    Renderer(ExtraConfig &extraCfg) : extraCfg(extraCfg) {};
+public:
+  Renderer(ExtraConfig& extraCfg) : extraCfg(extraCfg) {};
 
-    void update();
-    void start();
-    bool isRunning();
-    virtual void Execute(vtkObject* caller, unsigned long eventId, void* vtkNotUsed(callData));
-    void addPathElementList(std::vector<Path> plan, std::vector<Path> actual);
-    
-    std::recursive_mutex dataMutex;
-      
-    // the path(s) a population will attempt
-    std::vector<std::vector<Path>> generationPaths;
+  void update();
+  void start();
+  bool isRunning();
+  virtual void Execute(vtkObject* caller, unsigned long eventId, void* vtkNotUsed(callData));
+  void addPathElementList(std::vector<Path> plan, std::vector<Path> actual);
 
-    // intermediate paths and results
-    std::vector<std::vector<Path>> pathList;
-    std::vector<std::vector<Path>> actualList;
+  std::recursive_mutex dataMutex;
 
-    ExtraConfig &extraCfg;
+  // the path(s) a population will attempt
+  std::vector<std::vector<Path>> generationPaths;
 
-  private:
-    
-    // Shared resources
-    bool newDataAvailable = false;
-    bool exitFlag = false;
+  // intermediate paths and results
+  std::vector<std::vector<Path>> pathList;
+  std::vector<std::vector<Path>> actualList;
 
-    vtkSmartPointer<vtkAppendPolyData> paths;
-    vtkSmartPointer<vtkAppendPolyData> actuals;
-    vtkSmartPointer<vtkAppendPolyData> segmentGaps;
-    vtkSmartPointer<vtkAppendPolyData> planeData;
+  ExtraConfig& extraCfg;
 
-    vtkSmartPointer<vtkActor> actor1;
-    vtkSmartPointer<vtkActor> actor2;
-    vtkSmartPointer<vtkActor> actor3;
-    vtkSmartPointer<vtkActor> planeActor;
+private:
 
-    Eigen::Vector3d renderingOffset(int i); // locate a coordinate offset for our rendering screen
-    vtkSmartPointer<vtkPolyData> createPointSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> points);
-    vtkSmartPointer<vtkPolyData> createSegmentSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> start, const std::vector<Eigen::Vector3d> end);
-    std::vector<Eigen::Vector3d> pathToVector(const std::vector<Path> path);
-    void RenderInBackground(vtkSmartPointer<vtkRenderWindow> renderWindow);
+  // Shared resources
+  bool newDataAvailable = false;
+  bool exitFlag = false;
+
+  vtkSmartPointer<vtkAppendPolyData> paths;
+  vtkSmartPointer<vtkAppendPolyData> actuals;
+  vtkSmartPointer<vtkAppendPolyData> segmentGaps;
+  vtkSmartPointer<vtkAppendPolyData> planeData;
+
+  vtkSmartPointer<vtkActor> actor1;
+  vtkSmartPointer<vtkActor> actor2;
+  vtkSmartPointer<vtkActor> actor3;
+  vtkSmartPointer<vtkActor> planeActor;
+
+  Eigen::Vector3d renderingOffset(int i); // locate a coordinate offset for our rendering screen
+  vtkSmartPointer<vtkPolyData> createPointSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> points);
+  vtkSmartPointer<vtkPolyData> createSegmentSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> start, const std::vector<Eigen::Vector3d> end);
+  std::vector<Eigen::Vector3d> pathToVector(const std::vector<Path> path);
+  void RenderInBackground(vtkSmartPointer<vtkRenderWindow> renderWindow);
 };
 
 #endif
