@@ -2,37 +2,38 @@
 
 void PrintPolyDataInfo(vtkPolyData* polyData)
 {
-    vtkPoints* points = polyData->GetPoints();
-    vtkCellArray* cells = polyData->GetPolys();
-    vtkIdList* idList = vtkIdList::New();
+  vtkPoints* points = polyData->GetPoints();
+  vtkCellArray* cells = polyData->GetPolys();
+  vtkIdList* idList = vtkIdList::New();
 
-    if (points == NULL) {
-        printf("No points in the polydata\n");
-    } else {
-      printf("Number of Points: %lld\n", static_cast<long long>(points->GetNumberOfPoints()));
-      printf("Points:\n");
-      for (vtkIdType i = 0; i < points->GetNumberOfPoints(); ++i)
-      {
-          double p[3];
-          points->GetPoint(i, p);
-          printf("  Point %lld: (%f, %f, %f)\n", static_cast<long long>(i), p[0], p[1], p[2]);
-      }
-    } 
-
-    printf("Number of Cells: %lld\n", static_cast<long long>(cells->GetNumberOfCells()));
-    printf("Cells:\n");
-    cells->InitTraversal();
-    while (cells->GetNextCell(idList))
+  if (points == NULL) {
+    printf("No points in the polydata\n");
+  }
+  else {
+    printf("Number of Points: %lld\n", static_cast<long long>(points->GetNumberOfPoints()));
+    printf("Points:\n");
+    for (vtkIdType i = 0; i < points->GetNumberOfPoints(); ++i)
     {
-        printf("  Cell with %lld points: ", static_cast<long long>(idList->GetNumberOfIds()));
-        for (vtkIdType j = 0; j < idList->GetNumberOfIds(); ++j)
-        {
-            printf("%lld ", static_cast<long long>(idList->GetId(j)));
-        }
-        printf("\n");
+      double p[3];
+      points->GetPoint(i, p);
+      printf("  Point %lld: (%f, %f, %f)\n", static_cast<long long>(i), p[0], p[1], p[2]);
     }
+  }
 
-    idList->Delete();
+  printf("Number of Cells: %lld\n", static_cast<long long>(cells->GetNumberOfCells()));
+  printf("Cells:\n");
+  cells->InitTraversal();
+  while (cells->GetNextCell(idList))
+  {
+    printf("  Cell with %lld points: ", static_cast<long long>(idList->GetNumberOfIds()));
+    for (vtkIdType j = 0; j < idList->GetNumberOfIds(); ++j)
+    {
+      printf("%lld ", static_cast<long long>(idList->GetId(j)));
+    }
+    printf("\n");
+  }
+
+  idList->Delete();
 }
 
 // Function to lay out the squares
@@ -40,7 +41,7 @@ void PrintPolyDataInfo(vtkPolyData* polyData)
 Eigen::Vector3d Renderer::renderingOffset(int i) {
   // Calculate the dimension of the larger square
   int sideLength = std::ceil(std::sqrt(extraCfg.simNumPathsPerGen));
-  
+
   int row = i / sideLength;
   int col = i % sideLength;
 
@@ -101,14 +102,14 @@ void Renderer::Execute(vtkObject* caller, unsigned long eventId, void* vtkNotUse
 vtkSmartPointer<vtkPolyData> Renderer::createPointSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> points) {
   vtkSmartPointer<vtkPoints> vtp = vtkSmartPointer<vtkPoints>::New();
   for (const auto& point : points) {
-      Eigen::Vector3d rPoint = point + offset;
-      vtp->InsertNextPoint(rPoint[0], rPoint[1], rPoint[2]);
+    Eigen::Vector3d rPoint = point + offset;
+    vtp->InsertNextPoint(rPoint[0], rPoint[1], rPoint[2]);
   }
 
   vtkSmartPointer<vtkPolyLine> lines = vtkSmartPointer<vtkPolyLine>::New();
   lines->GetPointIds()->SetNumberOfIds(points.size());
   for (int i = 0; i < points.size(); ++i) {
-      lines->GetPointIds()->SetId(i, i);
+    lines->GetPointIds()->SetId(i, i);
   }
 
   vtkSmartPointer<vtkCellArray> cells = vtkSmartPointer<vtkCellArray>::New();
@@ -166,7 +167,7 @@ void Renderer::RenderInBackground(vtkSmartPointer<vtkRenderWindow> renderWindow)
 
   vtkSmartPointer<vtkRenderWindowInteractor> renderWindowInteractor = vtkSmartPointer<vtkRenderWindowInteractor>::New();
 
-    // Set the interactor style to trackball camera
+  // Set the interactor style to trackball camera
   vtkSmartPointer<vtkInteractorStyleTrackballCamera> style = vtkSmartPointer<vtkInteractorStyleTrackballCamera>::New();
   renderWindowInteractor->SetInteractorStyle(style);
   renderWindowInteractor->SetRenderWindow(renderWindow);
@@ -184,7 +185,7 @@ void Renderer::RenderInBackground(vtkSmartPointer<vtkRenderWindow> renderWindow)
 
   // Create the axis actor
   vtkSmartPointer<vtkAxesActor> axes = vtkSmartPointer<vtkAxesActor>::New();
-  
+
   // Create the orientation marker widget
   vtkSmartPointer<vtkOrientationMarkerWidget> orientationMarker = vtkSmartPointer<vtkOrientationMarkerWidget>::New();
   orientationMarker->SetOrientationMarker(axes);
@@ -198,7 +199,7 @@ void Renderer::RenderInBackground(vtkSmartPointer<vtkRenderWindow> renderWindow)
   actor1 = vtkSmartPointer<vtkActor>::New();
   actor1->GetProperty()->SetColor(colors->GetColor3d("Red").GetData());
   actor1->GetProperty()->SetPointSize(4);
-  
+
   actor2 = vtkSmartPointer<vtkActor>::New();
   actor2->GetProperty()->SetColor(colors->GetColor3d("Yellow").GetData());
   actor2->GetProperty()->SetPointSize(4);
@@ -235,10 +236,11 @@ void Renderer::RenderInBackground(vtkSmartPointer<vtkRenderWindow> renderWindow)
     // checkerboard
     for (int i = 0; i < planeSource->GetOutput()->GetNumberOfCells(); i++) {
       if (i % 2 ^ (i / 10) % 2) {
-        double rgb[4] = {255.0, 255.0, 255.0, 100.0};
+        double rgb[4] = { 255.0, 255.0, 255.0, 100.0 };
         cellData->InsertTuple(i, rgb);
-      } else {      
-        double rgb[4] = {0.0, 0.0, 0.0, 100.0};
+      }
+      else {
+        double rgb[4] = { 0.0, 0.0, 0.0, 100.0 };
         cellData->InsertTuple(i, rgb);
       }
     }

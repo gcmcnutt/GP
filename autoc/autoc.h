@@ -9,7 +9,7 @@ class ExtraConfig {
 public:
   int simNumPathsPerGen = 1;
   int evalThreads = 1;
-  std::string minisimProgram = "./build/minisim";
+  char *minisimProgram = "./build/minisim";
   unsigned short minisimPortOverride = 0;
 
   // // Custom implementation of the << operator for the extraCfg type
