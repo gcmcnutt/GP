@@ -32,31 +32,31 @@ using boost::asio::ip::tcp;
 #define SIM_TIME_STEP_MSEC (200)
 
 namespace boost {
-namespace serialization {
+  namespace serialization {
 
-// Serialization for Eigen::Vector3d
-template<class Archive>
-void serialize(Archive & ar, Eigen::Vector3d & v, const unsigned int version)
-{
-    ar & boost::serialization::make_array(v.data(), 3);
-}
+    // Serialization for Eigen::Vector3d
+    template<class Archive>
+    void serialize(Archive& ar, Eigen::Vector3d& v, const unsigned int version)
+    {
+      ar& boost::serialization::make_array(v.data(), 3);
+    }
 
-// Serialization for Eigen::Quaterniond
-template<class Archive>
-void save(Archive & ar, const Eigen::Quaterniond & q, const unsigned int version)
-{
-    ar & boost::serialization::make_array(q.coeffs().data(), 4);
-}
+    // Serialization for Eigen::Quaterniond
+    template<class Archive>
+    void save(Archive& ar, const Eigen::Quaterniond& q, const unsigned int version)
+    {
+      ar& boost::serialization::make_array(q.coeffs().data(), 4);
+    }
 
-template<class Archive>
-void load(Archive & ar, Eigen::Quaterniond & q, const unsigned int version)
-{
-    Eigen::Vector4d coeffs;
-    ar & boost::serialization::make_array(coeffs.data(), 4);
-    q = Eigen::Quaterniond(coeffs[3], coeffs[0], coeffs[1], coeffs[2]);
-}
+    template<class Archive>
+    void load(Archive& ar, Eigen::Quaterniond& q, const unsigned int version)
+    {
+      Eigen::Vector4d coeffs;
+      ar& boost::serialization::make_array(coeffs.data(), 4);
+      q = Eigen::Quaterniond(coeffs[3], coeffs[0], coeffs[1], coeffs[2]);
+    }
 
-} // namespace serialization
+  } // namespace serialization
 } // namespace boost
 
 // This macro tells boost to use the save/load functions we just defined for Quaterniond
@@ -66,7 +66,7 @@ BOOST_SERIALIZATION_SPLIT_FREE(Eigen::Quaterniond)
  * this is always sent from sim to main
  * and occasionally sent as a rest from main to sim
  */
-struct AircraftState {
+  struct AircraftState {
   double dRelVel;
   Eigen::Quaterniond aircraft_orientation;
   Eigen::Vector3d position;
@@ -76,39 +76,46 @@ struct AircraftState {
   unsigned long int simTime;
   bool simCrashed;
 
+  friend class boost::serialization::access;
+
   template<class Archive>
-  void serialize(Archive & ar, const unsigned int version) {
-    ar & dRelVel;
-    ar & aircraft_orientation;
-    ar & position;
-    ar & pitchCommand;
-    ar & rollCommand;
-    ar & throttleCommand;
-    ar & simTime;
-    ar & simCrashed;
+  void serialize(Archive& ar, const unsigned int version) {
+    ar& dRelVel;
+    ar& aircraft_orientation;
+    ar& position;
+    ar& pitchCommand;
+    ar& rollCommand;
+    ar& throttleCommand;
+    ar& simTime;
+    ar& simCrashed;
   }
+
 };
+BOOST_CLASS_VERSION(AircraftState, 1)
 
 /*
  * here we send our control signals to the aircraft
  */
-struct ControlSignal {
+  struct ControlSignal {
   double pitchCommand;
   double rollCommand;
   double throttleCommand;
 
+  friend class boost::serialization::access;
+
   template<class Archive>
-  void serialize(Archive & ar, const unsigned int version) {
-    ar & pitchCommand;
-    ar & rollCommand;
-    ar & throttleCommand;
+  void serialize(Archive& ar, const unsigned int version) {
+    ar& pitchCommand;
+    ar& rollCommand;
+    ar& throttleCommand;
   }
 };
+BOOST_CLASS_VERSION(ControlSignal, 1)
 
 /*
  * generic command from sim to main
  */
-enum class ControlType {
+  enum class ControlType {
   CONTROL_SIGNAL,
   AIRCRAFT_STATE
 };
@@ -119,6 +126,8 @@ struct MainToSim {
     ControlSignal controlSignal;
     AircraftState aircraftState;
   };
+
+  friend class boost::serialization::access;
 
   // Default constructor
   MainToSim() : controlType(ControlType::CONTROL_SIGNAL), controlSignal() {}
@@ -139,7 +148,8 @@ struct MainToSim {
   ~MainToSim() {
     if (controlType == ControlType::CONTROL_SIGNAL) {
       controlSignal.~ControlSignal();
-    } else if (controlType == ControlType::AIRCRAFT_STATE) {
+    }
+    else if (controlType == ControlType::AIRCRAFT_STATE) {
       aircraftState.~AircraftState();
     }
   }
@@ -148,7 +158,8 @@ struct MainToSim {
   MainToSim(const MainToSim& other) : controlType(other.controlType) {
     if (controlType == ControlType::CONTROL_SIGNAL) {
       new (&controlSignal) ControlSignal(other.controlSignal);
-    } else if (controlType == ControlType::AIRCRAFT_STATE) {
+    }
+    else if (controlType == ControlType::AIRCRAFT_STATE) {
       new (&aircraftState) AircraftState(other.aircraftState);
     }
   }
@@ -157,7 +168,8 @@ struct MainToSim {
   MainToSim(MainToSim&& other) noexcept : controlType(other.controlType) {
     if (controlType == ControlType::CONTROL_SIGNAL) {
       new (&controlSignal) ControlSignal(std::move(other.controlSignal));
-    } else if (controlType == ControlType::AIRCRAFT_STATE) {
+    }
+    else if (controlType == ControlType::AIRCRAFT_STATE) {
       new (&aircraftState) AircraftState(std::move(other.aircraftState));
     }
   }
@@ -181,24 +193,26 @@ struct MainToSim {
   }
 
   template<class Archive>
-  void serialize(Archive & ar, const unsigned int version) {
-    ar & controlType;
+  void serialize(Archive& ar, const unsigned int version) {
+    ar& controlType;
     switch (controlType) {
-      case ControlType::CONTROL_SIGNAL:
-        ar & controlSignal;
-        break;
-      case ControlType::AIRCRAFT_STATE:
-        ar & aircraftState;
-        break;
+    case ControlType::CONTROL_SIGNAL:
+      ar& controlSignal;
+      break;
+    case ControlType::AIRCRAFT_STATE:
+      ar& aircraftState;
+      break;
     }
   }
 };
+
+BOOST_CLASS_VERSION(MainToSim, 1)
 
 
 /*
  * generic RPC wrappers
  */
-template<typename T>
+  template<typename T>
 void sendRPC(tcp::socket& socket, const T& data) {
   std::ostringstream archive_stream;
   boost::archive::text_oarchive archive(archive_stream);
@@ -212,7 +226,7 @@ T receiveRPC(tcp::socket& socket) {
   boost::asio::streambuf buf;
   boost::asio::read_until(socket, buf, '\n');
   std::string archive_data((std::istreambuf_iterator<char>(&buf)),
-                            std::istreambuf_iterator<char>());
+    std::istreambuf_iterator<char>());
   std::istringstream archive_stream(archive_data);
   boost::archive::text_iarchive archive(archive_stream);
   T data;
