@@ -82,7 +82,7 @@ std::vector<Path> generateSmoothPath(int numPoints, double radius, double height
         double dAngle = std::acos(std::clamp(dVector / (lastDirection.norm() * newDirection.norm()), -1.0, 1.0));
 
         // add next segment            
-        Path pathSegment = { interpolatedPoint, odometer, turnmeter };
+        Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), odometer, turnmeter };
         path.push_back(pathSegment);
 
         odometer += newDistance;

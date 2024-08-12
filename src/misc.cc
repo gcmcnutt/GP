@@ -31,7 +31,7 @@ Germany
 E-mail: thomasw@emk.e-technik.th-darmstadt.de
 WWW:    http://www.emk.e-technik.th-darmstadt/~thomasw
 
-  or 
+  or
 
 (Address may be out of date)
 Adam Fraser, Postgraduate Section, Dept of Elec & Elec Eng,
@@ -58,20 +58,20 @@ using namespace std;
 
 
 // Version number
-char *GPVersion="0.5.2";
+char* GPVersion = "0.5.2";
 
 
 
 // Print copyright message
-void GPPrintCopyright (ostream& os)
+void GPPrintCopyright(ostream& os)
 {
-  os << "Genetic Programming Kernel in C++ (gpc++) version " 
-     << GPVersion << 
+  os << "Genetic Programming Kernel in C++ (gpc++) version "
+    << GPVersion <<
     "\nCopyright (C) 1993,1994 Adam Fraser, 1996,1997 Thomas Weinbrenner\n" \
     "gpc++ comes with ABSOLUTELY NO WARRANTY. This is free software,\n" \
     "and you are welcome to redistribute it under certain conditions.\n" \
     "See the GNU General Public Licence for details."
-     << endl;
+    << endl;
 }
 
 
@@ -81,21 +81,21 @@ void GPPrintCopyright (ostream& os)
 // rather should occur) only if the user gives us wrong parameter
 // values etc., but on some rare occasions an error indicates an
 // internal program error.
-void GPExitSystem (char *functionName, char *errorMessage)
+void GPExitSystem(char* functionName, char* errorMessage)
 {
-  cerr << "\n\nThe GP Kernel reports an error:\n" 
-       << "===> In Function \"" << functionName << "\"" << endl
-       << "===> \"" << errorMessage << "\"" 
-       << "\n";
-  GPPrintCopyright (cerr);
+  cerr << "\n\nThe GP Kernel reports an error:\n"
+    << "===> In Function \"" << functionName << "\"" << endl
+    << "===> \"" << errorMessage << "\""
+    << "\n";
+  GPPrintCopyright(cerr);
 
 #if GPCREATE_SEGMENTATIONFAULT_ON_ERROR
   cerr << "\nCreating segmentation fault for debugging..." << endl;
-  int* g=0;
+  int* g = 0;
   cerr << *g;
 #endif
 
-  exit (EXIT_FAILURE);
+  exit(EXIT_FAILURE);
 }
 
 
@@ -103,18 +103,23 @@ void GPExitSystem (char *functionName, char *errorMessage)
 // Initialize GP programming system.  If seedRandomGenerator==-1, seed
 // with the value of time(), otherwise with the value of
 // seedRandomGenerator
-void GPInit (int printCopyright, long seedRandomGenerator)
+void GPInit(ostream& log, int printCopyright, long seedRandomGenerator)
 {
   // Intro screen
   if (printCopyright)
-    GPPrintCopyright (cout);
+    GPPrintCopyright(log);
 
   // seeds random numbers
-  if (seedRandomGenerator==-1)
-    GPsrand (time (NULL));
+  if (seedRandomGenerator == -1)
+    GPsrand(time(NULL));
   else
-    GPsrand (seedRandomGenerator);
+    GPsrand(seedRandomGenerator);
 
   // Register kernel classes for load/save
-  GPRegisterKernelClasses ();
+  GPRegisterKernelClasses();
+}
+
+void GPInit(int printCopyright, long seedRandomGenerator)
+{
+  GPInit(cout, printCopyright, seedRandomGenerator);
 }

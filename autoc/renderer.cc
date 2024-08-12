@@ -69,11 +69,7 @@ void Renderer::Execute(vtkObject* caller, unsigned long eventId, void* vtkNotUse
     mapper1->SetInputConnection(tubeFilter1->GetOutputPort());
 
     vtkSmartPointer<vtkPolyDataMapper> mapper2 = vtkSmartPointer<vtkPolyDataMapper>::New();
-    vtkSmartPointer<vtkTubeFilter> tubeFilter2 = vtkSmartPointer<vtkTubeFilter>::New();
-    tubeFilter2->SetInputConnection(actuals->GetOutputPort());
-    tubeFilter2->SetRadius(0.3);
-    tubeFilter2->SetNumberOfSides(10);
-    mapper2->SetInputConnection(tubeFilter2->GetOutputPort());
+    mapper2->SetInputConnection(actuals->GetOutputPort());
 
     vtkSmartPointer<vtkPolyDataMapper> mapper3 = vtkSmartPointer<vtkPolyDataMapper>::New();
     vtkSmartPointer<vtkTubeFilter> tubeFilter3 = vtkSmartPointer<vtkTubeFilter>::New();
@@ -86,6 +82,37 @@ void Renderer::Execute(vtkObject* caller, unsigned long eventId, void* vtkNotUse
     actor1->SetMapper(mapper1);
     actor2->SetMapper(mapper2);
     actor3->SetMapper(mapper3);
+
+    // Set properties for the tape (actor2)
+    vtkProperty* property = actor2->GetProperty();
+
+    // Enable double-sided surface rendering
+    property->SetLighting(true);
+    property->SetInterpolation(VTK_FLAT);
+    property->SetBackfaceCulling(false);
+    property->SetFrontfaceCulling(false);
+
+    // Set different colors for front and back faces
+    property->SetColor(1.0, 1.0, 0.0);  // Yellow for front face (top)
+    property->SetAmbient(0.1);
+    property->SetDiffuse(0.8);
+    property->SetSpecular(0.1);
+    property->SetSpecularPower(10);
+
+    // Set opacity to 1 (fully opaque)
+    property->SetOpacity(1.0);
+
+    // Create a new property for the back face
+    vtkSmartPointer<vtkProperty> backProperty = vtkSmartPointer<vtkProperty>::New();
+    backProperty->SetColor(0.0, 1.0, 1.0);  // Blue for back face (bottom)
+    backProperty->SetAmbient(0.1);
+    backProperty->SetDiffuse(0.8);
+    backProperty->SetSpecular(0.1);
+    backProperty->SetSpecularPower(10);
+    backProperty->SetOpacity(1.0);
+
+    // Set the back face property
+    actor2->SetBackfaceProperty(backProperty);
 
     // render
     vtkRenderWindowInteractor* iren = static_cast<vtkRenderWindowInteractor*>(caller);
@@ -151,6 +178,45 @@ vtkSmartPointer<vtkPolyData> Renderer::createSegmentSet(Eigen::Vector3d offset, 
   polyData->SetLines(lines);
 
   return polyData;
+}
+
+/*
+ ** actual data is rendered as a tape with a top and bottom
+ */
+vtkSmartPointer<vtkPolyData> Renderer::createTapeSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> points,
+  const std::vector<Eigen::Vector3d> normals) {
+  vtkSmartPointer<vtkPoints> vtp = vtkSmartPointer<vtkPoints>::New();
+  vtkSmartPointer<vtkCellArray> lines = vtkSmartPointer<vtkCellArray>::New();
+  vtkSmartPointer<vtkDoubleArray> orientations = vtkSmartPointer<vtkDoubleArray>::New();
+  orientations->SetNumberOfComponents(3);
+  orientations->SetName("Orientations");
+
+  vtkSmartPointer<vtkPolyLine> polyLine = vtkSmartPointer<vtkPolyLine>::New();
+  polyLine->GetPointIds()->SetNumberOfIds(points.size());
+
+  for (size_t i = 0; i < points.size(); ++i) {
+    Eigen::Vector3d point = points[i] + offset;
+    vtp->InsertNextPoint(point[0], point[1], point[2]);
+    polyLine->GetPointIds()->SetId(i, i);
+
+    // Use the path's orientation as the normal for the ribbon
+    orientations->InsertNextTuple(normals[i].data());
+  }
+
+  lines->InsertNextCell(polyLine);
+
+  vtkSmartPointer<vtkPolyData> polyData = vtkSmartPointer<vtkPolyData>::New();
+  polyData->SetPoints(vtp);
+  polyData->SetLines(lines);
+  polyData->GetPointData()->SetNormals(orientations);
+
+  // Create a ribbon filter
+  vtkSmartPointer<vtkRibbonFilter> ribbonFilter = vtkSmartPointer<vtkRibbonFilter>::New();
+  ribbonFilter->SetInputData(polyData);
+  ribbonFilter->SetWidth(0.5);
+  ribbonFilter->Update();
+
+  return ribbonFilter->GetOutput();
 }
 
 void Renderer::addPathElementList(std::vector<Path> plan, std::vector<Path> actual) {
@@ -287,6 +353,14 @@ std::vector<Eigen::Vector3d> Renderer::pathToVector(std::vector<Path> path) {
   return points;
 }
 
+std::vector<Eigen::Vector3d> Renderer::pathToOrientation(std::vector<Path> path) {
+  std::vector<Eigen::Vector3d> points;
+  for (const auto& p : path) {
+    points.push_back(p.orientation);
+  }
+  return points;
+}
+
 void Renderer::update() {
   std::lock_guard<std::recursive_mutex> lock(dataMutex);
   this->paths = vtkSmartPointer<vtkAppendPolyData>::New();
@@ -303,7 +377,7 @@ void Renderer::update() {
 
     // actuals
     std::vector<Eigen::Vector3d> a = pathToVector(actualList[i]);
-    this->actuals->AddInputData(createPointSet(offset, a));
+    this->actuals->AddInputData(createTapeSet(offset, a, pathToOrientation(actualList[i])));
     this->actuals->Update();
 
     // segment gaps

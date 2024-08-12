@@ -31,7 +31,7 @@ Germany
 E-mail: thomasw@emk.e-technik.th-darmstadt.de
 WWW:    http://www.emk.e-technik.th-darmstadt/~thomasw
 
-  or 
+  or
 
 (Address may be out of date)
 Adam Fraser, Postgraduate Section, Dept of Elec & Elec Eng,
@@ -52,65 +52,65 @@ Fax:    (UK) 061 745 5999
 using namespace std;
 
 // Prints out the complete population
-void GPPopulation::printOn (ostream& os)
+void GPPopulation::printOn(ostream& os)
 {
-  for (int n=0; n<containerSize(); n++)
-    {
-      GP* current=NthGP (n);
-      if (current)
-	os << *current << endl;
-      else 
-	os << "(NULL)" << endl;
-    }
+  for (int n = 0; n < containerSize(); n++)
+  {
+    GP* current = NthGP(n);
+    if (current)
+      os << *current << endl;
+    else
+      os << "(NULL)" << endl;
+  }
 }
 
 
 
 // Output all the data found in a generation....
-void GPPopulation::createGenerationReport (int printLegend, int generation, 
-					   ostream& fout, ostream& bout)
+void GPPopulation::createGenerationReport(int printLegend, int generation,
+  ostream& fout, ostream& bout, ostream& log)
 {
   if (printLegend)
-    {
-      cout << "Gen|       Fitness     |      Length       |   Depth\n"
-	   << "   |  Best|Avg.|Worst  |  Best|Avg.|Worst  |  Best|Avg.|Worst\n";
-      bout << "#Gen|       Fitness     |      Length       |   Depth\n"
-	   << "#   |  Best|Avg.|Worst  |  Best|Avg.|Worst  |  Best|Avg.|Worst\n";
-    }
-  bout << generation 
-       << ' ' << NthGP(bestOfPopulation)->stdFitness 
-       << ' ' << avgFitness
-       << ' ' << NthGP(worstOfPopulation)->stdFitness 
-       << "    "
-       << ' ' << NthGP(bestOfPopulation)->length ()
-       << ' ' << avgLength
-       << ' ' << NthGP(worstOfPopulation)->length ()
-       << "    "
-       << ' ' << NthGP(bestOfPopulation)->depth ()
-       << ' ' << avgDepth
-       << ' ' << NthGP(worstOfPopulation)->depth ()
-       << endl;
-  cout << generation 
-       << ' ' << NthGP(bestOfPopulation)->stdFitness 
-       << ' ' << avgFitness
-       << ' ' << NthGP(worstOfPopulation)->stdFitness 
-       << "    "
-       << ' ' << NthGP(bestOfPopulation)->length ()
-       << ' ' << avgLength
-       << ' ' << NthGP(worstOfPopulation)->length ()
-       << "    "
-       << ' ' << NthGP(bestOfPopulation)->depth ()
-       << ' ' << avgDepth
-       << ' ' << NthGP(worstOfPopulation)->depth ()
-       << endl;
+  {
+    log << "Gen|       Fitness     |      Length       |   Depth\n"
+      << "   |  Best|Avg.|Worst  |  Best|Avg.|Worst  |  Best|Avg.|Worst\n";
+    bout << "#Gen|       Fitness     |      Length       |   Depth\n"
+      << "#   |  Best|Avg.|Worst  |  Best|Avg.|Worst  |  Best|Avg.|Worst\n";
+  }
+  bout << generation
+    << ' ' << NthGP(bestOfPopulation)->stdFitness
+    << ' ' << avgFitness
+    << ' ' << NthGP(worstOfPopulation)->stdFitness
+    << "    "
+    << ' ' << NthGP(bestOfPopulation)->length()
+    << ' ' << avgLength
+    << ' ' << NthGP(worstOfPopulation)->length()
+    << "    "
+    << ' ' << NthGP(bestOfPopulation)->depth()
+    << ' ' << avgDepth
+    << ' ' << NthGP(worstOfPopulation)->depth()
+    << endl;
+  log << generation
+    << ' ' << NthGP(bestOfPopulation)->stdFitness
+    << ' ' << avgFitness
+    << ' ' << NthGP(worstOfPopulation)->stdFitness
+    << "    "
+    << ' ' << NthGP(bestOfPopulation)->length()
+    << ' ' << avgLength
+    << ' ' << NthGP(worstOfPopulation)->length()
+    << "    "
+    << ' ' << NthGP(bestOfPopulation)->depth()
+    << ' ' << avgDepth
+    << ' ' << NthGP(worstOfPopulation)->depth()
+    << endl;
 
   // Place the best of generation in output files
-  fout << "Best of generation " << generation 
-       << " (Fitness = " << NthGP (bestOfPopulation)->stdFitness 
-       << ", Structural Complexity = " << NthGP (bestOfPopulation)->length () 
-       << ")" << endl 
-       << *NthGP (bestOfPopulation)
-       << endl;
+  fout << "Best of generation " << generation
+    << " (Fitness = " << NthGP(bestOfPopulation)->stdFitness
+    << ", Structural Complexity = " << NthGP(bestOfPopulation)->length()
+    << ")" << endl
+    << *NthGP(bestOfPopulation)
+    << endl;
 }
 
 
@@ -121,9 +121,9 @@ double GPPopulation::totalFitness()
   // Loop through whole population
   GP* current;
   double sum = 0;
-  for (int n=0; n<containerSize(); n++)
-    if ((current=NthGP (n)))
-      sum+=current->stdFitness;  
+  for (int n = 0; n < containerSize(); n++)
+    if ((current = NthGP(n)))
+      sum += current->stdFitness;
 
   // return result
   return sum;
@@ -137,9 +137,9 @@ long GPPopulation::totalLength()
   // move through population adding up lengths
   long sum = 0;
   GP* current;
-  for (int n=0; n<containerSize(); n++)
-    if ((current=NthGP (n)))
-      sum+=current->length ();
+  for (int n = 0; n < containerSize(); n++)
+    if ((current = NthGP(n)))
+      sum += current->length();
 
   // return result
   return sum;
@@ -152,10 +152,10 @@ long GPPopulation::totalDepth()
 {
   // move through population adding up depths
   GP* current;
-  long sum=0;
-  for (int n=0; n<containerSize(); n++)
-    if ((current=NthGP (n)))
-      sum+=current->depth();
+  long sum = 0;
+  for (int n = 0; n < containerSize(); n++)
+    if ((current = NthGP(n)))
+      sum += current->depth();
 
   // return result
   return sum;
@@ -165,47 +165,47 @@ long GPPopulation::totalDepth()
 
 // Resolve the pointers to the nodes, for each tree.  Must be done
 // every time after a load()
-void GPPopulation::setNodeSets (GPAdfNodeSet& adfNs_)
+void GPPopulation::setNodeSets(GPAdfNodeSet& adfNs_)
 {
   // Set object variable
-  adfNs=&adfNs_;
+  adfNs = &adfNs_;
 
   // Every GP has to be informed about the new node sets.  Most
   // important: Each GP is converting the node values to pointer to
   // nodes
   GP* current;
-  for (int n=0; n<containerSize(); n++)
-    if ((current=NthGP (n)))
-      current->resolveNodeValues (*adfNs);
+  for (int n = 0; n < containerSize(); n++)
+    if ((current = NthGP(n)))
+      current->resolveNodeValues(*adfNs);
 }
 
 
 
 // Load operation
-char* GPPopulation::load (istream& is)
+char* GPPopulation::load(istream& is)
 {
   // Load GPVariables
-  char* errMsg=GPVar.load (is);
+  char* errMsg = GPVar.load(is);
   if (errMsg) return errMsg;
 
   // Load container
-  errMsg=GPContainer::load (is);
+  errMsg = GPContainer::load(is);
   if (errMsg) return errMsg;
 
   // We don't need to save all parameters, some can be calculated
   // after the population has been loaded
-  calculateStatistics ();
+  calculateStatistics();
   return NULL;
 }
 
 
 
 // Save operation
-void GPPopulation::save (ostream& os)
+void GPPopulation::save(ostream& os)
 {
   // Save GPVariables
-  GPVar.save (os);
+  GPVar.save(os);
 
   // Save container
-  GPContainer::save (os);
+  GPContainer::save(os);
 }

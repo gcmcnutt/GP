@@ -12,6 +12,7 @@
 class Path {
 public:
   Eigen::Vector3d start;
+  Eigen::Vector3d orientation;
   double distanceFromStart;
   double radiansFromStart;
 

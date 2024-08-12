@@ -26,9 +26,9 @@ using boost::asio::ip::tcp;
 #define SIM_INITIAL_LOCATION_DITHER 30.0
 #define SIM_PATH_BOUNDS 40.0
 #define SIM_PATH_RADIUS_LIMIT 60.0
-#define SIM_MIN_ELEVATION -3.0
+#define SIM_MIN_ELEVATION -7.0
 
-#define SIM_TOTAL_TIME_MSEC (50 * 1000)
+#define SIM_TOTAL_TIME_MSEC (30 * 1000)
 #define SIM_TIME_STEP_MSEC (200)
 
 namespace boost {

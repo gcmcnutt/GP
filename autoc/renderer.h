@@ -31,6 +31,9 @@
 #include <vtkLine.h>
 #include <vtkAppendPolyData.h>
 #include <vtkTubeFilter.h>
+#include <vtkRibbonFilter.h>
+#include <vtkDoubleArray.h>
+#include <vtkPointData.h>
 
 class Renderer : public vtkCommand {
 public:
@@ -72,7 +75,10 @@ private:
   Eigen::Vector3d renderingOffset(int i); // locate a coordinate offset for our rendering screen
   vtkSmartPointer<vtkPolyData> createPointSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> points);
   vtkSmartPointer<vtkPolyData> createSegmentSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> start, const std::vector<Eigen::Vector3d> end);
+  vtkSmartPointer<vtkPolyData> createTapeSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> points,
+    const std::vector<Eigen::Vector3d> normals);
   std::vector<Eigen::Vector3d> pathToVector(const std::vector<Path> path);
+  std::vector<Eigen::Vector3d> pathToOrientation(const std::vector<Path> path);
   void RenderInBackground(vtkSmartPointer<vtkRenderWindow> renderWindow);
 };
 

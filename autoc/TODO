@@ -1,9 +1,7 @@
-- figure out how to have directional icon (little triange) on the path -- and or have the actual path be a strip of paper oriented correctly according to z axis
 - consider co-evolve the random paths
 - top level build script that builds debug/release
 - benchmark the impact of debug mode code
 - at exit need a top/cancel close function in the GUI -- sometimes race condition on render thread right now
-- turn white segment markers into arrows
 - llm fitness function evolution
 - try to simplify the eval tree by passing a class reference instead of N args
 - need a way to dump progress for replays
@@ -26,4 +24,6 @@
 - split out evaluator to be standalone in prep for onboard execution
 - figure out how to use crrcsim robots to form lead plane
 - more accurate hb1 model
-- can crrcsim run at sim time, not real time?
+- we only some times need path.orientation -- maybe split this out of Path
+- RibbonFilter complains on early crash scenarios (e.g. where loc doesn't reset)
+- Clamp AircraftState values, make variables private, use accessors

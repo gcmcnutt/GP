@@ -251,9 +251,9 @@ double MyGene::evaluate(std::vector<Path>& path, MyGP& run, double arg)
   case IF: returnValue = NthMyChild(0)->evaluate(path, run, arg) ? NthMyChild(1)->evaluate(path, run, arg) : NthMyChild(2)->evaluate(path, run, arg); break;
   case EQ: returnValue = NthMyChild(0)->evaluate(path, run, arg) == NthMyChild(1)->evaluate(path, run, arg); break;
   case GT: returnValue = NthMyChild(0)->evaluate(path, run, arg) > NthMyChild(1)->evaluate(path, run, arg); break;
-  case SETPITCH: returnValue = run.aircraftState.pitchCommand = NthMyChild(0)->evaluate(path, run, arg); break;
-  case SETROLL: returnValue = run.aircraftState.rollCommand = NthMyChild(0)->evaluate(path, run, arg); break;
-  case SETTHROTTLE: returnValue = run.aircraftState.throttleCommand = NthMyChild(0)->evaluate(path, run, arg); break;
+  case SETPITCH: returnValue = run.aircraftState.pitchCommand = std::clamp(NthMyChild(0)->evaluate(path, run, arg), -1.0, 1.0); break;
+  case SETROLL: returnValue = run.aircraftState.rollCommand = std::clamp(NthMyChild(0)->evaluate(path, run, arg), -1.0, 1.0); break;
+  case SETTHROTTLE: returnValue = run.aircraftState.throttleCommand = std::clamp(NthMyChild(0)->evaluate(path, run, arg), -1.0, 1.0); break;
   case GETPITCH: returnValue = run.aircraftState.pitchCommand; break;
   case GETROLL: returnValue = run.aircraftState.rollCommand; break;
   case GETTHROTTLE: returnValue = run.aircraftState.throttleCommand; break;
@@ -353,6 +353,7 @@ void MyGP::evalTask(WorkerContext& context)
     double localFitness = 0;
     std::vector<Eigen::Vector3d> planPath = std::vector<Eigen::Vector3d>();
     std::vector<Eigen::Vector3d> actualPath = std::vector<Eigen::Vector3d>();
+    std::vector<Eigen::Vector3d> actualOrientation = std::vector<Eigen::Vector3d>();
 
     // deal with pre.path on the initial eval..
     if (path.size() == 0) {
@@ -371,6 +372,14 @@ void MyGP::evalTask(WorkerContext& context)
       initialPosition = Eigen::Vector3d((((double)GPrand() / RAND_MAX) - 0.5) * SIM_INITIAL_LOCATION_DITHER,
         (((double)GPrand() / RAND_MAX) - 0.5) * SIM_INITIAL_LOCATION_DITHER,
         SIM_INITIAL_ALTITUDE - ((double)GPrand() / RAND_MAX) * SIM_INITIAL_LOCATION_DITHER);
+
+      // // override orientation of aircraft to be upright and level
+      // aircraft_orientation = Eigen::Quaterniond(Eigen::AngleAxisd(0, Eigen::Vector3d::UnitZ())) *
+      //   Eigen::Quaterniond(Eigen::AngleAxisd(0, Eigen::Vector3d::UnitY())) *
+      //   Eigen::Quaterniond(Eigen::AngleAxisd(0, Eigen::Vector3d::UnitX()));
+
+      // // override position of aircraft to be at the origin
+      // initialPosition = Eigen::Vector3d(0, 0, SIM_INITIAL_ALTITUDE);
     }
 
     // wait for generic request (we ignore)
@@ -479,6 +488,9 @@ void MyGP::evalTask(WorkerContext& context)
         // now update points for Renderer
         planPath.push_back(path.at(pathIndex).start); // XXX push the full path
         actualPath.push_back(aircraftState.position);
+
+        // negative here as world up is negative Z
+        actualOrientation.push_back(aircraftState.aircraft_orientation * -Eigen::Vector3d::UnitZ());
       }
 
       distance_error_sum += pow(distanceFromGoal, FITNESS_DISTANCE_WEIGHT);
@@ -561,19 +573,22 @@ void MyGP::evalTask(WorkerContext& context)
     if (printEval) {
       // now update actual list of lists
       std::vector<Path> actualElementList;
-      for (auto& actualElement : actualPath) {
-        actualElementList.push_back({ actualElement, 0 });
+      for (int i = 0; i < actualPath.size(); i++) {
+        Eigen::Vector3d path = actualPath.at(i);
+        Eigen::Vector3d orientation = actualOrientation.at(i);
+        actualElementList.push_back({ path, orientation, 0, 0 });
       }
 
       // now update plan list of lists
       std::vector<Path> planElementList;
       for (auto& planElement : planPath) {
-        planElementList.push_back({ planElement, 0 });
+        planElementList.push_back({ planElement, Eigen::Vector3d::UnitX(), 0, 0 });
       }
       renderer.addPathElementList(planElementList, actualElementList);
 
       planPath.clear();
       actualPath.clear();
+      actualOrientation.clear();
     }
 
     stdFitness += localFitness;
@@ -706,7 +721,7 @@ int main()
   MyPopulation* pop = new MyPopulation(cfg, adfNs);
   pop->create();
   *logger.info() << "Ok." << endl;
-  pop->createGenerationReport(1, 0, fout, bout);
+  pop->createGenerationReport(1, 0, fout, bout, *logger.info());
 
   // This next for statement is the actual genetic programming system
   // which is in essence just repeated reproduction and crossover loop
@@ -740,7 +755,7 @@ int main()
     if (nanDetector > 0) {
       *logger.warn() << "NanDetector count: " << nanDetector << endl;
     }
-    pop->createGenerationReport(0, gen, fout, bout);
+    pop->createGenerationReport(0, gen, fout, bout, *logger.info());
 
     // sleep a bit
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
