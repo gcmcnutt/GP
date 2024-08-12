@@ -389,6 +389,10 @@ void MyGP::evalTask(WorkerContext& context)
     aircraftState = AircraftState{ SIM_INITIAL_VELOCITY, aircraft_orientation, initialPosition, 0.0, 0.0, SIM_INITIAL_THROTTLE, 0, false };
     sendRPC(*context.socket, MainToSim{ ControlType::AIRCRAFT_STATE, AircraftState{aircraftState} });
 
+    // hmm, try one more cycle to ensure the sim is ready
+    receiveRPC<AircraftState>(*context.socket);
+    sendRPC(*context.socket, MainToSim{ ControlType::AIRCRAFT_STATE, AircraftState{aircraftState} });
+
     // iterate the simulator
     unsigned long int duration_msec = 0; // how long have we been running
     pathIndex = 0; // where are we on the path?
