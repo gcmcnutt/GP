@@ -146,13 +146,13 @@ public:
       switch (mainToSim.controlType) {
         // here we get a reset from the main controller, just update local state (reset, etc)
       case ControlType::AIRCRAFT_STATE:
-        aircraft.dRelVel = mainToSim.aircraftState.dRelVel;
-        aircraft.aircraft_orientation = mainToSim.aircraftState.aircraft_orientation;
-        aircraft.position = mainToSim.aircraftState.position;
-        aircraft.setPitchCommand(mainToSim.aircraftState.pitchCommand);
-        aircraft.setRollCommand(mainToSim.aircraftState.rollCommand);
-        aircraft.setThrottleCommand(mainToSim.aircraftState.throttleCommand);
-        simTime = mainToSim.aircraftState.simTime;
+        aircraft.dRelVel = mainToSim.aircraftState.getRelVel();
+        aircraft.aircraft_orientation = mainToSim.aircraftState.getOrientation();
+        aircraft.position = mainToSim.aircraftState.getPosition();
+        aircraft.setPitchCommand(mainToSim.aircraftState.getPitchCommand());
+        aircraft.setRollCommand(mainToSim.aircraftState.getRollCommand());
+        aircraft.setThrottleCommand(mainToSim.aircraftState.getThrottleCommand());
+        simTime = mainToSim.aircraftState.getSimTime();
         simCrashed = false;
         break;
 
@@ -168,13 +168,13 @@ public:
         simTime += SIM_TIME_STEP_MSEC;
 
         // send our updated state to evaluator
-        aircraftState.dRelVel = aircraft.dRelVel;
-        aircraftState.aircraft_orientation = aircraft.aircraft_orientation;
-        aircraftState.position = aircraft.position;
-        aircraftState.pitchCommand = aircraft.getPitchCommand();
-        aircraftState.rollCommand = aircraft.getRollCommand();
-        aircraftState.throttleCommand = aircraft.getThrottleCommand();
-        aircraftState.simTime = simTime;
+        aircraftState.setRelVel(aircraft.dRelVel);
+        aircraftState.setOrientation(aircraft.aircraft_orientation);
+        aircraftState.setPosition(aircraft.position);
+        aircraftState.setPitchCommand(aircraft.getPitchCommand());
+        aircraftState.setRollCommand(aircraft.getRollCommand());
+        aircraftState.setThrottleCommand(aircraft.getThrottleCommand());
+        aircraftState.setSimTime(simTime);
 
         // for now simulate a simulator detected crash
         if (aircraft.position[2] > SIM_MIN_ELEVATION) {

@@ -25,5 +25,5 @@
 - figure out how to use crrcsim robots to form lead plane
 - more accurate hb1 model
 - we only some times need path.orientation -- maybe split this out of Path
-- RibbonFilter complains on early crash scenarios (e.g. where loc doesn't reset)
-- Clamp AircraftState values, make variables private, use accessors
+- Still getting thermal infinite loops on ARM -- at load -- feels cpu use is 2x the x86 laptop too...
+- 30fps 2x speed and 200msec update ask winds up being more like 250msec update -- need to figure out why

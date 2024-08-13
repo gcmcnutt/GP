@@ -251,12 +251,12 @@ double MyGene::evaluate(std::vector<Path>& path, MyGP& run, double arg)
   case IF: returnValue = NthMyChild(0)->evaluate(path, run, arg) ? NthMyChild(1)->evaluate(path, run, arg) : NthMyChild(2)->evaluate(path, run, arg); break;
   case EQ: returnValue = NthMyChild(0)->evaluate(path, run, arg) == NthMyChild(1)->evaluate(path, run, arg); break;
   case GT: returnValue = NthMyChild(0)->evaluate(path, run, arg) > NthMyChild(1)->evaluate(path, run, arg); break;
-  case SETPITCH: returnValue = run.aircraftState.pitchCommand = std::clamp(NthMyChild(0)->evaluate(path, run, arg), -1.0, 1.0); break;
-  case SETROLL: returnValue = run.aircraftState.rollCommand = std::clamp(NthMyChild(0)->evaluate(path, run, arg), -1.0, 1.0); break;
-  case SETTHROTTLE: returnValue = run.aircraftState.throttleCommand = std::clamp(NthMyChild(0)->evaluate(path, run, arg), -1.0, 1.0); break;
-  case GETPITCH: returnValue = run.aircraftState.pitchCommand; break;
-  case GETROLL: returnValue = run.aircraftState.rollCommand; break;
-  case GETTHROTTLE: returnValue = run.aircraftState.throttleCommand; break;
+  case SETPITCH: returnValue = run.aircraftState.setPitchCommand(NthMyChild(0)->evaluate(path, run, arg)); break;
+  case SETROLL: returnValue = run.aircraftState.setRollCommand(NthMyChild(0)->evaluate(path, run, arg)); break;
+  case SETTHROTTLE: returnValue = run.aircraftState.setThrottleCommand(NthMyChild(0)->evaluate(path, run, arg)); break;
+  case GETPITCH: returnValue = run.aircraftState.getPitchCommand(); break;
+  case GETROLL: returnValue = run.aircraftState.getRollCommand(); break;
+  case GETTHROTTLE: returnValue = run.aircraftState.getThrottleCommand(); break;
   case SIN: returnValue = sin(NthMyChild(0)->evaluate(path, run, arg)); break;
   case COS: returnValue = cos(NthMyChild(0)->evaluate(path, run, arg)); break;
   case PI: returnValue = M_PI; break;
@@ -268,16 +268,16 @@ double MyGene::evaluate(std::vector<Path>& path, MyGP& run, double arg)
     returnValue = NthMyChild(1)->evaluate(path, run, arg);
     break;
   }
-  case GETVEL: returnValue = run.aircraftState.dRelVel; break;
+  case GETVEL: returnValue = run.aircraftState.getRelVel(); break;
 
   case GETDPHI: // compute roll goal from current to target
   {
     // Calculate the vector from craft to target in world frame
     int idx = getIndex(path, run, NthMyChild(0)->evaluate(path, run, arg));
-    Eigen::Vector3d craftToTarget = path.at(idx).start - run.aircraftState.position;
+    Eigen::Vector3d craftToTarget = path.at(idx).start - run.aircraftState.getPosition();
 
     // Transform the craft-to-target vector to body frame
-    Eigen::Vector3d target_local = run.aircraftState.aircraft_orientation.inverse() * craftToTarget;
+    Eigen::Vector3d target_local = run.aircraftState.getOrientation().inverse() * craftToTarget;
 
     // Project the craft-to-target vector onto the body YZ plane
     Eigen::Vector3d projectedVector(0, target_local.y(), target_local.z());
@@ -291,10 +291,10 @@ double MyGene::evaluate(std::vector<Path>& path, MyGP& run, double arg)
   {
     // Calculate the vector from craft to target in world frame
     int idx = getIndex(path, run, NthMyChild(0)->evaluate(path, run, arg));
-    Eigen::Vector3d craftToTarget = path.at(idx).start - run.aircraftState.position;
+    Eigen::Vector3d craftToTarget = path.at(idx).start - run.aircraftState.getPosition();
 
     // Transform the craft-to-target vector to body frame
-    Eigen::Vector3d target_local = run.aircraftState.aircraft_orientation.inverse() * craftToTarget;
+    Eigen::Vector3d target_local = run.aircraftState.getOrientation().inverse() * craftToTarget;
 
     // Calculate pitch angle
     returnValue = std::atan2(-target_local.z(), target_local.x());
@@ -304,13 +304,13 @@ double MyGene::evaluate(std::vector<Path>& path, MyGP& run, double arg)
   case GETDTARGET: // get distance to the next point
   {
     int idx = getIndex(path, run, NthMyChild(0)->evaluate(path, run, arg));
-    returnValue = (path.at(idx).start - run.aircraftState.position).norm();
+    returnValue = (path.at(idx).start - run.aircraftState.getPosition()).norm();
     break;
   }
 
   case GETDHOME: // get distance to the home point
   {
-    returnValue = (Eigen::Vector3d(0, 0, SIM_INITIAL_ALTITUDE) - run.aircraftState.position).norm();
+    returnValue = (Eigen::Vector3d(0, 0, SIM_INITIAL_ALTITUDE) - run.aircraftState.getPosition()).norm();
     break;
   }
 
@@ -389,7 +389,7 @@ void MyGP::evalTask(WorkerContext& context)
     aircraftState = AircraftState{ SIM_INITIAL_VELOCITY, aircraft_orientation, initialPosition, 0.0, 0.0, SIM_INITIAL_THROTTLE, 0, false };
     sendRPC(*context.socket, MainToSim{ ControlType::AIRCRAFT_STATE, AircraftState{aircraftState} });
 
-    // hmm, try one more cycle to ensure the sim is ready
+    // TODO remove: try one more cycle to ensure the sim reset from prior state
     receiveRPC<AircraftState>(*context.socket);
     sendRPC(*context.socket, MainToSim{ ControlType::AIRCRAFT_STATE, AircraftState{aircraftState} });
 
@@ -408,51 +408,51 @@ void MyGP::evalTask(WorkerContext& context)
     int simulation_steps = 0;
 
     // initial states
-    double roll_prev = aircraftState.rollCommand;
-    double pitch_prev = aircraftState.pitchCommand;
-    double throttle_prev = aircraftState.throttleCommand;
+    double roll_prev = aircraftState.getRollCommand();
+    double pitch_prev = aircraftState.getPitchCommand();
+    double throttle_prev = aircraftState.getThrottleCommand();
 
     while (duration_msec < SIM_TOTAL_TIME_MSEC && pathIndex < path.size() - 2 && crashReason == CrashReason::None) {
       // wait for next state update from sim
       aircraftState = receiveRPC<AircraftState>(*context.socket);
 
       // did sim crash?
-      if (aircraftState.simCrashed) {
+      if (aircraftState.isSimCrashed()) {
         crashReason = CrashReason::Sim;
       }
 
       // ---------------------- first how did we do?
       // Compute the distance between the aircraft and the goal
-      double distanceFromGoal = (path.at(pathIndex).start - aircraftState.position).norm();
+      double distanceFromGoal = (path.at(pathIndex).start - aircraftState.getPosition()).norm();
       // normalize [100:0]
       distanceFromGoal = distanceFromGoal * 100.0 / SIM_PATH_RADIUS_LIMIT;
 
       // Compute vector from me to target
       Eigen::Vector3d target_direction = (path.at(pathIndex + 1).start - path.at(pathIndex).start);
-      Eigen::Vector3d aircraft_to_target = (path.at(pathIndex).start - aircraftState.position);
+      Eigen::Vector3d aircraft_to_target = (path.at(pathIndex).start - aircraftState.getPosition());
       double dot_product = target_direction.dot(aircraft_to_target);
       double angle_rad = std::acos(std::clamp(dot_product / (target_direction.norm() * aircraft_to_target.norm()), -1.0, 1.0));
       // normalize [100:0]
       angle_rad = angle_rad * 100.0 / M_PI;
 
       // control smoothness -- internal vector distance
-      double smoothness = pow(roll_prev - aircraftState.rollCommand, 2.0);
-      smoothness += pow(pitch_prev - aircraftState.pitchCommand, 2.0);
-      smoothness += pow(throttle_prev - aircraftState.throttleCommand, 2.0);
+      double smoothness = pow(roll_prev - aircraftState.getRollCommand(), 2.0);
+      smoothness += pow(pitch_prev - aircraftState.getPitchCommand(), 2.0);
+      smoothness += pow(throttle_prev - aircraftState.getThrottleCommand(), 2.0);
       smoothness = sqrt(smoothness);
       // normalize [100:0]
       smoothness = smoothness * 100.0 / 3.46;
 
       // ready for next cycle
-      roll_prev = aircraftState.rollCommand;
-      pitch_prev = aircraftState.pitchCommand;
-      throttle_prev = aircraftState.throttleCommand;
+      roll_prev = aircraftState.getRollCommand();
+      pitch_prev = aircraftState.getPitchCommand();
+      throttle_prev = aircraftState.getThrottleCommand();
 
       // but eval detected crashed outside the cylinder? (low elevation is detected from sim)
-      double distanceFromOrigin = std::sqrt(aircraftState.position[0] * aircraftState.position[0] +
-        aircraftState.position[1] * aircraftState.position[1]);
-      if (aircraftState.position[2] < (SIM_MIN_ELEVATION - SIM_PATH_RADIUS_LIMIT) || // too high
-        aircraftState.position[2] > (SIM_MIN_ELEVATION) || // too low
+      double distanceFromOrigin = std::sqrt(aircraftState.getPosition()[0] * aircraftState.getPosition()[0] +
+        aircraftState.getPosition()[1] * aircraftState.getPosition()[1]);
+      if (aircraftState.getPosition()[2] < (SIM_MIN_ELEVATION - SIM_PATH_RADIUS_LIMIT) || // too high
+        aircraftState.getPosition()[2] > (SIM_MIN_ELEVATION) || // too low
         distanceFromOrigin > SIM_PATH_RADIUS_LIMIT) { // too far
         crashReason = CrashReason::Eval;
       }
@@ -464,25 +464,25 @@ void MyGP::evalTask(WorkerContext& context)
         }
 
         // convert aircraft_orientaton to euler
-        Eigen::Vector3d euler = aircraftState.aircraft_orientation.toRotationMatrix().eulerAngles(2, 1, 0);
+        Eigen::Vector3d euler = aircraftState.getOrientation().toRotationMatrix().eulerAngles(2, 1, 0);
 
         char outbuf[1000]; // XXX use c++20
         sprintf(outbuf, "%06ld %3ld % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f\n",
-          aircraftState.simTime, pathIndex,
+          aircraftState.getSimTime(), pathIndex,
           path.at(pathIndex).distanceFromStart,
           path.at(pathIndex).start[0],
           path.at(pathIndex).start[1],
           path.at(pathIndex).start[2],
-          aircraftState.position[0],
-          aircraftState.position[1],
-          aircraftState.position[2],
+          aircraftState.getPosition()[0],
+          aircraftState.getPosition()[1],
+          aircraftState.getPosition()[2],
           euler[2],
           euler[1],
           euler[0],
-          aircraftState.dRelVel,
-          aircraftState.rollCommand,
-          aircraftState.pitchCommand,
-          aircraftState.throttleCommand,
+          aircraftState.getRelVel(),
+          aircraftState.getRollCommand(),
+          aircraftState.getPitchCommand(),
+          aircraftState.getThrottleCommand(),
           distanceFromGoal,
           angle_rad,
           smoothness
@@ -491,10 +491,10 @@ void MyGP::evalTask(WorkerContext& context)
 
         // now update points for Renderer
         planPath.push_back(path.at(pathIndex).start); // XXX push the full path
-        actualPath.push_back(aircraftState.position);
+        actualPath.push_back(aircraftState.getPosition());
 
         // negative here as world up is negative Z
-        actualOrientation.push_back(aircraftState.aircraft_orientation * -Eigen::Vector3d::UnitZ());
+        actualOrientation.push_back(aircraftState.getOrientation() * -Eigen::Vector3d::UnitZ());
       }
 
       distance_error_sum += pow(distanceFromGoal, FITNESS_DISTANCE_WEIGHT);
@@ -503,7 +503,7 @@ void MyGP::evalTask(WorkerContext& context)
       simulation_steps++;
 
       // TODO ensure time is forward
-      unsigned long int duration_msec = aircraftState.simTime;
+      unsigned long int duration_msec = aircraftState.getSimTime();
 
       // search for location of next timestamp
       double timeDistance = SIM_RABBIT_VELOCITY * duration_msec / 1000.0;
@@ -514,10 +514,10 @@ void MyGP::evalTask(WorkerContext& context)
       // ESTIMATE: pre-compute the estimated roll, pitch, throttle in prep for the evaluator
 
       // *** ROLL: Calculate the vector from craft to target in world frame
-      Eigen::Vector3d craftToTarget = path.at(pathIndex).start - aircraftState.position;
+      Eigen::Vector3d craftToTarget = path.at(pathIndex).start - aircraftState.getPosition();
 
       // Transform the craft-to-target vector to body frame
-      Eigen::Vector3d target_local = aircraftState.aircraft_orientation.inverse() * craftToTarget;
+      Eigen::Vector3d target_local = aircraftState.getOrientation().inverse() * craftToTarget;
 
       // Project the craft-to-target vector onto the body YZ plane
       Eigen::Vector3d projectedVector(0, target_local.y(), target_local.z());
@@ -527,7 +527,7 @@ void MyGP::evalTask(WorkerContext& context)
 
       // *** PITCH: Calculate the vector from craft to target in world frame if it did rotate
       Eigen::Quaterniond rollRotation(Eigen::AngleAxisd(rollEstimate, Eigen::Vector3d::UnitX()));
-      Eigen::Quaterniond virtualOrientation = aircraftState.aircraft_orientation * rollRotation;
+      Eigen::Quaterniond virtualOrientation = aircraftState.getOrientation() * rollRotation;
 
       // Transform target vector to new virtual orientation
       Eigen::Vector3d newLocalTargetVector = virtualOrientation.inverse() * craftToTarget;
@@ -541,21 +541,21 @@ void MyGP::evalTask(WorkerContext& context)
       //   rollEstimate = -rollEstimate;
       // }
 
-      aircraftState.rollCommand = rollEstimate / M_PI;
-      aircraftState.pitchCommand = pitchEstimate / M_PI;
+      aircraftState.setRollCommand(rollEstimate / M_PI);
+      aircraftState.setPitchCommand(pitchEstimate / M_PI);
 
       // *** Throttle estimate
       {
-        double distance = (path.at(pathIndex).start - aircraftState.position).norm();
-        double throttleEstimate = std::clamp((distance - 10) / aircraftState.dRelVel, -1.0, 1.0);
-        aircraftState.throttleCommand = throttleEstimate;
+        double distance = (path.at(pathIndex).start - aircraftState.getPosition()).norm();
+        double throttleEstimate = std::clamp((distance - 10) / aircraftState.getRelVel(), -1.0, 1.0);
+        aircraftState.setThrottleCommand(throttleEstimate);
       }
 
       // GP determine control input adjustments
       NthMyGene(0)->evaluate(path, *this, 0);
 
       // reply with the commands
-      MainToSim mainToSim{ ControlType::CONTROL_SIGNAL, ControlSignal{aircraftState.pitchCommand, aircraftState.rollCommand, aircraftState.throttleCommand} };
+      MainToSim mainToSim{ ControlType::CONTROL_SIGNAL, ControlSignal{aircraftState.getPitchCommand(), aircraftState.getRollCommand(), aircraftState.getThrottleCommand()} };
       sendRPC(*context.socket, mainToSim);
     }
 

@@ -67,29 +67,62 @@ BOOST_SERIALIZATION_SPLIT_FREE(Eigen::Quaterniond)
  * and occasionally sent as a rest from main to sim
  */
   struct AircraftState {
-  double dRelVel;
-  Eigen::Quaterniond aircraft_orientation;
-  Eigen::Vector3d position;
-  double pitchCommand;
-  double rollCommand;
-  double throttleCommand;
-  unsigned long int simTime;
-  bool simCrashed;
+  public:
 
-  friend class boost::serialization::access;
+    AircraftState() {}
+    AircraftState(double relVel, Eigen::Quaterniond orientation,
+      Eigen::Vector3d pos, double pitchCommand, double rollCommand, double throttleCommand,
+      unsigned long int time, bool crashed)
+      : dRelVel(relVel), aircraft_orientation(orientation), position(pos), simTime(time), simCrashed(crashed),
+      pitchCommand(0.0), rollCommand(0.0), throttleCommand(0.0) {
+    }
 
-  template<class Archive>
-  void serialize(Archive& ar, const unsigned int version) {
-    ar& dRelVel;
-    ar& aircraft_orientation;
-    ar& position;
-    ar& pitchCommand;
-    ar& rollCommand;
-    ar& throttleCommand;
-    ar& simTime;
-    ar& simCrashed;
-  }
+    // generate setters and getters
+    double getRelVel() const { return dRelVel; }
+    void setRelVel(double relVel) { dRelVel = relVel; }
 
+    Eigen::Quaterniond getOrientation() const { return aircraft_orientation; }
+    void setOrientation(Eigen::Quaterniond orientation) { aircraft_orientation = orientation; }
+
+    Eigen::Vector3d getPosition() const { return position; }
+    void setPosition(Eigen::Vector3d pos) { position = pos; }
+
+    unsigned long int getSimTime() const { return simTime; }
+    void setSimTime(unsigned long int time) { simTime = time; }
+
+    bool isSimCrashed() const { return simCrashed; }
+    void setSimCrashed(bool crashed) { simCrashed = crashed; }
+
+    double getPitchCommand() const { return pitchCommand; }
+    double setPitchCommand(double pitch) { return (pitchCommand = std::clamp(pitch, -1.0, 1.0)); }
+    double getRollCommand() const { return rollCommand; }
+    double setRollCommand(double roll) { return (rollCommand = std::clamp(roll, -1.0, 1.0)); }
+    double getThrottleCommand() const { return throttleCommand; }
+    double setThrottleCommand(double throttle) { return (throttleCommand = std::clamp(throttle, -1.0, 1.0)); }
+
+  private:
+    double dRelVel;
+    Eigen::Quaterniond aircraft_orientation;
+    Eigen::Vector3d position;
+    unsigned long int simTime;
+    bool simCrashed;
+    double pitchCommand;
+    double rollCommand;
+    double throttleCommand;
+
+    friend class boost::serialization::access;
+
+    template<class Archive>
+    void serialize(Archive& ar, const unsigned int version) {
+      ar& dRelVel;
+      ar& aircraft_orientation;
+      ar& position;
+      ar& pitchCommand;
+      ar& rollCommand;
+      ar& throttleCommand;
+      ar& simTime;
+      ar& simCrashed;
+    }
 };
 BOOST_CLASS_VERSION(AircraftState, 1)
 
