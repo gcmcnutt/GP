@@ -27,3 +27,4 @@
 - we only some times need path.orientation -- maybe split this out of Path
 - Still getting thermal infinite loops on ARM -- at load -- feels cpu use is 2x the x86 laptop too...
 - 30fps 2x speed and 200msec update ask winds up being more like 250msec update -- need to figure out why
+- try lock in RenderBackground to see if this fixes race condition

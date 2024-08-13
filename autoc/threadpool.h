@@ -32,6 +32,7 @@ private:
   bool stop;
   boost::asio::io_service io_service;
   std::atomic<int> active_tasks{ 0 };
+  std::atomic<int> tasks_in_queue{ 0 };
 
   void worker(int id, ExtraConfig& extraCfg) {
     auto& context = *worker_contexts[id];
@@ -68,11 +69,10 @@ private:
         if (stop && tasks.empty()) return;
         task = std::move(tasks.front());
         tasks.pop();
+        tasks_in_queue--;
+        active_tasks++;
       }
-      active_tasks++;
       task(context);  // Pass the context to the task
-      active_tasks--;
-      condition.notify_all(); // Notify after task completion          }
     }
   }
 
@@ -100,9 +100,12 @@ public:
   void enqueue(F&& f) {
     {
       boost::unique_lock<boost::mutex> lock(queue_mutex);
-      tasks.emplace([f = std::forward<F>(f)](WorkerContext& context) {
+      tasks.emplace([this, f = std::forward<F>(f)](WorkerContext& context) {
         f(context);
+        active_tasks--;
+        condition.notify_all();
         });
+      tasks_in_queue++;
     }
     condition.notify_one();
   }
@@ -110,7 +113,7 @@ public:
   void wait_for_tasks() {
     boost::unique_lock<boost::mutex> lock(queue_mutex);
     condition.wait(lock, [this] {
-      return tasks.empty() && (active_tasks == 0);
+      return (tasks_in_queue == 0) && (active_tasks == 0);
       });
   }
 };
