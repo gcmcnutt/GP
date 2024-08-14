@@ -6,10 +6,12 @@ PORT=$2
 
 PROGDIR=${HOME}/crsim/crrcsim-0.9.13
 PROG=build/crrcsim
-CRRCSIM_LOG=/tmp/autoc_crrcsim.$$.log
+CRRCSIM_LOGDIR=/tmp/crrcsim
+CRRCSIM_LOG=${CRRCSIM_LOGDIR}/autoc_crrcsim.$$.log
 
 # point to an instance of Xvfb for all but the first
 # Xvfb :2 -screen 0 1024x768x8 &
+mkdir -p "${CRRCSIM_LOGDIR}"
 
 case "$INSTANCE" in
   # "0")
