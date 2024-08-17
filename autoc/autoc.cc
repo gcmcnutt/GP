@@ -25,6 +25,12 @@ From skeleton/skeleton.cc
 #include "threadpool.h"
 #include "logger.h"
 
+#include <aws/core/Aws.h>
+#include <aws/sqs/SQSClient.h>
+#include <aws/sqs/model/SendMessageRequest.h>
+#include <aws/s3/S3Client.h>
+#include <aws/s3/model/PutObjectRequest.h>
+
 #include <boost/log/trivial.hpp>
 #include <boost/log/sources/severity_logger.hpp>
 #include <boost/log/expressions.hpp>
@@ -68,6 +74,8 @@ struct GPConfigVarInformation configArray[] =
   {"EvalThreads", DATAINT, &extraCfg.evalThreads},
   {"MinisimProgram", DATASTRING, &extraCfg.minisimProgram},
   {"MinisimPortOverride", DATAINT, &extraCfg.minisimPortOverride},
+  {"SQSUrl", DATASTRING, &extraCfg.sqsUrl},
+  {"S3Bucket", DATASTRING, &extraCfg.s3Bucket},
   {"", DATAINT, NULL}
 };
 
@@ -197,11 +205,24 @@ public:
   // virtual void save (ostream& os);
 
   virtual void endOfEvaluation() {
+    Aws::SQS::SQSClient sqsClient;
+
     // dispatch all the GPs now (TODO this may still work inline with evaluate)
     for (auto& task : tasks) {
       threadPool->enqueue([task](WorkerContext& context) {
         task->evalTask(context);
         });
+
+      // Aws::SQS::Model::SendMessageRequest request;
+      // request.SetQueueUrl(extraCfg.sqsUrl);
+      // request.SetMessageBody("Hello World!");
+      // auto outcome = sqsClient.SendMessage(request);
+      // if (outcome.IsSuccess()) {
+      //   std::cout << "Task uploaded successfully" << std::endl;
+      // }
+      // else {
+      //   std::cout << "Error: " << outcome.GetError().GetMessage() << std::endl;
+      // }
     }
 
     // wait for all tasks to finish
@@ -689,6 +710,10 @@ int main()
   // Read configuration file.
   GPConfiguration config(*logger.info(), "autoc.ini", configArray);
   renderer.extraCfg = extraCfg;
+
+  // AWS setup
+  Aws::SDKOptions options;
+  Aws::InitAPI(options);
 
   // initialize workers
   threadPool = new ThreadPool(extraCfg);

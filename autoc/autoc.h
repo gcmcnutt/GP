@@ -11,6 +11,8 @@ public:
   int evalThreads = 1;
   char* minisimProgram = "./build/minisim";
   unsigned short minisimPortOverride = 0;
+  char* sqsUrl = "https://sqs.us-west-2.amazonaws.com/499918285206/autoc-tasks";
+  char* s3Bucket = "autoc-storage";
 
   // // Custom implementation of the << operator for the extraCfg type
   // std::ostream& operator << (std::ostream& os) {

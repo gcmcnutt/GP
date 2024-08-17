@@ -5,7 +5,7 @@ include		./Makefile.ini
 
 all: lib
 	cd src; make
-	cd autoc/build; make
+	cd build; make
 	# cd symbreg; make
 	# cd lawn; make
 	# cd skeleton; make
@@ -18,7 +18,7 @@ clean:
 	rm -f *~
 	rm -rf lib
 	cd src; make clean
-	cd autoc/build; make clean
+	cd build; make clean
 	cd symbreg; make clean
 	cd lawn; make clean
 	cd skeleton; make clean

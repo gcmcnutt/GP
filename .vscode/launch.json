@@ -1,11 +1,12 @@
 {
   "version": "0.2.0",
   "configurations": [
+
     {
       "name": "minisim: Core Dump Debug",
       "type": "cppdbg",
       "request": "launch",
-      "program": "${workspaceFolder}/autoc/build/minisim",
+      "program": "${workspaceFolder}/build/minisim",
       "args": [],
       "stopAtEntry": false,
       "cwd": "${workspaceFolder}",
@@ -26,7 +27,7 @@
       "name": "(gdb) Attach Minisim",
       "type": "cppdbg",
       "request": "attach",
-      "program": "${workspaceFolder}/autoc/build/minisim",
+      "program": "${workspaceFolder}/build/minisim",
       "MIMode": "gdb",
       "setupCommands": [
         {
@@ -45,7 +46,7 @@
       "name": "(gdb) autoc Launch",
       "type": "cppdbg",
       "request": "launch",
-      "program": "${workspaceFolder}/autoc/build/autoc",
+      "program": "${workspaceFolder}/build/autoc",
       "args": [],
       "stopAtEntry": false,
       "cwd": "${workspaceFolder}/autoc",
@@ -70,7 +71,7 @@
       "name": "(gdb) minisim Launch",
       "type": "cppdbg",
       "request": "launch",
-      "program": "${workspaceFolder}/autoc/build/minisim",
+      "program": "${workspaceFolder}/build/minisim",
       "args": [
         "1234"
       ],
@@ -105,7 +106,7 @@
       "id": "coreDumpPathMinisim",
       "type": "promptString",
       "description": "Enter the path to the core dump file",
-      "default": "/mnt/wslg/dumps/core.minisim.pid"
+      "default": "/mnt/wslg/dumps/core.minisim."
     }
   ]
 }

@@ -4,13 +4,13 @@
 - at exit need a top/cancel close function in the GUI -- sometimes race condition on render thread right now
 - llm fitness function evolution
 - try to simplify the eval tree by passing a class reference instead of N args
-- need a way to dump progress for replays
-- need to save generations
-- replay functions
+* need a way to dump progress for replays
+* need to save generations
+* replay functions
   - select generation
   - select board
   - animate path, including tracking behind
-- split rendering from GP -- basically a second program that can replay
+* split rendering from GP -- basically a second program that can replay
 - consider fitness function for distance, alignment is ramped sensitivity for first couple of seconds (to allow capture from random start)
 - some memory leak is back...
 - control smoothness is maybe more about craft rotation as a function of optimal -- not control inputs
@@ -18,13 +18,12 @@
 - walk various classes for copy by reference, copy by pointer, copy by value == a smaller mem leak in autoc
 - we can buffer the best run over a population vs re-running it -- save the final eval steps
 - can not interactively flip to autoc input as it attempts to use the callback port -- soften this dependency for when it is manually run (maybe if port not set, it falls back to Mouse)
-- probably need to do task queues per event type more than per GP -- especially with larger fanouts of test paths, we see long tail of evals
+* probably need to do task queues per event type more than per GP -- especially with larger fanouts of test paths, we see long tail of evals
 - plumb stdout/stderr nicely for a build run -- perhaps hook this into archiving system too
 - get random start/orientation working in crrcsim
 - split out evaluator to be standalone in prep for onboard execution
 - figure out how to use crrcsim robots to form lead plane
 - more accurate hb1 model
 - we only some times need path.orientation -- maybe split this out of Path
-- Still getting thermal infinite loops on ARM -- at load -- feels cpu use is 2x the x86 laptop too...
+- Still getting thermal crash/corruption
 - 30fps 2x speed and 200msec update ask winds up being more like 250msec update -- need to figure out why
-- try lock in RenderBackground to see if this fixes race condition
