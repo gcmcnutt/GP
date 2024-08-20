@@ -71,10 +71,10 @@ BOOST_SERIALIZATION_SPLIT_FREE(Eigen::Quaterniond)
 
     AircraftState() {}
     AircraftState(double relVel, Eigen::Quaterniond orientation,
-      Eigen::Vector3d pos, double pitchCommand, double rollCommand, double throttleCommand,
+      Eigen::Vector3d pos, double pc, double rc, double tc,
       unsigned long int time, bool crashed)
       : dRelVel(relVel), aircraft_orientation(orientation), position(pos), simTime(time), simCrashed(crashed),
-      pitchCommand(0.0), rollCommand(0.0), throttleCommand(0.0) {
+      pitchCommand(pc), rollCommand(rc), throttleCommand(tc) {
     }
 
     // generate setters and getters
