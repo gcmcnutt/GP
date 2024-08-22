@@ -9,7 +9,7 @@ class ExtraConfig {
 public:
   int simNumPathsPerGen = 1;
   int evalThreads = 1;
-  char* minisimProgram = "./build/minisim";
+  char* minisimProgram = "../build/minisim";
   unsigned short minisimPortOverride = 0;
   char* sqsUrl = "https://sqs.us-west-2.amazonaws.com/499918285206/autoc-tasks";
   char* s3Bucket = "autoc-storage";

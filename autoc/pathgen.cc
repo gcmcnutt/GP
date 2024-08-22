@@ -41,8 +41,8 @@ std::vector<Path> generateSmoothPath(int numPoints, double radius, double height
   for (size_t i = 0; i < numPoints; ++i) {
     x = -(cos(2 * M_PI * i / numPoints) * SIM_PATH_BOUNDS / 2 - SIM_PATH_BOUNDS / 2);
     y = sin(2 * M_PI * i / numPoints) * SIM_PATH_BOUNDS / 2;
-    controlPoints.push_back(Eigen::Vector3d(x, y, z));
     z = base - i;
+    controlPoints.push_back(Eigen::Vector3d(x, y, z));
   }
   for (size_t i = 0; i < numPoints; ++i) {
     x = sin(2 * M_PI * i / numPoints) * SIM_PATH_BOUNDS / 2;
@@ -52,7 +52,7 @@ std::vector<Path> generateSmoothPath(int numPoints, double radius, double height
   }
 
 #else
-    // Generate random control points
+  // Generate random control points
   for (size_t i = 0; i < numPoints; ++i) {
     controlPoints.push_back(randomPointInCylinder(radius, height));
   }

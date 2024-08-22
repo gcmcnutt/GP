@@ -408,7 +408,7 @@ void MyGP::evalTask(WorkerContext& context)
 
     // send initial state reset
     aircraftState = AircraftState{ SIM_INITIAL_VELOCITY, aircraft_orientation, initialPosition, 0.0, 0.0, SIM_INITIAL_THROTTLE, 0, false };
-    sendRPC(*context.socket, MainToSim{ ControlType::AIRCRAFT_STATE, AircraftState{aircraftState} });
+    sendRPC(*context.socket, MainToSim{ ControlType::AIRCRAFT_STATE, aircraftState });
 
     // iterate the simulator
     unsigned long int duration_msec = 0; // how long have we been running
@@ -558,14 +558,28 @@ void MyGP::evalTask(WorkerContext& context)
       //   rollEstimate = -rollEstimate;
       // }
 
+      // range is -1:1
       aircraftState.setRollCommand(rollEstimate / M_PI);
       aircraftState.setPitchCommand(pitchEstimate / M_PI);
 
-      // *** Throttle estimate
+      // Throttle estimate range is -1:1
       {
         double distance = (path.at(pathIndex).start - aircraftState.getPosition()).norm();
         double throttleEstimate = std::clamp((distance - 10) / aircraftState.getRelVel(), -1.0, 1.0);
         aircraftState.setThrottleCommand(throttleEstimate);
+      }
+
+      {
+        char outbuf[1000];
+        Eigen::Matrix3d r = aircraftState.getOrientation().toRotationMatrix();
+        sprintf(outbuf, "Estimate airXaxis:%f %f %f  airZaxis:%f %f %f toTarget:%f %f %f rolledTarget:%f %f %f  r:%f p:%f t:%f\n",
+          r.col(0).x(), r.col(0).y(), r.col(0).z(),
+          r.col(2).x(), r.col(2).y(), r.col(2).z(),
+          projectedVector.x(), projectedVector.y(), projectedVector.z(),
+          newLocalTargetVector.x(), newLocalTargetVector.y(), newLocalTargetVector.z(),
+          aircraftState.getPitchCommand(), aircraftState.getRollCommand(), aircraftState.getThrottleCommand());
+
+        *logger.info() << outbuf;
       }
 
       // GP determine control input adjustments
@@ -614,7 +628,7 @@ void MyGP::evalTask(WorkerContext& context)
 
     stdFitness += localFitness;
 
-    *logger.debug() << "MyGP: " << this << " path[" << i << "] complete." << endl;
+    *logger.info() << "MyGP: " << this << " path[" << i << "] complete." << endl;
   }
 
   // normalize
