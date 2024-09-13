@@ -394,13 +394,13 @@ void MyGP::evalTask(WorkerContext& context)
         (((double)GPrand() / RAND_MAX) - 0.5) * SIM_INITIAL_LOCATION_DITHER,
         SIM_INITIAL_ALTITUDE - ((double)GPrand() / RAND_MAX) * SIM_INITIAL_LOCATION_DITHER);
 
-      // // override orientation of aircraft to be upright and level
-      // aircraft_orientation = Eigen::Quaterniond(Eigen::AngleAxisd(0, Eigen::Vector3d::UnitZ())) *
-      //   Eigen::Quaterniond(Eigen::AngleAxisd(0, Eigen::Vector3d::UnitY())) *
-      //   Eigen::Quaterniond(Eigen::AngleAxisd(0, Eigen::Vector3d::UnitX()));
+      // override orientation of aircraft to be upright and level
+      aircraft_orientation = Eigen::Quaterniond(Eigen::AngleAxisd(M_PI, Eigen::Vector3d::UnitZ())) *
+        Eigen::Quaterniond(Eigen::AngleAxisd(0, Eigen::Vector3d::UnitY())) *
+        Eigen::Quaterniond(Eigen::AngleAxisd(0, Eigen::Vector3d::UnitX()));
 
-      // // override position of aircraft to be at the origin
-      // initialPosition = Eigen::Vector3d(0, 0, SIM_INITIAL_ALTITUDE);
+      // override position of aircraft to be at the origin
+      initialPosition = Eigen::Vector3d(-2.19, 5.49, -36.93);
     }
 
     // wait for generic request (we ignore)
@@ -579,7 +579,7 @@ void MyGP::evalTask(WorkerContext& context)
           newLocalTargetVector.x(), newLocalTargetVector.y(), newLocalTargetVector.z(),
           aircraftState.getPitchCommand(), aircraftState.getRollCommand(), aircraftState.getThrottleCommand());
 
-        *logger.info() << outbuf;
+        *logger.debug() << outbuf;
       }
 
       // GP determine control input adjustments
@@ -628,7 +628,7 @@ void MyGP::evalTask(WorkerContext& context)
 
     stdFitness += localFitness;
 
-    *logger.info() << "MyGP: " << this << " path[" << i << "] complete." << endl;
+    *logger.debug() << "MyGP: " << this << " path[" << i << "] complete." << endl;
   }
 
   // normalize
