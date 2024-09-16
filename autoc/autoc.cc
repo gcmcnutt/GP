@@ -308,7 +308,7 @@ double MyGene::evaluate(std::vector<Path>& path, MyGP& run, double arg)
     break;
   }
 
-  case GETDTHETA: // compute pitch goal from current to target
+  case GETDTHETA: // compute pitch goal from current to target assuming we did a good roll
   {
     // Calculate the vector from craft to target in world frame
     int idx = getIndex(path, run, NthMyChild(0)->evaluate(path, run, arg));
@@ -317,15 +317,29 @@ double MyGene::evaluate(std::vector<Path>& path, MyGP& run, double arg)
     // Transform the craft-to-target vector to body frame
     Eigen::Vector3d target_local = run.aircraftState.getOrientation().inverse() * craftToTarget;
 
+    // Project the craft-to-target vector onto the body YZ plane
+    Eigen::Vector3d projectedVector(0, target_local.y(), target_local.z());
+
+    // Calculate the angle between the projected vector and the body Z-axis
+    double rollEstimate = std::atan2(projectedVector.y(), -projectedVector.z());
+
+    // *** PITCH: Calculate the vector from craft to target in world frame if it did rotate
+    Eigen::Quaterniond rollRotation(Eigen::AngleAxisd(rollEstimate, Eigen::Vector3d::UnitX()));
+    Eigen::Quaterniond virtualOrientation = run.aircraftState.getOrientation() * rollRotation;
+
+    // Transform target vector to new virtual orientation
+    Eigen::Vector3d newLocalTargetVector = virtualOrientation.inverse() * craftToTarget;
+
     // Calculate pitch angle
-    returnValue = std::atan2(-target_local.z(), target_local.x());
+    returnValue = std::atan2(-newLocalTargetVector.z(), newLocalTargetVector.x());
     break;
   }
 
   case GETDTARGET: // get distance to the next point
   {
     int idx = getIndex(path, run, NthMyChild(0)->evaluate(path, run, arg));
-    returnValue = (path.at(idx).start - run.aircraftState.getPosition()).norm();
+    double distance = (path.at(idx).start - run.aircraftState.getPosition()).norm();
+    returnValue = std::clamp((distance - 10) / run.aircraftState.getRelVel(), -1.0, 1.0);
     break;
   }
 
@@ -528,6 +542,7 @@ void MyGP::evalTask(WorkerContext& context)
         pathIndex++;
       }
 
+#if 0
       // ESTIMATE: pre-compute the estimated roll, pitch, throttle in prep for the evaluator
 
       // *** ROLL: Calculate the vector from craft to target in world frame
@@ -581,6 +596,7 @@ void MyGP::evalTask(WorkerContext& context)
 
         *logger.debug() << outbuf;
       }
+#endif
 
       // GP determine control input adjustments
       NthMyGene(0)->evaluate(path, *this, 0);

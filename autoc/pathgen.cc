@@ -44,10 +44,14 @@ std::vector<Path> generateSmoothPath(int numPoints, double radius, double height
     z = base - i;
     controlPoints.push_back(Eigen::Vector3d(x, y, z));
   }
+
+  double lastX = x;
+  double lastY = y;
+  double lastZ = z;
   for (size_t i = 0; i < numPoints; ++i) {
-    x = sin(2 * M_PI * i / numPoints) * SIM_PATH_BOUNDS / 2;
-    z = base - SIM_PATH_BOUNDS / 2 + cos(2 * M_PI * i / numPoints) * SIM_PATH_BOUNDS / 2;
-    y = i;
+    y = lastX + sin(2 * M_PI * i / numPoints) * SIM_PATH_BOUNDS / 3;
+    z = lastZ - SIM_PATH_BOUNDS / 2 + cos(2 * M_PI * i / numPoints) * SIM_PATH_BOUNDS / 2;
+    x = lastY - i;
     controlPoints.push_back(Eigen::Vector3d(x, y, z));
   }
 
