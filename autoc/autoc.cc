@@ -21,13 +21,10 @@ From skeleton/skeleton.cc
 #include "autoc.h"
 #include "minisim.h"
 #include "pathgen.h"
-#include "renderer.h"
 #include "threadpool.h"
 #include "logger.h"
 
 #include <aws/core/Aws.h>
-#include <aws/sqs/SQSClient.h>
-#include <aws/sqs/model/SendMessageRequest.h>
 #include <aws/s3/S3Client.h>
 #include <aws/s3/model/PutObjectRequest.h>
 
@@ -101,8 +98,22 @@ const int MyPopulationID = GPUserID + 2;
 ThreadPool* threadPool;
 std::atomic_bool printEval = false; // verbose (used for rendering best of population)
 std::ofstream fout;
-Renderer renderer(extraCfg);
+std::vector<std::vector<Path>> generationPaths;
+EvalResults evalResults;
+std::string computedKeyName;
 std::mutex evalMutex;
+
+std::string generate_iso8601_timestamp() {
+  auto now = std::chrono::system_clock::now();
+  auto ms_since_epoch = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+  auto itt = std::chrono::system_clock::to_time_t(now);
+  std::ostringstream ss;
+  ss << "autoc-" << INT64_MAX - ms_since_epoch << '-';
+  ss << std::put_time(std::gmtime(&itt), "%FT%T");
+  auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
+  ss << '.' << std::setfill('0') << std::setw(3) << milliseconds.count() << 'Z';
+  return ss.str();
+}
 
 class MyGP;
 
@@ -205,29 +216,46 @@ public:
   // virtual void save (ostream& os);
 
   virtual void endOfEvaluation() {
-    Aws::SQS::SQSClient sqsClient;
+    Aws::S3::S3Client s3_client;
 
     // dispatch all the GPs now (TODO this may still work inline with evaluate)
     for (auto& task : tasks) {
       threadPool->enqueue([task](WorkerContext& context) {
         task->evalTask(context);
         });
-
-      // Aws::SQS::Model::SendMessageRequest request;
-      // request.SetQueueUrl(extraCfg.sqsUrl);
-      // request.SetMessageBody("Hello World!");
-      // auto outcome = sqsClient.SendMessage(request);
-      // if (outcome.IsSuccess()) {
-      //   std::cout << "Task uploaded successfully" << std::endl;
-      // }
-      // else {
-      //   std::cout << "Error: " << outcome.GetError().GetMessage() << std::endl;
-      // }
     }
 
     // wait for all tasks to finish
     threadPool->wait_for_tasks();
     tasks.clear();
+
+    if (printEval) {
+      // now put the resulting elements into the S3 object
+      Aws::S3::Model::PutObjectRequest request;
+      request.SetBucket(extraCfg.s3Bucket);
+
+      // path name is $base/RunDate/gen$gen.dmp
+      request.SetKey(computedKeyName);
+
+      std::ostringstream oss;
+      boost::archive::text_oarchive oa(oss);
+      oa << evalResults;
+
+      // TODO: dump the selected GP
+      // TODO: dump out fitness
+      std::shared_ptr<Aws::StringStream> ss = Aws::MakeShared<Aws::StringStream>("");
+      *ss << oss.str();
+      request.SetBody(ss);
+      
+      auto outcome = s3_client.PutObject(request);
+      if (!outcome.IsSuccess()) {
+        *logger.error() << "Error: " << outcome.GetError().GetMessage() << std::endl;
+      }
+
+      // clear out elements for next pass
+      evalResults.actualList.clear();
+      evalResults.pathList.clear();
+    }
   }
 
   // Print (not mandatory) 
@@ -383,8 +411,8 @@ void MyGP::evalTask(WorkerContext& context)
 {
   stdFitness = 0;
 
-  for (int i = 0; i < renderer.generationPaths.size(); i++) {
-    auto& path = renderer.generationPaths.at(i);
+  for (int i = 0; i < generationPaths.size(); i++) {
+    auto& path = generationPaths.at(i);
     double localFitness = 0;
     std::vector<Eigen::Vector3d> planPath = std::vector<Eigen::Vector3d>();
     std::vector<Eigen::Vector3d> actualPath = std::vector<Eigen::Vector3d>();
@@ -635,7 +663,8 @@ void MyGP::evalTask(WorkerContext& context)
       for (auto& planElement : planPath) {
         planElementList.push_back({ planElement, Eigen::Vector3d::UnitX(), 0, 0 });
       }
-      renderer.addPathElementList(planElementList, actualElementList);
+      evalResults.actualList.push_back(actualElementList);
+      evalResults.pathList.push_back(planElementList);
 
       planPath.clear();
       actualPath.clear();
@@ -648,11 +677,7 @@ void MyGP::evalTask(WorkerContext& context)
   }
 
   // normalize
-  stdFitness /= renderer.generationPaths.size();
-
-  if (printEval) {
-    renderer.update();
-  }
+  stdFitness /= generationPaths.size();
 }
 
 
@@ -730,12 +755,13 @@ int main()
   // we don't know it's there.
   set_new_handler(newHandler);
 
+  std::string startTime = generate_iso8601_timestamp();
+
   // Init GP system.
   GPInit(1, -1);
 
   // Read configuration file.
   GPConfiguration config(*logger.info(), "autoc.ini", configArray);
-  renderer.extraCfg = extraCfg;
 
   // AWS setup
   Aws::SDKOptions options;
@@ -765,11 +791,8 @@ int main()
   fout.open(strOutFile.str());
   ofstream bout(strStatFile.str());
 
-  // start rendering screen
-  renderer.start();
-
   // prime the paths?
-  renderer.generationPaths = generateSmoothPaths(extraCfg.simNumPathsPerGen, NUM_SEGMENTS_PER_PATH, SIM_PATH_BOUNDS, SIM_PATH_BOUNDS);
+  generationPaths = generateSmoothPaths(extraCfg.simNumPathsPerGen, NUM_SEGMENTS_PER_PATH, SIM_PATH_BOUNDS, SIM_PATH_BOUNDS);
 
   // Create a population with this configuration
   *logger.info() << "Creating initial population ..." << endl;
@@ -786,7 +809,7 @@ int main()
   for (int gen = 1; gen <= cfg.NumberOfGenerations; gen++)
   {
     // For this generation, build a smooth path goal
-    renderer.generationPaths = generateSmoothPaths(extraCfg.simNumPathsPerGen, NUM_SEGMENTS_PER_PATH, SIM_PATH_BOUNDS, SIM_PATH_BOUNDS);
+    generationPaths = generateSmoothPaths(extraCfg.simNumPathsPerGen, NUM_SEGMENTS_PER_PATH, SIM_PATH_BOUNDS, SIM_PATH_BOUNDS);
 
     // Create a new generation from the old one by applying the genetic operators
     if (!cfg.SteadyState)
@@ -796,6 +819,9 @@ int main()
     // TODO fix this pattern to use a dynamic logger
     printEval = true;
     pop->NthMyGP(pop->bestOfPopulation)->evaluate();
+
+    // reverse order names for s3...
+    computedKeyName = startTime + "/gen" + std::to_string(10000 - gen) + ".dmp";
     pop->endOfEvaluation();
     printEval = false;
 
@@ -811,18 +837,11 @@ int main()
       *logger.warn() << "NanDetector count: " << nanDetector << endl;
     }
     pop->createGenerationReport(0, gen, fout, bout, *logger.info());
-
-    // sleep a bit
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
   }
 
   // go ahead and dump out the best of the best
   // ofstream bestGP("best.dat");
   // pop->NthMyGP(pop->bestOfPopulation)->save(bestGP);
 
-  // wait for window close
-  *logger.info() << "Close window to exit." << endl;
-  while (renderer.isRunning()) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
-  }
+  *logger.info() << "GP complete!" << endl;
 }

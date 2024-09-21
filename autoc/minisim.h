@@ -6,6 +6,7 @@
 #include <boost/serialization/serialization.hpp>
 #include <boost/serialization/array.hpp>
 #include <boost/serialization/split_free.hpp>
+#include <boost/serialization/vector.hpp>
 #include <boost/archive/text_oarchive.hpp>
 #include <boost/archive/text_iarchive.hpp>
 
@@ -61,6 +62,30 @@ namespace boost {
 
 // This macro tells boost to use the save/load functions we just defined for Quaterniond
 BOOST_SERIALIZATION_SPLIT_FREE(Eigen::Quaterniond)
+
+/*
+ * some generic path information about routes
+ */
+  class Path {
+  public:
+    Eigen::Vector3d start;
+    Eigen::Vector3d orientation;
+    double distanceFromStart;
+    double radiansFromStart;
+
+    void toString(char* output);
+
+    friend class boost::serialization::access;
+
+    template<class Archive>
+    void serialize(Archive& ar, const unsigned int version) {
+      ar& start;
+      ar& orientation;
+      ar& distanceFromStart;
+      ar& radiansFromStart;
+    }
+};
+BOOST_CLASS_VERSION(Path, 1)
 
 /*
  * this is always sent from sim to main
@@ -238,9 +263,21 @@ struct MainToSim {
     }
   }
 };
-
 BOOST_CLASS_VERSION(MainToSim, 1)
 
+struct EvalResults {
+  std::vector<std::vector<Path>> pathList;
+  std::vector<std::vector<Path>> actualList;
+
+  friend class boost::serialization::access;
+
+  template<class Archive>
+  void serialize(Archive& ar, const unsigned int version) {
+    ar& pathList;
+    ar& actualList;
+  }
+};
+BOOST_CLASS_VERSION(EvalResults, 1)
 
 /*
  * generic RPC wrappers

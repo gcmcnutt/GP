@@ -4,13 +4,11 @@
 - at exit need a top/cancel close function in the GUI -- sometimes race condition on render thread right now
 - llm fitness function evolution
 - try to simplify the eval tree by passing a class reference instead of N args
-* need a way to dump progress for replays
 * need to save generations
 * replay functions
   - select generation
   - select board
   - animate path, including tracking behind
-* split rendering from GP -- basically a second program that can replay
 - consider fitness function for distance, alignment is ramped sensitivity for first couple of seconds (to allow capture from random start)
 - some memory leak is back...
 - control smoothness is maybe more about craft rotation as a function of optimal -- not control inputs
@@ -24,7 +22,6 @@
 * split out evaluator to be standalone in prep for onboard execution
 - figure out how to use crrcsim robots to form lead plane
 - more accurate hb1 model
-- we only some times need path.orientation -- maybe split this out of Path
 - Still getting thermal crash/corruption
 * 30fps 2x speed and 200msec update ask winds up being more like 250msec update -- need to figure out why
 - variations project - to get closer to zero-shot
@@ -36,7 +33,7 @@
   - selector
   - activate
 - consider PID as basic controller (perhaps some other input/output to allow for slight tuning)
-- a field download/review of fligh data
+- a field download/review of flight data
 - model and env dithering in crrcsim
 
 

@@ -18,8 +18,10 @@ include_directories(../include ${EIGEN3_INCLUDE_DIR} ${VTK_INCLUDE_DIRS} ${Boost
 link_directories(../lib)
 add_compile_options(-Wno-write-strings)
 
-add_executable(autoc autoc.cc autoc.h minisim.h pathgen.cc pathgen.h renderer.cc renderer.h threadpool.h logger.cc logger.h)
+add_executable(autoc autoc.cc autoc.h minisim.h pathgen.cc pathgen.h threadpool.h logger.cc logger.h)
 add_executable(minisim minisim.cc minisim.h logger.cc logger.h)
+add_executable(renderer renderer.cc renderer.h minisim.h autoc.h)
 
-target_link_libraries(autoc gp ${VTK_LIBRARIES} ${Boost_LIBRARIES} Eigen3::Eigen ${AWSSDK_LIBRARIES})
+target_link_libraries(autoc gp ${Boost_LIBRARIES} Eigen3::Eigen ${AWSSDK_LIBRARIES})
 target_link_libraries(minisim ${Boost_LIBRARIES} Eigen3::Eigen ${AWSSDK_LIBRARIES})
+target_link_libraries(renderer ${VTK_LIBRARIES} ${Boost_LIBRARIES} Eigen3::Eigen ${AWSSDK_LIBRARIES})

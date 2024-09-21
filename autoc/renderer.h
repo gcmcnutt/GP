@@ -37,7 +37,7 @@
 
 class Renderer : public vtkCommand {
 public:
-  Renderer(ExtraConfig& extraCfg) : extraCfg(extraCfg) {};
+  Renderer(std::string computedKeyName) : computedKeyName(computedKeyName) {};
 
   void update();
   void start();
@@ -47,16 +47,12 @@ public:
 
   std::recursive_mutex dataMutex;
 
-  // the path(s) a population will attempt
-  std::vector<std::vector<Path>> generationPaths;
-
   // intermediate paths and results
   std::vector<std::vector<Path>> pathList;
   std::vector<std::vector<Path>> actualList;
 
-  ExtraConfig& extraCfg;
-
 private:
+  std::string computedKeyName;
 
   // Shared resources
   bool newDataAvailable = false;

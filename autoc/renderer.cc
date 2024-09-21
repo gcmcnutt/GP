@@ -1,5 +1,13 @@
 #include "renderer.h"
 
+#include <aws/core/Aws.h>
+#include <aws/s3/S3Client.h>
+#include <aws/s3/model/GetObjectRequest.h>
+#include <aws/s3/model/ListObjectsV2Request.h>
+
+EvalResults evalResults;
+int simNumPathsPerGen = 0;
+
 void PrintPolyDataInfo(vtkPolyData* polyData)
 {
   vtkPoints* points = polyData->GetPoints();
@@ -40,7 +48,7 @@ void PrintPolyDataInfo(vtkPolyData* polyData)
 // given i, and NUM_PATHS_PER_GEN, compute the offsets for this particular square
 Eigen::Vector3d Renderer::renderingOffset(int i) {
   // Calculate the dimension of the larger square
-  int sideLength = std::ceil(std::sqrt(extraCfg.simNumPathsPerGen));
+  int sideLength = std::ceil(std::sqrt(evalResults.actualList.size()));
 
   int row = i / sideLength;
   int col = i % sideLength;
@@ -230,6 +238,7 @@ void Renderer::RenderInBackground(vtkSmartPointer<vtkRenderWindow> renderWindow)
   vtkSmartPointer<vtkRenderer> renderer = vtkSmartPointer<vtkRenderer>::New();
   renderWindow->AddRenderer(renderer);
   renderWindow->SetSize(1080, 900);
+  renderWindow->SetWindowName(computedKeyName.c_str());
 
   vtkSmartPointer<vtkRenderWindowInteractor> renderWindowInteractor = vtkSmartPointer<vtkRenderWindowInteractor>::New();
 
@@ -278,7 +287,7 @@ void Renderer::RenderInBackground(vtkSmartPointer<vtkRenderWindow> renderWindow)
 
   // create the checkerboards
   planeData = vtkSmartPointer<vtkAppendPolyData>::New();
-  for (int j = 0; j < extraCfg.simNumPathsPerGen; j++) {
+  for (int j = 0; j < simNumPathsPerGen; j++) {
     Eigen::Vector3d offset = renderingOffset(j);
 
     // Create a plane source at z = 0
@@ -402,3 +411,125 @@ bool Renderer::isRunning() {
   std::lock_guard<std::recursive_mutex> lock(dataMutex);
   return !exitFlag;
 }
+
+// main method
+int main(int argc, char** argv) {
+  // which build are we going to look at
+  std::string computedKeyName = "";
+  if (argc > 1) {
+    computedKeyName = argv[1];
+  }
+  else {
+    // later, we'll search for latest build
+
+  }
+  // AWS setup
+  Aws::SDKOptions options;
+  Aws::InitAPI(options);
+  Aws::S3::S3Client s3_client;
+
+  // should we look up the latest run?
+  if (computedKeyName.empty()) {
+    Aws::S3::Model::ListObjectsV2Request listFolders;
+    listFolders.SetBucket("autoc-storage"); // TODO extraCfg
+    listFolders.SetPrefix("autoc-");
+    listFolders.SetDelimiter("/");
+
+    bool isTruncated = false;
+    do {
+      auto outcome = s3_client.ListObjectsV2(listFolders);
+      if (outcome.IsSuccess()) {
+        const auto& result = outcome.GetResult();
+
+        // Process common prefixes (these are our 'folders')
+        for (const auto& commonPrefix : result.GetCommonPrefixes()) {
+          computedKeyName = commonPrefix.GetPrefix();
+          break;
+        }
+
+        // Check if there are more results to retrieve
+        isTruncated = result.GetIsTruncated();
+        if (isTruncated) {
+          listFolders.SetContinuationToken(result.GetNextContinuationToken());
+        }
+      }
+      else {
+        std::cerr << "Error listing objects: " << outcome.GetError().GetMessage() << std::endl;
+        break;
+      }
+    } while (isTruncated);
+  }
+
+    // ok for this run, look for the last generation
+    std::string keyName = "";
+    Aws::S3::Model::ListObjectsV2Request listItem;
+    listItem.SetBucket("autoc-storage"); // TODO extraCfg
+    listItem.SetPrefix(computedKeyName + "gen");
+    bool isTruncated = false;
+    do {
+      auto outcome = s3_client.ListObjectsV2(listItem);
+      if (outcome.IsSuccess()) {
+        // Objects are already in reverse lexicographical order
+        for (const auto& object : outcome.GetResult().GetContents()) {
+          keyName = object.GetKey();
+          break;
+        }
+
+        // Check if the response is truncated
+        isTruncated = outcome.GetResult().GetIsTruncated();
+        if (isTruncated) {
+          // Set the continuation token for the next request
+          listItem.SetContinuationToken(outcome.GetResult().GetNextContinuationToken());
+        }
+      }
+      else {
+        std::cerr << "Error listing objects: " << outcome.GetError().GetMessage() << std::endl;
+        break;
+      }
+    } while (isTruncated);
+
+    // now do initial fetch
+    Aws::S3::Model::GetObjectRequest request;
+    request.SetBucket("autoc-storage"); // TODO extraCfg
+    request.SetKey(keyName);
+    auto outcome = s3_client.GetObject(request);
+
+    if (outcome.IsSuccess()) {
+      std::ostringstream oss;
+      oss << outcome.GetResult().GetBody().rdbuf();
+      std::string retrievedData = oss.str();
+
+      // Deserialize the data
+      try {
+        std::istringstream iss(retrievedData);
+        boost::archive::text_iarchive ia(iss);
+        ia >> evalResults;
+      }
+      catch (const std::exception& e) {
+        std::cerr << "Error during deserialization: " << e.what() << std::endl;
+        return {};
+      }
+    }
+    else {
+      std::cerr << "Error retrieving object from S3: " << outcome.GetError().GetMessage() << std::endl;
+      exit(1);
+    }
+
+    // Create a renderer
+    Renderer renderer(keyName); // TODO update this on an interactive update
+    renderer.start();
+
+    // update renderer with loaded data
+    simNumPathsPerGen = evalResults.pathList.size();
+    for (int i = 0; i < evalResults.pathList.size(); i++) {
+      renderer.addPathElementList(evalResults.pathList[i], evalResults.actualList[i]);
+    }
+    renderer.update();
+
+    // Main loop
+    while (renderer.isRunning()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+
+    return 0;
+  }

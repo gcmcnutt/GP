@@ -5,19 +5,11 @@
 #include <vector>
 #include <Eigen/Dense>
 
+#include "minisim.h"
+
 #define NUM_SEGMENTS_PER_PATH 16
 #define FIELD_SIZE 100.0
 #define FIELD_GAP 10.0
-
-class Path {
-public:
-  Eigen::Vector3d start;
-  Eigen::Vector3d orientation;
-  double distanceFromStart;
-  double radiansFromStart;
-
-  void toString(char* output);
-};
 
 std::vector<std::vector<Path>> generateSmoothPaths(int numPaths, int numPoints, double radius, double height);
 
