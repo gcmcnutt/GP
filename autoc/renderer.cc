@@ -252,7 +252,7 @@ bool Renderer::updateGenerationDisplay(int newGen) {
   this->segmentGaps->Update();
 
   // Update the window title
-  std::string title = computedKeyName + " - " + std::to_string(10000 - newGen);
+  std::string title = keyName + " - " + std::to_string(10000 - newGen);
   renderWindow->SetWindowName(title.c_str());
 
   // Render the updated scene
