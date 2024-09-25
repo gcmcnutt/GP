@@ -1,12 +1,10 @@
 - consider co-evolve the random paths
 - top level build script that builds debug/release
 - benchmark the impact of debug mode code
-- at exit need a top/cancel close function in the GUI -- sometimes race condition on render thread right now
 - llm fitness function evolution
 - try to simplify the eval tree by passing a class reference instead of N args
 * need to save generations
 * replay functions
-  - select generation
   - select board
   - animate path, including tracking behind
 - consider fitness function for distance, alignment is ramped sensitivity for first couple of seconds (to allow capture from random start)
@@ -28,7 +26,7 @@
   - vary wind, turbulence
   - maybe revisit thermal model
   - power, drag, service response times
-- Fixed path generation for pathen for basic tests
+- Fixed path generation for pathgen for basic tests
 - GP to autoc in inav via controls
   - selector
   - activate

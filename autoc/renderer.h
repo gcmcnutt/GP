@@ -12,6 +12,7 @@
 #include <vtkPolyData.h>
 #include <vtkCellArray.h>
 #include <vtkPolyLine.h>
+#include <vtkObjectFactory.h>
 #include <vtkVertexGlyphFilter.h>
 #include <vtkPolyDataMapper.h>
 #include <vtkActor.h>
@@ -28,6 +29,7 @@
 #include <vtkCellData.h>
 #include <vtkMinimalStandardRandomSequence.h>
 #include <vtkInteractorStyleTrackballCamera.h>
+#include <vtkInteractorStyleUser.h>
 #include <vtkLine.h>
 #include <vtkAppendPolyData.h>
 #include <vtkTubeFilter.h>
@@ -35,29 +37,50 @@
 #include <vtkDoubleArray.h>
 #include <vtkPointData.h>
 
-class Renderer : public vtkCommand {
+// Custom event IDs
+enum {
+  NextModelEvent = vtkCommand::UserEvent + 1,
+  PreviousModelEvent
+};
+
+class CustomInteractorStyle : public vtkInteractorStyleTrackballCamera
+{
 public:
-  Renderer(std::string computedKeyName) : computedKeyName(computedKeyName) {};
+  static CustomInteractorStyle* New();
+  vtkTypeMacro(CustomInteractorStyle, vtkInteractorStyleTrackballCamera);
 
-  void update();
-  void start();
+protected:
+  void OnChar() override {
+    vtkRenderWindowInteractor* rwi = this->Interactor;
+    std::string key = rwi->GetKeySym();
+
+    if (key == "n" || key == "N") {
+      this->InvokeEvent(NextModelEvent, nullptr);
+    }
+    else if (key == "p" || key == "P") {
+      this->InvokeEvent(PreviousModelEvent, nullptr);
+    }
+    else {
+      vtkInteractorStyleTrackballCamera::OnChar();
+    }
+  }
+};
+
+vtkStandardNewMacro(CustomInteractorStyle);
+
+class Renderer {
+public:
+  void initialize();
   bool isRunning();
-  virtual void Execute(vtkObject* caller, unsigned long eventId, void* vtkNotUsed(callData));
-  void addPathElementList(std::vector<Path> plan, std::vector<Path> actual);
+  bool updateGenerationDisplay(int genNumber);
 
-  std::recursive_mutex dataMutex;
+  int genNumber = 0;
 
-  // intermediate paths and results
-  std::vector<std::vector<Path>> pathList;
-  std::vector<std::vector<Path>> actualList;
+  vtkSmartPointer<vtkRenderWindow> renderWindow;
+  vtkSmartPointer<vtkRenderWindowInteractor> renderWindowInteractor;
 
 private:
-  std::string computedKeyName;
-
-  // Shared resources
-  bool newDataAvailable = false;
-  bool exitFlag = false;
-
+  vtkSmartPointer<vtkOrientationMarkerWidget> orientationWidget;
   vtkSmartPointer<vtkAppendPolyData> paths;
   vtkSmartPointer<vtkAppendPolyData> actuals;
   vtkSmartPointer<vtkAppendPolyData> segmentGaps;
@@ -66,16 +89,13 @@ private:
   vtkSmartPointer<vtkActor> actor1;
   vtkSmartPointer<vtkActor> actor2;
   vtkSmartPointer<vtkActor> actor3;
-  vtkSmartPointer<vtkActor> planeActor;
 
   Eigen::Vector3d renderingOffset(int i); // locate a coordinate offset for our rendering screen
   vtkSmartPointer<vtkPolyData> createPointSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> points);
   vtkSmartPointer<vtkPolyData> createSegmentSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> start, const std::vector<Eigen::Vector3d> end);
-  vtkSmartPointer<vtkPolyData> createTapeSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> points,
-    const std::vector<Eigen::Vector3d> normals);
+  vtkSmartPointer<vtkPolyData> createTapeSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> points, const std::vector<Eigen::Vector3d> normals);
   std::vector<Eigen::Vector3d> pathToVector(const std::vector<Path> path);
   std::vector<Eigen::Vector3d> pathToOrientation(const std::vector<Path> path);
-  void RenderInBackground(vtkSmartPointer<vtkRenderWindow> renderWindow);
 };
 
 #endif
