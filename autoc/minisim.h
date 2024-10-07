@@ -151,130 +151,54 @@ BOOST_CLASS_VERSION(Path, 1)
 };
 BOOST_CLASS_VERSION(AircraftState, 1)
 
+
 /*
- * here we send our control signals to the aircraft
+ * here we send our requested paths to the sims
  */
-  struct ControlSignal {
-  double pitchCommand;
-  double rollCommand;
-  double throttleCommand;
+  struct EvalData {
+  std::vector<char> gp;
+  std::vector<std::vector<Path>> pathList;
 
   friend class boost::serialization::access;
 
   template<class Archive>
   void serialize(Archive& ar, const unsigned int version) {
-    ar& pitchCommand;
-    ar& rollCommand;
-    ar& throttleCommand;
+    ar& gp;
+    ar& pathList;
   }
 };
-BOOST_CLASS_VERSION(ControlSignal, 1)
+BOOST_CLASS_VERSION(EvalData, 1)
 
-/*
- * generic command from sim to main
- */
-  enum class ControlType {
-  CONTROL_SIGNAL,
-  AIRCRAFT_STATE
+enum class CrashReason {
+  None,
+  Boot,
+  Sim,
+  Eval,
 };
 
-struct MainToSim {
-  ControlType controlType;
-  union {
-    ControlSignal controlSignal;
-    AircraftState aircraftState;
-  };
-
-  friend class boost::serialization::access;
-
-  // Default constructor
-  MainToSim() : controlType(ControlType::CONTROL_SIGNAL), controlSignal() {}
-
-  // Constructor for ControlSignal
-  MainToSim(ControlType type, const ControlSignal& signal)
-    : controlType(type), controlSignal(signal) {
-    assert(type == ControlType::CONTROL_SIGNAL);
-  }
-
-  // Constructor for AircraftState
-  MainToSim(ControlType type, const AircraftState& state)
-    : controlType(type), aircraftState(state) {
-    assert(type == ControlType::AIRCRAFT_STATE);
-  }
-
-  // Destructor to handle union cleanup if necessary
-  ~MainToSim() {
-    if (controlType == ControlType::CONTROL_SIGNAL) {
-      controlSignal.~ControlSignal();
-    }
-    else if (controlType == ControlType::AIRCRAFT_STATE) {
-      aircraftState.~AircraftState();
-    }
-  }
-
-  // Copy constructor
-  MainToSim(const MainToSim& other) : controlType(other.controlType) {
-    if (controlType == ControlType::CONTROL_SIGNAL) {
-      new (&controlSignal) ControlSignal(other.controlSignal);
-    }
-    else if (controlType == ControlType::AIRCRAFT_STATE) {
-      new (&aircraftState) AircraftState(other.aircraftState);
-    }
-  }
-
-  // Move constructor
-  MainToSim(MainToSim&& other) noexcept : controlType(other.controlType) {
-    if (controlType == ControlType::CONTROL_SIGNAL) {
-      new (&controlSignal) ControlSignal(std::move(other.controlSignal));
-    }
-    else if (controlType == ControlType::AIRCRAFT_STATE) {
-      new (&aircraftState) AircraftState(std::move(other.aircraftState));
-    }
-  }
-
-  // Assignment operator
-  MainToSim& operator=(const MainToSim& other) {
-    if (this != &other) {
-      this->~MainToSim();
-      new (this) MainToSim(other);
-    }
-    return *this;
-  }
-
-  // Move assignment operator
-  MainToSim& operator=(MainToSim&& other) noexcept {
-    if (this != &other) {
-      this->~MainToSim();
-      new (this) MainToSim(std::move(other));
-    }
-    return *this;
-  }
-
-  template<class Archive>
-  void serialize(Archive& ar, const unsigned int version) {
-    ar& controlType;
-    switch (controlType) {
-    case ControlType::CONTROL_SIGNAL:
-      ar& controlSignal;
-      break;
-    case ControlType::AIRCRAFT_STATE:
-      ar& aircraftState;
-      break;
-    }
+std::string crashReasonToString(CrashReason type) {
+  switch (type) {
+  case CrashReason::Sim: return "Sim";
+  case CrashReason::Eval: return "Eval";
+  case CrashReason::None: return "None";
+  default: return "*?*";
   }
 };
-BOOST_CLASS_VERSION(MainToSim, 1)
 
 struct EvalResults {
+  std::vector<CrashReason> crashReasonList;
   std::vector<std::vector<Path>> pathList;
   std::vector<std::vector<Path>> actualList;
+  std::vector<std::vector<AircraftState>> aircraftStateList;
 
   friend class boost::serialization::access;
 
   template<class Archive>
   void serialize(Archive& ar, const unsigned int version) {
+    ar& crashReasonList;
     ar& pathList;
     ar& actualList;
+    ar& aircraftStateList;
   }
 };
 BOOST_CLASS_VERSION(EvalResults, 1)

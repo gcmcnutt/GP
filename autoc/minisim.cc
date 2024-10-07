@@ -135,13 +135,16 @@ public:
 
   void run() {
     while (true) { // TODO have reply have a controlled loop exit
-      AircraftState aircraftState{ aircraft.dRelVel, aircraft.aircraft_orientation, aircraft.position,
-          aircraft.getPitchCommand(), aircraft.getRollCommand(), aircraft.getThrottleCommand(), simTime, simCrashed };
+      EvalResults evalResults;
+
       // always send our state
-      sendRPC(socket_, aircraftState);
+      sendRPC(socket_, evalResults);
 
       // ok what does main say to do
-      MainToSim mainToSim = receiveRPC<MainToSim>(socket_);
+      EvalData evalData = receiveRPC<EvalData>(socket_);
+      
+
+
 
       switch (mainToSim.controlType) {
         // here we get a reset from the main controller, just update local state (reset, etc)
