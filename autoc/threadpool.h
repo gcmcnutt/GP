@@ -5,7 +5,6 @@
 
 #include <boost/asio.hpp>
 #include <boost/thread.hpp>
-#include <boost/process.hpp>
 #include <vector>
 #include <queue>
 #include <functional>
@@ -16,11 +15,6 @@
 #include "logger.h"
 
 using namespace std;
-
-struct WorkerContext {
-  std::unique_ptr<boost::asio::ip::tcp::socket> socket;
-  boost::process::child child_process;
-};
 
 class ThreadPool {
 private:

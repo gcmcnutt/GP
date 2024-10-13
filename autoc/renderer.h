@@ -1,11 +1,7 @@
 #ifndef RENDERER_H
 #define RENDERER_H
 
-#include <mutex>
-#include <thread>
-
-#include "pathgen.h"
-#include "autoc.h"
+#include "minisim.h"
 
 #include <vtkPoints.h>
 #include <vtkSmartPointer.h>
@@ -36,6 +32,9 @@
 #include <vtkRibbonFilter.h>
 #include <vtkDoubleArray.h>
 #include <vtkPointData.h>
+
+#define FIELD_SIZE 100.0
+#define FIELD_GAP 10.0
 
 // Custom event IDs
 enum {
@@ -95,7 +94,8 @@ private:
   vtkSmartPointer<vtkPolyData> createSegmentSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> start, const std::vector<Eigen::Vector3d> end);
   vtkSmartPointer<vtkPolyData> createTapeSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> points, const std::vector<Eigen::Vector3d> normals);
   std::vector<Eigen::Vector3d> pathToVector(const std::vector<Path> path);
-  std::vector<Eigen::Vector3d> pathToOrientation(const std::vector<Path> path);
+  std::vector<Eigen::Vector3d> stateToVector(const std::vector<AircraftState> path);
+  std::vector<Eigen::Vector3d> stateToOrientation(const std::vector<AircraftState> state);
 };
 
 #endif

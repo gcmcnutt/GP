@@ -51,7 +51,7 @@ void PrintPolyDataInfo(vtkPolyData* polyData)
 // given i, and NUM_PATHS_PER_GEN, compute the offsets for this particular square
 Eigen::Vector3d Renderer::renderingOffset(int i) {
   // Calculate the dimension of the larger square
-  int sideLength = std::ceil(std::sqrt(evalResults.actualList.size()));
+  int sideLength = std::ceil(std::sqrt(evalResults.pathList.size()));
 
   int row = i / sideLength;
   int col = i % sideLength;
@@ -200,13 +200,13 @@ bool Renderer::updateGenerationDisplay(int newGen) {
     Eigen::Vector3d offset = renderingOffset(i);
 
     std::vector<Eigen::Vector3d> p = pathToVector(evalResults.pathList[i]);
-    std::vector<Eigen::Vector3d> a = pathToVector(evalResults.actualList[i]);
+    std::vector<Eigen::Vector3d> a = stateToVector(evalResults.aircraftStateList[i]);
 
     if (!p.empty()) {
       this->paths->AddInputData(createPointSet(offset, p));
     }
     if (!a.empty()) {
-      this->actuals->AddInputData(createTapeSet(offset, a, pathToOrientation(evalResults.actualList[i])));
+      this->actuals->AddInputData(createTapeSet(offset, a, stateToOrientation(evalResults.aircraftStateList[i])));
     }
     if (!a.empty() && !p.empty()) {
       this->segmentGaps->AddInputData(createSegmentSet(offset, a, p));
@@ -498,10 +498,18 @@ std::vector<Eigen::Vector3d> Renderer::pathToVector(std::vector<Path> path) {
   return points;
 }
 
-std::vector<Eigen::Vector3d> Renderer::pathToOrientation(std::vector<Path> path) {
+std::vector<Eigen::Vector3d> Renderer::stateToVector(std::vector<AircraftState> state) {
   std::vector<Eigen::Vector3d> points;
-  for (const auto& p : path) {
-    points.push_back(p.orientation);
+  for (const auto& s : state) {
+    points.push_back({ s.getPosition()[0], s.getPosition()[1], s.getPosition()[2] });
+  }
+  return points;
+}
+
+std::vector<Eigen::Vector3d> Renderer::stateToOrientation(std::vector<AircraftState> state) {
+  std::vector<Eigen::Vector3d> points;
+  for (const auto& s : state) {
+    points.push_back(s.getOrientation() * -Eigen::Vector3d::UnitZ());
   }
   return points;
 }

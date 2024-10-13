@@ -11,7 +11,6 @@ public:
   int evalThreads = 1;
   char* minisimProgram = "../build/minisim";
   unsigned short minisimPortOverride = 0;
-  char* sqsUrl = "https://sqs.us-west-2.amazonaws.com/499918285206/autoc-tasks";
   char* s3Bucket = "autoc-storage";
 
   // // Custom implementation of the << operator for the extraCfg type
@@ -39,6 +38,14 @@ const int MyGPID = GPUserID + 1;
 const int MyPopulationID = GPUserID + 2;
 
 class MyGP;
+
+extern std::atomic_bool printEval;
+extern std::vector<MyGP*> tasks;
+extern std::vector<std::vector<Path>> generationPaths;
+extern std::ofstream fout;
+extern std::atomic_ulong nanDetector;
+extern void createNodeSet(GPAdfNodeSet& adfNs);
+extern EvalResults evalResults;
 
 // Inherit the three GP classes GPGene, GP and GPPopulation
 class MyGene : public GPGene
@@ -108,8 +115,41 @@ public:
   // async evaluator
   void evalTask(WorkerContext& context);
 
-  AircraftState aircraftState{ 0, Eigen::Quaterniond::Identity(), Eigen::Vector3d(0, 0, 0), 0.0, 0.0, 0.0, 0, false };
+  AircraftState aircraftState{ 0, 0, Eigen::Quaterniond::Identity(), Eigen::Vector3d(0, 0, 0), 0.0, 0.0, 0.0, 0, false };
   long pathIndex = 0; // current entry on path
+
+  // TODO this is unrelated to MyGP
+  void printAircraftState(std::ostream& os, EvalResults &evalResults) {
+    for (int i = 0; i < evalResults.aircraftStateList.size(); i++) {
+      os << "  Time Idx  totDist   pathX    pathY    pathZ        X        Y        Z       dr       dp       dy   relVel     roll    pitch    power    distP   angleP controlP\n";
+
+      for (int j = 0; j < evalResults.aircraftStateList.at(i).size(); j++) {
+        AircraftState stepAircraftState = evalResults.aircraftStateList.at(i).at(j);
+        Path path = evalResults.pathList.at(i).at(stepAircraftState.getThisPathIndex());
+        Eigen::Vector3d euler = aircraftState.getOrientation().toRotationMatrix().eulerAngles(2, 1, 0);
+
+        char outbuf[1000]; // XXX use c++20
+        sprintf(outbuf, "%06ld %3ld % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f\n",
+          stepAircraftState.getSimTime(), pathIndex,
+          path.distanceFromStart,
+          path.start[0],
+          path.start[1],
+          path.start[2],
+          stepAircraftState.getPosition()[0],
+          stepAircraftState.getPosition()[1],
+          stepAircraftState.getPosition()[2],
+          euler[2],
+          euler[1],
+          euler[0],
+          stepAircraftState.getRelVel(),
+          stepAircraftState.getRollCommand(),
+          stepAircraftState.getPitchCommand(),
+          stepAircraftState.getThrottleCommand()
+        );
+        os << outbuf;
+      }
+    }
+  }
 };
 
 

@@ -4,7 +4,7 @@ project(autoc)
 find_package(VTK REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(Boost REQUIRED COMPONENTS thread system serialization log)
-find_package(AWSSDK REQUIRED COMPONENTS sqs s3)
+find_package(AWSSDK REQUIRED COMPONENTS s3)
 
 option(USE_SANITIZER "Build with Address Sanitizer" OFF)
 
@@ -20,9 +20,9 @@ link_directories(../lib)
 add_compile_options(-Wno-write-strings)
 
 add_executable(autoc autoc.cc autoc.h autoc-eval.cc minisim.h pathgen.cc pathgen.h threadpool.h logger.cc logger.h)
-add_executable(minisim minisim.cc minisim.h autoc.h logger.cc logger.h)
+add_executable(minisim minisim.cc minisim.h autoc.h autoc-eval.cc)
 add_executable(renderer renderer.cc renderer.h minisim.h autoc.h)
 
 target_link_libraries(autoc gp ${Boost_LIBRARIES} Eigen3::Eigen ${AWSSDK_LIBRARIES})
-target_link_libraries(minisim ${Boost_LIBRARIES} Eigen3::Eigen ${AWSSDK_LIBRARIES})
+target_link_libraries(minisim gp ${Boost_LIBRARIES} Eigen3::Eigen)
 target_link_libraries(renderer ${VTK_LIBRARIES} ${Boost_LIBRARIES} Eigen3::Eigen ${AWSSDK_LIBRARIES})

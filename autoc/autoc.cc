@@ -19,10 +19,10 @@ From skeleton/skeleton.cc
 #include "gp.h"
 #include "gpconfig.h"
 #include "minisim.h"
-#include "autoc.h"
-#include "pathgen.h"
 #include "threadpool.h"
+#include "autoc.h"
 #include "logger.h"
+#include "pathgen.h"
 
 #include <aws/core/Aws.h>
 #include <aws/s3/S3Client.h>
@@ -71,17 +71,13 @@ struct GPConfigVarInformation configArray[] =
   {"EvalThreads", DATAINT, &extraCfg.evalThreads},
   {"MinisimProgram", DATASTRING, &extraCfg.minisimProgram},
   {"MinisimPortOverride", DATAINT, &extraCfg.minisimPortOverride},
-  {"SQSUrl", DATASTRING, &extraCfg.sqsUrl},
   {"S3Bucket", DATASTRING, &extraCfg.s3Bucket},
   {"", DATAINT, NULL}
 };
 
 
 ThreadPool* threadPool;
-std::atomic_bool printEval = false; // verbose (used for rendering best of population)
 std::ofstream fout;
-std::vector<std::vector<Path>> generationPaths;
-EvalResults evalResults;
 std::string computedKeyName;
 
 std::string generate_iso8601_timestamp() {
@@ -96,7 +92,6 @@ std::string generate_iso8601_timestamp() {
   return ss.str();
 }
 
-std::vector<MyGP*> tasks = std::vector<MyGP*>();
 
 class MyPopulation : public GPPopulation
 {
@@ -157,8 +152,9 @@ public:
       }
 
       // clear out elements for next pass
-      evalResults.actualList.clear();
+      evalResults.crashReasonList.clear();
       evalResults.pathList.clear();
+      evalResults.aircraftStateList.clear();
     }
   }
 
@@ -170,48 +166,6 @@ public:
     return (MyGP*)GPContainer::Nth(n);
   }
 };
-
-// Create function and terminal set
-void createNodeSet(GPAdfNodeSet& adfNs)
-{
-  // Reserve space for the node sets
-  adfNs.reserveSpace(1);
-
-  // Now define the function and terminal set for each ADF and place
-  // function/terminal sets into overall ADF container
-  GPNodeSet& ns = *new GPNodeSet(OPERATORS_NR_ITEM);
-
-  adfNs.put(0, ns);
-
-  // Define functions/terminals and place them into the appropriate
-  // sets.  Terminals take two arguments, functions three (the third
-  // parameter is the number of arguments the function has)
-  ns.putNode(*new GPNode(ADD, "ADD", 2));
-  ns.putNode(*new GPNode(SUB, "SUB", 2));
-  ns.putNode(*new GPNode(MUL, "MUL", 2));
-  ns.putNode(*new GPNode(DIV, "DIV", 2));
-  ns.putNode(*new GPNode(IF, "IF", 3));
-  ns.putNode(*new GPNode(EQ, "EQ", 2));
-  ns.putNode(*new GPNode(GT, "GT", 2));
-  ns.putNode(*new GPNode(SETPITCH, "SETPITCH", 1));
-  ns.putNode(*new GPNode(SETROLL, "SETROLL", 1));
-  ns.putNode(*new GPNode(SETTHROTTLE, "SETTHROTTLE", 1));
-  ns.putNode(*new GPNode(GETPITCH, "GETPITCH"));
-  ns.putNode(*new GPNode(GETROLL, "GETROLL"));
-  ns.putNode(*new GPNode(GETTHROTTLE, "GETTHROTTLE"));
-  ns.putNode(*new GPNode(SIN, "SIN", 1));
-  ns.putNode(*new GPNode(COS, "COS", 1));
-  ns.putNode(*new GPNode(PI, "PI"));
-  ns.putNode(*new GPNode(ZERO, "0"));
-  ns.putNode(*new GPNode(ONE, "1"));
-  ns.putNode(*new GPNode(TWO, "2"));
-  ns.putNode(*new GPNode(PROGN, "PROGN", 2));
-  ns.putNode(*new GPNode(GETDPHI, "GETDPHI", 1));
-  ns.putNode(*new GPNode(GETDTHETA, "GETDTHETA", 1));
-  ns.putNode(*new GPNode(GETDTARGET, "GETDTARGET", 1));
-  ns.putNode(*new GPNode(GETVEL, "GETVEL"));
-  ns.putNode(*new GPNode(GETDHOME, "GETDHOME"));
-}
 
 
 
@@ -308,11 +262,24 @@ int main()
 
     // TODO fix this pattern to use a dynamic logger
     printEval = true;
-    pop->NthMyGP(pop->bestOfPopulation)->evaluate();
+    MyGP* best = pop->NthMyGP(pop->bestOfPopulation);
+    best->evaluate();
 
     // reverse order names for s3...
     computedKeyName = startTime + "/gen" + std::to_string(10000 - gen) + ".dmp";
     pop->endOfEvaluation();
+
+    if (printEval) {
+      best->printAircraftState(fout, evalResults);
+
+      // TODO // now update points for Renderer
+      // planPath.push_back(path.at(pathIndex).start); // XXX push the full path
+      // actualPath.push_back(stepAircraftState.getPosition());
+
+      // // negative here as world up is negative Z
+      // actualOrientation.push_back(stepAircraftState.getOrientation() * -Eigen::Vector3d::UnitZ());
+    }
+
     printEval = false;
 
     // Delete the old generation and make the new the old one

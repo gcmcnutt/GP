@@ -2,7 +2,13 @@
 #ifndef MINISIM_H
 #define MINISIM_H
 
+#include <vector>
+
+#include <boost/iostreams/stream.hpp>
+#include <boost/iostreams/device/back_inserter.hpp>
+#include <boost/iostreams/device/array.hpp>
 #include <boost/asio.hpp>
+#include <boost/process.hpp>
 #include <boost/serialization/serialization.hpp>
 #include <boost/serialization/array.hpp>
 #include <boost/serialization/split_free.hpp>
@@ -63,6 +69,11 @@ namespace boost {
 // This macro tells boost to use the save/load functions we just defined for Quaterniond
 BOOST_SERIALIZATION_SPLIT_FREE(Eigen::Quaterniond)
 
+struct WorkerContext {
+  std::unique_ptr<boost::asio::ip::tcp::socket> socket;
+  boost::process::child child_process;
+};
+
 /*
  * some generic path information about routes
  */
@@ -88,21 +99,23 @@ BOOST_SERIALIZATION_SPLIT_FREE(Eigen::Quaterniond)
 BOOST_CLASS_VERSION(Path, 1)
 
 /*
- * this is always sent from sim to main
- * and occasionally sent as a rest from main to sim
+* portable aircraft state
  */
   struct AircraftState {
   public:
 
     AircraftState() {}
-    AircraftState(double relVel, Eigen::Quaterniond orientation,
+    AircraftState(int thisPathIndex, double relVel, Eigen::Quaterniond orientation,
       Eigen::Vector3d pos, double pc, double rc, double tc,
       unsigned long int time, bool crashed)
-      : dRelVel(relVel), aircraft_orientation(orientation), position(pos), simTime(time), simCrashed(crashed),
+      : thisPathIndex(thisPathIndex), dRelVel(relVel), aircraft_orientation(orientation), position(pos), simTime(time), simCrashed(crashed),
       pitchCommand(pc), rollCommand(rc), throttleCommand(tc) {
     }
 
     // generate setters and getters
+    int getThisPathIndex() const { return thisPathIndex; }
+    void setThisPathIndex(int index) { thisPathIndex = index; }
+    
     double getRelVel() const { return dRelVel; }
     void setRelVel(double relVel) { dRelVel = relVel; }
 
@@ -126,6 +139,7 @@ BOOST_CLASS_VERSION(Path, 1)
     double setThrottleCommand(double throttle) { return (throttleCommand = std::clamp(throttle, -1.0, 1.0)); }
 
   private:
+    int thisPathIndex;
     double dRelVel;
     Eigen::Quaterniond aircraft_orientation;
     Eigen::Vector3d position;
@@ -139,6 +153,7 @@ BOOST_CLASS_VERSION(Path, 1)
 
     template<class Archive>
     void serialize(Archive& ar, const unsigned int version) {
+      ar& thisPathIndex;
       ar& dRelVel;
       ar& aircraft_orientation;
       ar& position;
@@ -176,19 +191,10 @@ enum class CrashReason {
   Eval,
 };
 
-std::string crashReasonToString(CrashReason type) {
-  switch (type) {
-  case CrashReason::Sim: return "Sim";
-  case CrashReason::Eval: return "Eval";
-  case CrashReason::None: return "None";
-  default: return "*?*";
-  }
-};
 
 struct EvalResults {
   std::vector<CrashReason> crashReasonList;
   std::vector<std::vector<Path>> pathList;
-  std::vector<std::vector<Path>> actualList;
   std::vector<std::vector<AircraftState>> aircraftStateList;
 
   friend class boost::serialization::access;
@@ -197,7 +203,6 @@ struct EvalResults {
   void serialize(Archive& ar, const unsigned int version) {
     ar& crashReasonList;
     ar& pathList;
-    ar& actualList;
     ar& aircraftStateList;
   }
 };
