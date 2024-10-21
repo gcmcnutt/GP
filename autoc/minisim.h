@@ -3,12 +3,14 @@
 #define MINISIM_H
 
 #include <vector>
+#include <iostream>
 
 #include <boost/iostreams/stream.hpp>
 #include <boost/iostreams/device/back_inserter.hpp>
 #include <boost/iostreams/device/array.hpp>
 #include <boost/asio.hpp>
 #include <boost/process.hpp>
+#include <boost/format.hpp>
 #include <boost/serialization/serialization.hpp>
 #include <boost/serialization/array.hpp>
 #include <boost/serialization/split_free.hpp>
@@ -20,6 +22,7 @@
 #include <Eigen/Geometry>
 
 using boost::asio::ip::tcp;
+using boost::format;
 
 #define SIM_MAX_ROLL_RATE_RADSEC (M_PI)
 #define SIM_MAX_PITCH_RATE_RADSEC (M_PI)
@@ -77,24 +80,29 @@ struct WorkerContext {
 /*
  * some generic path information about routes
  */
-  class Path {
-  public:
-    Eigen::Vector3d start;
-    Eigen::Vector3d orientation;
-    double distanceFromStart;
-    double radiansFromStart;
+class Path {
+public:
+  Eigen::Vector3d start;
+  Eigen::Vector3d orientation;
+  double distanceFromStart;
+  double radiansFromStart;
 
-    void toString(char* output);
+  void dump(std::ostream& os) {
+    os << format("Path: (%f, %f, %f), Odometer: %f, Turnmeter: %f")
+      % start[0] % start[1] % start[2]
+      % distanceFromStart
+      % radiansFromStart;
+  }
 
-    friend class boost::serialization::access;
+  friend class boost::serialization::access;
 
-    template<class Archive>
-    void serialize(Archive& ar, const unsigned int version) {
-      ar& start;
-      ar& orientation;
-      ar& distanceFromStart;
-      ar& radiansFromStart;
-    }
+  template<class Archive>
+  void serialize(Archive& ar, const unsigned int version) {
+    ar& start;
+    ar& orientation;
+    ar& distanceFromStart;
+    ar& radiansFromStart;
+  }
 };
 BOOST_CLASS_VERSION(Path, 1)
 
@@ -107,15 +115,15 @@ BOOST_CLASS_VERSION(Path, 1)
     AircraftState() {}
     AircraftState(int thisPathIndex, double relVel, Eigen::Quaterniond orientation,
       Eigen::Vector3d pos, double pc, double rc, double tc,
-      unsigned long int time, bool crashed)
-      : thisPathIndex(thisPathIndex), dRelVel(relVel), aircraft_orientation(orientation), position(pos), simTime(time), simCrashed(crashed),
+      unsigned long int timeMsec, bool crashed)
+      : thisPathIndex(thisPathIndex), dRelVel(relVel), aircraft_orientation(orientation), position(pos), simTimeMsec(timeMsec), simCrashed(crashed),
       pitchCommand(pc), rollCommand(rc), throttleCommand(tc) {
     }
 
     // generate setters and getters
     int getThisPathIndex() const { return thisPathIndex; }
     void setThisPathIndex(int index) { thisPathIndex = index; }
-    
+
     double getRelVel() const { return dRelVel; }
     void setRelVel(double relVel) { dRelVel = relVel; }
 
@@ -125,8 +133,8 @@ BOOST_CLASS_VERSION(Path, 1)
     Eigen::Vector3d getPosition() const { return position; }
     void setPosition(Eigen::Vector3d pos) { position = pos; }
 
-    unsigned long int getSimTime() const { return simTime; }
-    void setSimTime(unsigned long int time) { simTime = time; }
+    unsigned long int getSimTimeMsec() const { return simTimeMsec; }
+    void setSimTimeMsec(unsigned long int timeMsec) { simTimeMsec = timeMsec; }
 
     bool isSimCrashed() const { return simCrashed; }
     void setSimCrashed(bool crashed) { simCrashed = crashed; }
@@ -138,12 +146,45 @@ BOOST_CLASS_VERSION(Path, 1)
     double getThrottleCommand() const { return throttleCommand; }
     double setThrottleCommand(double throttle) { return (throttleCommand = std::clamp(throttle, -1.0, 1.0)); }
 
+    void minisimAdvanceState(double dt) {
+      double dtSec = dt / 1000.0;
+
+      // get current roll state, compute left/right force (positive roll is right)
+      double delta_roll = remainder(rollCommand * dtSec * SIM_MAX_ROLL_RATE_RADSEC, M_PI);
+
+      // get current pitch state, compute up/down force (positive pitch is up)
+      double delta_pitch = remainder(pitchCommand * dtSec * SIM_MAX_PITCH_RATE_RADSEC, M_PI);
+
+      // adjust velocity as a function of throttle (-1:1)
+      dRelVel = SIM_INITIAL_VELOCITY + (throttleCommand * SIM_THROTTLE_SCALE);
+
+      // Convert pitch and roll updates to quaternions (in the body frame)
+      Eigen::Quaterniond delta_roll_quat(Eigen::AngleAxisd(delta_roll, Eigen::Vector3d::UnitX()));
+      Eigen::Quaterniond delta_pitch_quat(Eigen::AngleAxisd(delta_pitch, Eigen::Vector3d::UnitY()));
+
+      // Apply the roll and pitch adjustments to the aircraft's orientation
+      aircraft_orientation = aircraft_orientation * delta_roll_quat;
+      aircraft_orientation = aircraft_orientation * delta_pitch_quat;
+
+      // Normalize the resulting quaternion
+      aircraft_orientation.normalize();
+
+      // Define the initial velocity vector in the body frame
+      Eigen::Vector3d velocity_body(dRelVel * dtSec, 0, 0);
+
+      // Rotate the velocity vector using the updated quaternion
+      Eigen::Vector3d velocity_world = aircraft_orientation * velocity_body;
+
+      // adjust position
+      position += velocity_world;
+    }
+
   private:
     int thisPathIndex;
     double dRelVel;
     Eigen::Quaterniond aircraft_orientation;
     Eigen::Vector3d position;
-    unsigned long int simTime;
+    unsigned long int simTimeMsec;
     bool simCrashed;
     double pitchCommand;
     double rollCommand;
@@ -160,7 +201,7 @@ BOOST_CLASS_VERSION(Path, 1)
       ar& pitchCommand;
       ar& rollCommand;
       ar& throttleCommand;
-      ar& simTime;
+      ar& simTimeMsec;
       ar& simCrashed;
     }
 };
@@ -205,13 +246,49 @@ struct EvalResults {
     ar& pathList;
     ar& aircraftStateList;
   }
+
+  void dump(std::ostream& os) {
+    os << format("EvalResults: crash[%d] paths[%d] states[%d]\n Paths:\n")
+      % crashReasonList.size() % pathList.size() % aircraftStateList.size();
+
+    for (int i = 0; i < pathList.size(); i++) {
+      for (int j = 0; j < pathList.at(i).size(); j++) {
+        Path path = pathList.at(i).at(j);
+        os << format("  Path %3d:%3d: start[%8.2f %8.2f %8.2f] orient[%8.2f %8.2f %8.2f] dist[%8.2f] rad[%8.2f]\n")
+          % i
+          % j
+          % path.start[0] % path.start[1] % path.start[2]
+          % path.orientation.x() % path.orientation.y() % path.orientation.z()
+          % path.distanceFromStart % path.radiansFromStart;
+      }
+    }
+    os << " Aircraft States:\n";
+    for (int i = 0; i < aircraftStateList.size(); i++) {
+      for (int j = 0; j < aircraftStateList.at(i).size(); j++) {
+        AircraftState aircraftState = aircraftStateList.at(i).at(j);
+        Eigen::Vector3d euler = aircraftState.getOrientation().toRotationMatrix().eulerAngles(2, 1, 0);
+        // TODO distance from start
+        os << format("  Path %3d:%3d: Time %5d Index %3d: pos[%8.2f %8.2f %8.2f] orient[%8.2f %8.2f %8.2f] vel[%8.2f] pitch[%5.2f] roll[%5.2f] throttle[%5.2f]\n")
+          % i
+          % j
+          % aircraftState.getSimTimeMsec()
+          % aircraftState.getThisPathIndex()
+          % aircraftState.getPosition()[0] % aircraftState.getPosition()[1] % aircraftState.getPosition()[2]
+          % euler.x() % euler.y() % euler.z()
+          % aircraftState.getRelVel()
+          % aircraftState.getPitchCommand()
+          % aircraftState.getRollCommand()
+          % aircraftState.getThrottleCommand();
+      }
+    }
+  }
 };
 BOOST_CLASS_VERSION(EvalResults, 1)
 
 /*
  * generic RPC wrappers
  */
-  template<typename T>
+template<typename T>
 void sendRPC(tcp::socket& socket, const T& data) {
   std::ostringstream archive_stream;
   boost::archive::text_oarchive archive(archive_stream);

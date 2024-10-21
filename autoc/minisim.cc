@@ -27,132 +27,13 @@ boost::iostreams::stream<boost::iostreams::array_source> charArrayToIstream(cons
 
 GPAdfNodeSet adfNs;
 
-class Aircraft {
-public:
-  // TODO should be private
-  double dRelVel; // reltive forward velocity on +x airplane axis m/s
-
-  // world frame for now
-  Eigen::Quaterniond aircraft_orientation;
-
-  // NED convention for location x+ north, y+ east, z+ down
-  Eigen::Vector3d position;
-
-  // not used yet
-  double R_X;     // rotationX
-  double R_Y;     // rotationY
-  double R_Z;     // rotationZ
-
-  Aircraft(double dRelVel, Eigen::Quaterniond aircraft_orientation, Eigen::Vector3d position, double R_X, double R_Y, double R_Z);
-
-  double setPitchCommand(double pitchCommand);
-  double getPitchCommand();
-  double setRollCommand(double rollCommand);
-  double getRollCommand();
-  double setThrottleCommand(double throttleCommand);
-  double getThrottleCommand();
-  void advanceState(double dt);
-  void toString(char* output);
-
-private:
-
-  // aircraft command values
-  double pitchCommand;  // -1:1
-  double rollCommand;   // -1:1
-  double throttleCommand; // -1:1
-};
-
-Aircraft::Aircraft(double dRelVel, Eigen::Quaterniond aircraft_orientation, Eigen::Vector3d position, double R_X, double R_Y, double R_Z) {
-  this->dRelVel = dRelVel;
-  this->aircraft_orientation = aircraft_orientation;
-  this->position = position;
-  this->R_X = R_X;
-  this->R_Y = R_Y;
-  this->R_Z = R_Z;
-
-  this->pitchCommand = 0;
-  this->rollCommand = 0;
-  this->throttleCommand = 0;
-}
-
-double Aircraft::setPitchCommand(double pitchCommand) {
-  this->pitchCommand = pitchCommand;
-  return pitchCommand;
-}
-
-double Aircraft::getPitchCommand() {
-  return std::clamp(pitchCommand, -1.0, 1.0);
-}
-
-double Aircraft::setRollCommand(double rollCommand) {
-  this->rollCommand = rollCommand;
-  return rollCommand;
-}
-
-double Aircraft::getRollCommand() {
-  return std::clamp(rollCommand, -1.0, 1.0);
-}
-
-double Aircraft::setThrottleCommand(double throttleCommand) {
-  this->throttleCommand = throttleCommand;
-  return throttleCommand;
-}
-
-double Aircraft::getThrottleCommand() {
-  return std::clamp(throttleCommand, -1.0, +1.0);
-}
-
-void Aircraft::advanceState(double dt) {
-  // get current roll state, compute left/right force (positive roll is right)
-  double delta_roll = remainder(getRollCommand() * dt * SIM_MAX_ROLL_RATE_RADSEC, M_PI);
-
-  // get current pitch state, compute up/down force (positive pitch is up)
-  double delta_pitch = remainder(getPitchCommand() * dt * SIM_MAX_PITCH_RATE_RADSEC, M_PI);
-
-  // adjust velocity as a function of throttle (-1:1)
-  dRelVel = SIM_INITIAL_VELOCITY + (getThrottleCommand() * SIM_THROTTLE_SCALE);
-
-  // Convert pitch and roll updates to quaternions (in the body frame)
-  Eigen::Quaterniond delta_roll_quat(Eigen::AngleAxisd(delta_roll, Eigen::Vector3d::UnitX()));
-  Eigen::Quaterniond delta_pitch_quat(Eigen::AngleAxisd(delta_pitch, Eigen::Vector3d::UnitY()));
-
-  // Apply the roll and pitch adjustments to the aircraft's orientation
-  aircraft_orientation = aircraft_orientation * delta_roll_quat;
-  aircraft_orientation = aircraft_orientation * delta_pitch_quat;
-
-  // Normalize the resulting quaternion
-  aircraft_orientation.normalize();
-
-  // Define the initial velocity vector in the body frame
-  Eigen::Vector3d velocity_body(dRelVel * dt, 0, 0);
-
-  // Rotate the velocity vector using the updated quaternion
-  Eigen::Vector3d velocity_world = aircraft_orientation * velocity_body;
-
-  // adjust position
-  position += velocity_world;
-}
-
-void Aircraft::toString(char* output) {
-  sprintf(output, "AircraftState: %f %f %f %f %f %f %f %f %f %f %f  Command: %f %f %f\n", dRelVel,
-    aircraft_orientation.w(), aircraft_orientation.x(), aircraft_orientation.y(), aircraft_orientation.z(),
-    position[0], position[1], position[2], R_X, R_Y, R_Z,
-    pitchCommand, rollCommand, throttleCommand);
-}
-
-
 class SimProcess {
 public:
-  Aircraft aircraft = Aircraft(0.0, Eigen::Quaterniond(1, 0, 0, 0), Eigen::Vector3d(0, 0, 0), 0.0, 0.0, 0.0);
-  unsigned long int simTime = 0;
   bool simCrashed = false;
   SimProcess(boost::asio::io_context& io_context, unsigned short port) : socket_(io_context) {
     tcp::resolver resolver(io_context);
     auto endpoints = resolver.resolve("localhost", std::to_string(port));
     boost::asio::connect(socket_, endpoints);
-
-    // send checkin call
-    sendRPC(socket_, EvalResults{});
   }
 
   void run() {
@@ -170,9 +51,8 @@ public:
         gp.load(is);
         gp.resolveNodeValues(adfNs);
 
-        // accumulators
-        std::vector<Path> actualPath;
-        std::vector<AircraftState> aircraftState;
+        // accumulate steps
+        std::vector<AircraftState> aircraftStateSteps;
 
         // random initial orientation
         Eigen::Quaterniond aircraft_orientation;
@@ -195,20 +75,18 @@ public:
 
         // reset sim state
         gp.aircraftState = AircraftState{ 0, SIM_INITIAL_VELOCITY, aircraft_orientation, initialPosition, 0.0, 0.0, SIM_INITIAL_THROTTLE, 0, false };
-        gp.pathIndex = 0;
 
         // iterate the simulator
         unsigned long int duration_msec = 0; // how long have we been running
         CrashReason crashReason = CrashReason::None;
 
         // as long as we are within the time limit and have not reached the end of the path
-        while (duration_msec < SIM_TOTAL_TIME_MSEC && gp.pathIndex < path.size() - 2 && crashReason == CrashReason::None) {
-          gp.aircraftState.setThisPathIndex(gp.pathIndex);
+        while (duration_msec < SIM_TOTAL_TIME_MSEC && gp.aircraftState.getThisPathIndex() < path.size() - 2 && crashReason == CrashReason::None) {
 
           // approximate pitch/roll/throttle to achieve goal
 
           // *** ROLL: Calculate the vector from craft to target in world frame
-          Eigen::Vector3d craftToTarget = path.at(gp.pathIndex).start - gp.aircraftState.getPosition();
+          Eigen::Vector3d craftToTarget = path.at(gp.aircraftState.getThisPathIndex()).start - gp.aircraftState.getPosition();
 
           // Transform the craft-to-target vector to body frame
           Eigen::Vector3d target_local = gp.aircraftState.getOrientation().inverse() * craftToTarget;
@@ -241,11 +119,12 @@ public:
 
           // Throttle estimate range is -1:1
           {
-            double distance = (path.at(gp.pathIndex).start - gp.aircraftState.getPosition()).norm();
+            double distance = (path.at(gp.aircraftState.getThisPathIndex()).start - gp.aircraftState.getPosition()).norm();
             double throttleEstimate = std::clamp((distance - 10) / gp.aircraftState.getRelVel(), -1.0, 1.0);
             gp.aircraftState.setThrottleCommand(throttleEstimate);
           }
 
+#if 0
           {
             char outbuf[1000];
             Eigen::Matrix3d r = gp.aircraftState.getOrientation().toRotationMatrix();
@@ -258,21 +137,15 @@ public:
 
             std::cout << outbuf;
           }
+#endif
 
           // run the GP controller
           gp.NthMyGene(0)->evaluate(path, gp, 0);
 
           // advance the aircraft
-          aircraft.setPitchCommand(gp.aircraftState.getPitchCommand());
-          aircraft.setRollCommand(gp.aircraftState.getRollCommand());
-          aircraft.setThrottleCommand(gp.aircraftState.getThrottleCommand());
-          aircraft.advanceState(SIM_TIME_STEP_MSEC / 1000.0);
-
-          // send our updated state to evaluator
-          gp.aircraftState.setRelVel(aircraft.dRelVel);
-          gp.aircraftState.setOrientation(aircraft.aircraft_orientation);
-          gp.aircraftState.setPosition(aircraft.position);
-          gp.aircraftState.setSimTime(gp.aircraftState.getSimTime() + SIM_TIME_STEP_MSEC);
+          gp.aircraftState.minisimAdvanceState(SIM_TIME_STEP_MSEC);
+          duration_msec += SIM_TIME_STEP_MSEC;
+          gp.aircraftState.setSimTimeMsec(duration_msec);
 
           // did we crash?
           double distanceFromOrigin = std::sqrt(gp.aircraftState.getPosition()[0] * gp.aircraftState.getPosition()[0] +
@@ -283,26 +156,24 @@ public:
             crashReason = CrashReason::Eval;
           }
 
-          // TODO ensure time is forward
-          unsigned long int duration_msec = gp.aircraftState.getSimTime();
-
           // search for location of next timestamp
           double timeDistance = SIM_RABBIT_VELOCITY * duration_msec / 1000.0;
-          while (gp.pathIndex < path.size() - 2 && (path.at(gp.pathIndex).distanceFromStart < timeDistance)) {
-            gp.pathIndex++;
+          while (gp.aircraftState.getThisPathIndex() < path.size() - 2 && (path.at(gp.aircraftState.getThisPathIndex()).distanceFromStart < timeDistance)) {
+            gp.aircraftState.setThisPathIndex(gp.aircraftState.getThisPathIndex() + 1);
           }
 
           // record progress
-          aircraftState.push_back(gp.aircraftState);
+          aircraftStateSteps.push_back(gp.aircraftState);
         }
 
         // save results of this run
         evalResults.pathList.push_back(path);
-        evalResults.aircraftStateList.push_back(aircraftState);
+        evalResults.aircraftStateList.push_back(aircraftStateSteps);
         evalResults.crashReasonList.push_back(crashReason);
       }
 
       // always send our state -- covers initial state
+      // evalResults.dump(std::cout);
       sendRPC(socket_, evalResults);
 
       // prepare results for next cycle
@@ -317,10 +188,11 @@ private:
 };
 
 int main(int argc, char* argv[]) {
-  if (argc != 2) {
-    std::cerr << "Usage: minisim <port>" << std::endl;
+  if (argc != 3) {
+    std::cerr << "Usage: minisim <id> <port>" << std::endl;
     return 1;
   }
+  std:string id = argv[1];
 
   // Create the adf function/terminal set and print it out.
   createNodeSet(adfNs);
@@ -330,16 +202,14 @@ int main(int argc, char* argv[]) {
   GPRegisterClass(new GPNode());
   GPRegisterClass(new GPNodeSet());
   GPRegisterClass(new GPAdfNodeSet());
-  // GPRegisterClass (new GPVariables());
   GPRegisterClass(new GPGene());
   GPRegisterClass(new GP());
-  // GPRegisterClass (new GPPopulation());
 
   // manually add our classes for load operation
   GPRegisterClass(new MyGene());
   GPRegisterClass(new MyGP());
 
-  unsigned short port = std::atoi(argv[1]);
+  unsigned short port = std::atoi(argv[2]);
   boost::asio::io_context io_context;
   SimProcess sim_process(io_context, port);
   sim_process.run();

@@ -21,7 +21,6 @@ std::atomic_bool printEval = false; // verbose (used for rendering best of popul
 std::vector<MyGP*> tasks = std::vector<MyGP*>();
 std::vector<std::vector<Path>> generationPaths;
 std::atomic_ulong nanDetector = 0;
-EvalResults evalResults;
 
 std::string crashReasonToString(CrashReason type) {
   switch (type) {
@@ -79,13 +78,13 @@ void createNodeSet(GPAdfNodeSet& adfNs)
 
 int getIndex(std::vector<Path>& path, MyGP& gp, double arg) {
   if (isnan(arg)) {
-    return gp.pathIndex;
+    return gp.aircraftState.getThisPathIndex();
   }
 
   // a range of steps to check, can't go lower than the beginning index
   // TODO this checks path next, not the actual simulation steps...
   // XXX for now, this allows forecasting the future path
-  int idx = std::clamp((int)arg, -5, 5) + gp.pathIndex;
+  int idx = std::clamp((int)arg, -5, 5) + gp.aircraftState.getThisPathIndex();
   idx = std::clamp(idx, 0, (int)path.size() - 1);
   return idx;
 }
@@ -110,9 +109,9 @@ double MyGene::evaluate(std::vector<Path>& path, MyGP& run, double arg)
   case IF: returnValue = NthMyChild(0)->evaluate(path, run, arg) ? NthMyChild(1)->evaluate(path, run, arg) : NthMyChild(2)->evaluate(path, run, arg); break;
   case EQ: returnValue = NthMyChild(0)->evaluate(path, run, arg) == NthMyChild(1)->evaluate(path, run, arg); break;
   case GT: returnValue = NthMyChild(0)->evaluate(path, run, arg) > NthMyChild(1)->evaluate(path, run, arg); break;
-  case SETPITCH: returnValue = /*run.aircraftState.setPitchCommand(*/NthMyChild(0)->evaluate(path, run, arg); break;
-  case SETROLL: returnValue = /*run.aircraftState.setRollCommand(*/NthMyChild(0)->evaluate(path, run, arg); break;
-  case SETTHROTTLE: returnValue = /*run.aircraftState.setThrottleCommand(*/NthMyChild(0)->evaluate(path, run, arg); break;
+  case SETPITCH: returnValue = run.aircraftState.setPitchCommand(NthMyChild(0)->evaluate(path, run, arg)); break;
+  case SETROLL: returnValue = run.aircraftState.setRollCommand(NthMyChild(0)->evaluate(path, run, arg)); break;
+  case SETTHROTTLE: returnValue = run.aircraftState.setThrottleCommand(NthMyChild(0)->evaluate(path, run, arg)); break;
   case GETPITCH: returnValue = run.aircraftState.getPitchCommand(); break;
   case GETROLL: returnValue = run.aircraftState.getRollCommand(); break;
   case GETTHROTTLE: returnValue = run.aircraftState.getThrottleCommand(); break;
@@ -248,12 +247,8 @@ void MyGP::evalTask(WorkerContext& context)
     double pitch_prev = stepAircraftState.getPitchCommand();
     double throttle_prev = stepAircraftState.getThrottleCommand();
 
-    std::vector<Eigen::Vector3d> planPath;
-    std::vector<Eigen::Vector3d> actualPath;
-    std::vector<Eigen::Vector3d> actualOrientation;
-
     // now walk next steps of actual path
-    while (stepIndex++ < aircraftState.size()) {
+    while (stepIndex < aircraftState.size()) {
       auto& stepAircraftState = aircraftState.at(stepIndex++);
       int pathIndex = stepAircraftState.getThisPathIndex();
 
@@ -301,28 +296,8 @@ void MyGP::evalTask(WorkerContext& context)
     }
 
     if (crashReason != CrashReason::None) {
-      double fractional_distance_remaining = 1.0 - path.at(pathIndex).distanceFromStart / path.back().distanceFromStart;
+      double fractional_distance_remaining = 1.0 - path.at(stepAircraftState.getThisPathIndex()).distanceFromStart / path.back().distanceFromStart;
       localFitness += SIM_CRASH_PENALTY * fractional_distance_remaining;
-    }
-
-    if (printEval) {
-      // now update actual list of lists
-      std::vector<Path> actualElementList;
-      for (int i = 0; i < actualPath.size(); i++) {
-        Eigen::Vector3d path = actualPath.at(i);
-        Eigen::Vector3d orientation = actualOrientation.at(i);
-        actualElementList.push_back({ path, orientation, 0, 0 });
-      }
-
-      // now update plan list of lists
-      std::vector<Path> planElementList;
-      for (auto& planElement : planPath) {
-        planElementList.push_back({ planElement, Eigen::Vector3d::UnitX(), 0, 0 });
-      }
-
-      planPath.clear();
-      actualPath.clear();
-      actualOrientation.clear();
     }
 
     // accumulate the local fitness

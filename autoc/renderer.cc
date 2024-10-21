@@ -6,10 +6,13 @@
 #include <aws/s3/S3Client.h>
 #include <aws/s3/model/GetObjectRequest.h>
 #include <aws/s3/model/ListObjectsV2Request.h>
+#include <aws/core/auth/AWSCredentialsProvider.h>
+#include <aws/core/client/ClientConfiguration.h>
 
 EvalResults evalResults;
 std::string computedKeyName = "";
 Renderer renderer;
+std::shared_ptr<Aws::S3::S3Client> s3_client;
 
 void PrintPolyDataInfo(vtkPolyData* polyData)
 {
@@ -162,12 +165,11 @@ vtkSmartPointer<vtkPolyData> Renderer::createTapeSet(Eigen::Vector3d offset, con
  */
 bool Renderer::updateGenerationDisplay(int newGen) {
   // now do initial fetch
-  Aws::S3::S3Client s3_client;
   Aws::S3::Model::GetObjectRequest request;
   request.SetBucket("autoc-storage"); // TODO extraCfg
   std::string keyName = computedKeyName + "gen" + std::to_string(newGen) + ".dmp";
   request.SetKey(keyName);
-  auto outcome = s3_client.GetObject(request);
+  auto outcome = s3_client->GetObject(request);
 
   if (outcome.IsSuccess()) {
     std::ostringstream oss;
@@ -540,7 +542,26 @@ int main(int argc, char** argv) {
   // AWS setup
   Aws::SDKOptions options;
   Aws::InitAPI(options);
-  Aws::S3::S3Client s3_client;
+
+  // real S3 or local minio?
+  Aws::Client::ClientConfiguration clientConfig;
+  Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy policy = Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::RequestDependent;
+  if (strcmp("default", "minio" /*extraCfg.s3Profile*/) != 0) {
+    clientConfig.endpointOverride = "http://localhost:9000"; // MinIO server address
+    clientConfig.scheme = Aws::Http::Scheme::HTTP; // Use HTTP instead of HTTPS
+    clientConfig.verifySSL = false; // Disable SSL verification for local testing
+
+    policy = Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never;
+  }
+
+  auto credentialsProvider = Aws::MakeShared<Aws::Auth::ProfileConfigFileAWSCredentialsProvider>("CredentialsProvider", "minio" /*extraCfg.s3Profile*/);
+
+  s3_client = Aws::MakeShared<Aws::S3::S3Client>("S3Client",
+    credentialsProvider,
+    clientConfig,
+    Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
+    false
+  );
 
   // should we look up the latest run?
   if (computedKeyName.empty()) {
@@ -551,7 +572,7 @@ int main(int argc, char** argv) {
 
     bool isTruncated = false;
     do {
-      auto outcome = s3_client.ListObjectsV2(listFolders);
+      auto outcome = s3_client->ListObjectsV2(listFolders);
       if (outcome.IsSuccess()) {
         const auto& result = outcome.GetResult();
 
@@ -580,7 +601,7 @@ int main(int argc, char** argv) {
   listItem.SetPrefix(computedKeyName + "gen");
   bool isTruncated = false;
   do {
-    auto outcome = s3_client.ListObjectsV2(listItem);
+    auto outcome = s3_client->ListObjectsV2(listItem);
     if (outcome.IsSuccess()) {
       // Objects are already in reverse lexicographical order
       for (const auto& object : outcome.GetResult().GetContents()) {

@@ -15,6 +15,7 @@ From skeleton/skeleton.cc
 #include <sstream>
 #include <thread>
 #include <chrono>
+#include <memory>
 
 #include "gp.h"
 #include "gpconfig.h"
@@ -27,6 +28,8 @@ From skeleton/skeleton.cc
 #include <aws/core/Aws.h>
 #include <aws/s3/S3Client.h>
 #include <aws/s3/model/PutObjectRequest.h>
+#include <aws/core/auth/AWSCredentialsProvider.h>
+#include <aws/core/client/ClientConfiguration.h>
 
 #include <boost/log/trivial.hpp>
 #include <boost/log/sources/severity_logger.hpp>
@@ -72,6 +75,7 @@ struct GPConfigVarInformation configArray[] =
   {"MinisimProgram", DATASTRING, &extraCfg.minisimProgram},
   {"MinisimPortOverride", DATAINT, &extraCfg.minisimPortOverride},
   {"S3Bucket", DATASTRING, &extraCfg.s3Bucket},
+  {"S3Profile", DATASTRING, &extraCfg.s3Profile},
   {"", DATAINT, NULL}
 };
 
@@ -79,6 +83,7 @@ struct GPConfigVarInformation configArray[] =
 ThreadPool* threadPool;
 std::ofstream fout;
 std::string computedKeyName;
+std::shared_ptr<Aws::S3::S3Client> s3_client;
 
 std::string generate_iso8601_timestamp() {
   auto now = std::chrono::system_clock::now();
@@ -114,8 +119,7 @@ public:
   // virtual char* load (istream& is);
   // virtual void save (ostream& os);
 
-  virtual void endOfEvaluation() {
-    Aws::S3::S3Client s3_client;
+  virtual void endOfEvaluation(MyGP* myGp = nullptr) {
 
     // dispatch all the GPs now (TODO this may still work inline with evaluate)
     for (auto& task : tasks) {
@@ -128,7 +132,8 @@ public:
     threadPool->wait_for_tasks();
     tasks.clear();
 
-    if (printEval) {
+    // this argument should only be set if we are dumping best GP of a generation
+    if (myGp != nullptr) {
       // now put the resulting elements into the S3 object
       Aws::S3::Model::PutObjectRequest request;
       request.SetBucket(extraCfg.s3Bucket);
@@ -138,7 +143,7 @@ public:
 
       std::ostringstream oss;
       boost::archive::text_oarchive oa(oss);
-      oa << evalResults;
+      oa << myGp->evalResults;
 
       // TODO: dump the selected GP
       // TODO: dump out fitness
@@ -146,15 +151,10 @@ public:
       *ss << oss.str();
       request.SetBody(ss);
 
-      auto outcome = s3_client.PutObject(request);
+      auto outcome = s3_client->PutObject(request);
       if (!outcome.IsSuccess()) {
         *logger.error() << "Error: " << outcome.GetError().GetMessage() << std::endl;
       }
-
-      // clear out elements for next pass
-      evalResults.crashReasonList.clear();
-      evalResults.pathList.clear();
-      evalResults.aircraftStateList.clear();
     }
   }
 
@@ -210,6 +210,26 @@ int main()
   // AWS setup
   Aws::SDKOptions options;
   Aws::InitAPI(options);
+
+  // real S3 or local minio?
+  Aws::Client::ClientConfiguration clientConfig;
+  Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy policy = Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::RequestDependent;
+  if (strcmp("default", extraCfg.s3Profile) != 0) {
+    clientConfig.endpointOverride = "http://localhost:9000"; // MinIO server address
+    clientConfig.scheme = Aws::Http::Scheme::HTTP; // Use HTTP instead of HTTPS
+    clientConfig.verifySSL = false; // Disable SSL verification for local testing
+
+    policy = Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never;
+  }
+
+  auto credentialsProvider = Aws::MakeShared<Aws::Auth::ProfileConfigFileAWSCredentialsProvider>("CredentialsProvider", extraCfg.s3Profile);
+
+  s3_client = Aws::MakeShared<Aws::S3::S3Client>("S3Client",
+    credentialsProvider,
+    clientConfig,
+    Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
+    false
+  );
 
   // initialize workers
   threadPool = new ThreadPool(extraCfg);
@@ -267,18 +287,7 @@ int main()
 
     // reverse order names for s3...
     computedKeyName = startTime + "/gen" + std::to_string(10000 - gen) + ".dmp";
-    pop->endOfEvaluation();
-
-    if (printEval) {
-      best->printAircraftState(fout, evalResults);
-
-      // TODO // now update points for Renderer
-      // planPath.push_back(path.at(pathIndex).start); // XXX push the full path
-      // actualPath.push_back(stepAircraftState.getPosition());
-
-      // // negative here as world up is negative Z
-      // actualOrientation.push_back(stepAircraftState.getOrientation() * -Eigen::Vector3d::UnitZ());
-    }
+    pop->endOfEvaluation(best);
 
     printEval = false;
 
@@ -295,6 +304,8 @@ int main()
     }
     pop->createGenerationReport(0, gen, fout, bout, *logger.info());
   }
+
+  // TODO send exit message to workers
 
   // go ahead and dump out the best of the best
   // ofstream bestGP("best.dat");

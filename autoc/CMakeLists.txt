@@ -4,7 +4,7 @@ project(autoc)
 find_package(VTK REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(Boost REQUIRED COMPONENTS thread system serialization log)
-find_package(AWSSDK REQUIRED COMPONENTS s3)
+find_package(AWSSDK REQUIRED COMPONENTS core s3)
 
 option(USE_SANITIZER "Build with Address Sanitizer" OFF)
 
