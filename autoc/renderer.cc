@@ -97,11 +97,12 @@ vtkSmartPointer<vtkPolyData> Renderer::createPointSet(Eigen::Vector3d offset, co
   return polyData;
 }
 
-vtkSmartPointer<vtkPolyData> Renderer::createSegmentSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> start, const std::vector<Eigen::Vector3d> end) {
+vtkSmartPointer<vtkPolyData> Renderer::createSegmentSet(Eigen::Vector3d offset, const std::vector<AircraftState> state, const std::vector<Eigen::Vector3d> end) {
   vtkSmartPointer<vtkPoints> points = vtkSmartPointer<vtkPoints>::New();
-  for (int i = 0; i < start.size(); i++) {
-    Eigen::Vector3d rStart = start[i] + offset;
-    Eigen::Vector3d rEnd = end[i] + offset;
+  for (int i = 0; i < state.size(); i++) {
+    auto& s = state.at(i);
+    Eigen::Vector3d rStart = Eigen::Vector3d{ s.getPosition()[0], s.getPosition()[1], s.getPosition()[2] } + offset;
+    Eigen::Vector3d rEnd = end[s.getThisPathIndex()] + offset;
     points->InsertNextPoint(rStart[0], rStart[1], rStart[2]);
     points->InsertNextPoint(rEnd[0], rEnd[1], rEnd[2]);
   }
@@ -211,7 +212,7 @@ bool Renderer::updateGenerationDisplay(int newGen) {
       this->actuals->AddInputData(createTapeSet(offset, a, stateToOrientation(evalResults.aircraftStateList[i])));
     }
     if (!a.empty() && !p.empty()) {
-      this->segmentGaps->AddInputData(createSegmentSet(offset, a, p));
+      this->segmentGaps->AddInputData(createSegmentSet(offset, evalResults.aircraftStateList[i], p));
     }
 
     // Create a plane source at z = 0

@@ -81,7 +81,6 @@ struct GPConfigVarInformation configArray[] =
 
 
 ThreadPool* threadPool;
-std::ofstream fout;
 std::string computedKeyName;
 std::shared_ptr<Aws::S3::S3Client> s3_client;
 
@@ -119,7 +118,7 @@ public:
   // virtual char* load (istream& is);
   // virtual void save (ostream& os);
 
-  virtual void endOfEvaluation(MyGP* myGp = nullptr) {
+  virtual void endOfEvaluation() {
 
     // dispatch all the GPs now (TODO this may still work inline with evaluate)
     for (auto& task : tasks) {
@@ -133,7 +132,7 @@ public:
     tasks.clear();
 
     // this argument should only be set if we are dumping best GP of a generation
-    if (myGp != nullptr) {
+    if (printEval) {
       // now put the resulting elements into the S3 object
       Aws::S3::Model::PutObjectRequest request;
       request.SetBucket(extraCfg.s3Bucket);
@@ -143,7 +142,7 @@ public:
 
       std::ostringstream oss;
       boost::archive::text_oarchive oa(oss);
-      oa << myGp->evalResults;
+      oa << bestOfEvalResults;
 
       // TODO: dump the selected GP
       // TODO: dump out fitness
@@ -158,7 +157,7 @@ public:
     }
   }
 
-  // Print (not mandatory) 
+  // Print (not mandatory)
   // virtual void printOn (ostream& os);
 
   // Access genetic programs (not mandatory)
@@ -287,7 +286,7 @@ int main()
 
     // reverse order names for s3...
     computedKeyName = startTime + "/gen" + std::to_string(10000 - gen) + ".dmp";
-    pop->endOfEvaluation(best);
+    pop->endOfEvaluation();
 
     printEval = false;
 

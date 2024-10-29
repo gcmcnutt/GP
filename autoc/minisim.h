@@ -72,37 +72,32 @@ namespace boost {
 // This macro tells boost to use the save/load functions we just defined for Quaterniond
 BOOST_SERIALIZATION_SPLIT_FREE(Eigen::Quaterniond)
 
-struct WorkerContext {
-  std::unique_ptr<boost::asio::ip::tcp::socket> socket;
-  boost::process::child child_process;
-};
-
 /*
  * some generic path information about routes
  */
-class Path {
-public:
-  Eigen::Vector3d start;
-  Eigen::Vector3d orientation;
-  double distanceFromStart;
-  double radiansFromStart;
+  class Path {
+  public:
+    Eigen::Vector3d start;
+    Eigen::Vector3d orientation;
+    double distanceFromStart;
+    double radiansFromStart;
 
-  void dump(std::ostream& os) {
-    os << format("Path: (%f, %f, %f), Odometer: %f, Turnmeter: %f")
-      % start[0] % start[1] % start[2]
-      % distanceFromStart
-      % radiansFromStart;
-  }
+    void dump(std::ostream& os) {
+      os << format("Path: (%f, %f, %f), Odometer: %f, Turnmeter: %f")
+        % start[0] % start[1] % start[2]
+        % distanceFromStart
+        % radiansFromStart;
+    }
 
-  friend class boost::serialization::access;
+    friend class boost::serialization::access;
 
-  template<class Archive>
-  void serialize(Archive& ar, const unsigned int version) {
-    ar& start;
-    ar& orientation;
-    ar& distanceFromStart;
-    ar& radiansFromStart;
-  }
+    template<class Archive>
+    void serialize(Archive& ar, const unsigned int version) {
+      ar& start;
+      ar& orientation;
+      ar& distanceFromStart;
+      ar& radiansFromStart;
+    }
 };
 BOOST_CLASS_VERSION(Path, 1)
 
@@ -284,6 +279,12 @@ struct EvalResults {
   }
 };
 BOOST_CLASS_VERSION(EvalResults, 1)
+
+struct WorkerContext {
+  std::unique_ptr<boost::asio::ip::tcp::socket> socket;
+  boost::process::child child_process;
+  EvalResults evalResults;
+};
 
 /*
  * generic RPC wrappers

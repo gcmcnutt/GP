@@ -91,7 +91,7 @@ private:
 
   Eigen::Vector3d renderingOffset(int i); // locate a coordinate offset for our rendering screen
   vtkSmartPointer<vtkPolyData> createPointSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> points);
-  vtkSmartPointer<vtkPolyData> createSegmentSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> start, const std::vector<Eigen::Vector3d> end);
+  vtkSmartPointer<vtkPolyData> createSegmentSet(Eigen::Vector3d offset, const std::vector<AircraftState> state, const std::vector<Eigen::Vector3d> end);
   vtkSmartPointer<vtkPolyData> createTapeSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> points, const std::vector<Eigen::Vector3d> normals);
   std::vector<Eigen::Vector3d> pathToVector(const std::vector<Path> path);
   std::vector<Eigen::Vector3d> stateToVector(const std::vector<AircraftState> path);

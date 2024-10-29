@@ -17,7 +17,6 @@
 * probably need to do task queues per event type more than per GP -- especially with larger fanouts of test paths, we see long tail of evals
 - plumb stdout/stderr nicely for a build run -- perhaps hook this into archiving system too
 * get random start/orientation working in crrcsim
-* split out evaluator to be standalone in prep for onboard execution
 - figure out how to use crrcsim robots to form lead plane
 - more accurate hb1 model
 - Still getting thermal crash/corruption
@@ -33,5 +32,7 @@
 - consider PID as basic controller (perhaps some other input/output to allow for slight tuning)
 - a field download/review of flight data
 - model and env dithering in crrcsim
+- odd behavior where header generation value seems offbyon from what is reported in logs and in runtime stdout
+- clean shutdown method for terminating sims
 
 

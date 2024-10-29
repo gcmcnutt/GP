@@ -46,6 +46,8 @@ extern std::vector<std::vector<Path>> generationPaths;
 extern std::ofstream fout;
 extern std::atomic_ulong nanDetector;
 extern void createNodeSet(GPAdfNodeSet& adfNs);
+extern AircraftState aircraftState;
+extern EvalResults bestOfEvalResults;
 
 // Inherit the three GP classes GPGene, GP and GPPopulation
 class MyGene : public GPGene
@@ -114,9 +116,6 @@ public:
 
   // async evaluator
   void evalTask(WorkerContext& context);
-
-  AircraftState aircraftState{ 0, 0, Eigen::Quaterniond::Identity(), Eigen::Vector3d(0, 0, 0), 0.0, 0.0, 0.0, 0, false };
-  EvalResults evalResults;
 };
 
 

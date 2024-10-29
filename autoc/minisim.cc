@@ -74,32 +74,32 @@ public:
         }
 
         // reset sim state
-        gp.aircraftState = AircraftState{ 0, SIM_INITIAL_VELOCITY, aircraft_orientation, initialPosition, 0.0, 0.0, SIM_INITIAL_THROTTLE, 0, false };
+        aircraftState = AircraftState{ 0, SIM_INITIAL_VELOCITY, aircraft_orientation, initialPosition, 0.0, 0.0, SIM_INITIAL_THROTTLE, 0, false };
 
         // iterate the simulator
         unsigned long int duration_msec = 0; // how long have we been running
         CrashReason crashReason = CrashReason::None;
 
         // as long as we are within the time limit and have not reached the end of the path
-        while (duration_msec < SIM_TOTAL_TIME_MSEC && gp.aircraftState.getThisPathIndex() < path.size() - 2 && crashReason == CrashReason::None) {
+        while (duration_msec < SIM_TOTAL_TIME_MSEC && aircraftState.getThisPathIndex() < path.size() - 2 && crashReason == CrashReason::None) {
 
           // approximate pitch/roll/throttle to achieve goal
 
           // *** ROLL: Calculate the vector from craft to target in world frame
-          Eigen::Vector3d craftToTarget = path.at(gp.aircraftState.getThisPathIndex()).start - gp.aircraftState.getPosition();
+          Eigen::Vector3d craftToTarget = path.at(aircraftState.getThisPathIndex()).start - aircraftState.getPosition();
 
           // Transform the craft-to-target vector to body frame
-          Eigen::Vector3d target_local = gp.aircraftState.getOrientation().inverse() * craftToTarget;
+          Eigen::Vector3d target_local = aircraftState.getOrientation().inverse() * craftToTarget;
 
           // Project the craft-to-target vector onto the body YZ plane
           Eigen::Vector3d projectedVector(0, target_local.y(), target_local.z());
 
-          // Calculate the angle between the projected vector and the body Z-axis 
+          // Calculate the angle between the projected vector and the body Z-axis
           double rollEstimate = std::atan2(projectedVector.y(), -projectedVector.z());
 
           // *** PITCH: Calculate the vector from craft to target in world frame if it did rotate
           Eigen::Quaterniond rollRotation(Eigen::AngleAxisd(rollEstimate, Eigen::Vector3d::UnitX()));
-          Eigen::Quaterniond virtualOrientation = gp.aircraftState.getOrientation() * rollRotation;
+          Eigen::Quaterniond virtualOrientation = aircraftState.getOrientation() * rollRotation;
 
           // Transform target vector to new virtual orientation
           Eigen::Vector3d newLocalTargetVector = virtualOrientation.inverse() * craftToTarget;
@@ -114,26 +114,26 @@ public:
           // }
 
           // range is -1:1
-          gp.aircraftState.setRollCommand(rollEstimate / M_PI);
-          gp.aircraftState.setPitchCommand(pitchEstimate / M_PI);
+          aircraftState.setRollCommand(rollEstimate / M_PI);
+          aircraftState.setPitchCommand(pitchEstimate / M_PI);
 
           // Throttle estimate range is -1:1
           {
-            double distance = (path.at(gp.aircraftState.getThisPathIndex()).start - gp.aircraftState.getPosition()).norm();
-            double throttleEstimate = std::clamp((distance - 10) / gp.aircraftState.getRelVel(), -1.0, 1.0);
-            gp.aircraftState.setThrottleCommand(throttleEstimate);
+            double distance = (path.at(aircraftState.getThisPathIndex()).start - aircraftState.getPosition()).norm();
+            double throttleEstimate = std::clamp((distance - 10) / aircraftState.getRelVel(), -1.0, 1.0);
+            aircraftState.setThrottleCommand(throttleEstimate);
           }
 
 #if 0
           {
             char outbuf[1000];
-            Eigen::Matrix3d r = gp.aircraftState.getOrientation().toRotationMatrix();
+            Eigen::Matrix3d r = aircraftState.getOrientation().toRotationMatrix();
             sprintf(outbuf, "Estimate airXaxis:%f %f %f  airZaxis:%f %f %f toTarget:%f %f %f rolledTarget:%f %f %f  r:%f p:%f t:%f\n",
               r.col(0).x(), r.col(0).y(), r.col(0).z(),
               r.col(2).x(), r.col(2).y(), r.col(2).z(),
               projectedVector.x(), projectedVector.y(), projectedVector.z(),
               newLocalTargetVector.x(), newLocalTargetVector.y(), newLocalTargetVector.z(),
-              gp.aircraftState.getPitchCommand(), gp.aircraftState.getRollCommand(), gp.aircraftState.getThrottleCommand());
+              aircraftState.getPitchCommand(), aircraftState.getRollCommand(), aircraftState.getThrottleCommand());
 
             std::cout << outbuf;
           }
@@ -143,27 +143,27 @@ public:
           gp.NthMyGene(0)->evaluate(path, gp, 0);
 
           // advance the aircraft
-          gp.aircraftState.minisimAdvanceState(SIM_TIME_STEP_MSEC);
+          aircraftState.minisimAdvanceState(SIM_TIME_STEP_MSEC);
           duration_msec += SIM_TIME_STEP_MSEC;
-          gp.aircraftState.setSimTimeMsec(duration_msec);
+          aircraftState.setSimTimeMsec(duration_msec);
 
           // did we crash?
-          double distanceFromOrigin = std::sqrt(gp.aircraftState.getPosition()[0] * gp.aircraftState.getPosition()[0] +
-            gp.aircraftState.getPosition()[1] * gp.aircraftState.getPosition()[1]);
-          if (gp.aircraftState.getPosition()[2] < (SIM_MIN_ELEVATION - SIM_PATH_RADIUS_LIMIT) || // too high
-            gp.aircraftState.getPosition()[2] > (SIM_MIN_ELEVATION) || // too low
+          double distanceFromOrigin = std::sqrt(aircraftState.getPosition()[0] * aircraftState.getPosition()[0] +
+            aircraftState.getPosition()[1] * aircraftState.getPosition()[1]);
+          if (aircraftState.getPosition()[2] < (SIM_MIN_ELEVATION - SIM_PATH_RADIUS_LIMIT) || // too high
+            aircraftState.getPosition()[2] > (SIM_MIN_ELEVATION) || // too low
             distanceFromOrigin > SIM_PATH_RADIUS_LIMIT) { // too far
             crashReason = CrashReason::Eval;
           }
 
           // search for location of next timestamp
           double timeDistance = SIM_RABBIT_VELOCITY * duration_msec / 1000.0;
-          while (gp.aircraftState.getThisPathIndex() < path.size() - 2 && (path.at(gp.aircraftState.getThisPathIndex()).distanceFromStart < timeDistance)) {
-            gp.aircraftState.setThisPathIndex(gp.aircraftState.getThisPathIndex() + 1);
+          while (aircraftState.getThisPathIndex() < path.size() - 2 && (path.at(aircraftState.getThisPathIndex()).distanceFromStart < timeDistance)) {
+            aircraftState.setThisPathIndex(aircraftState.getThisPathIndex() + 1);
           }
 
           // record progress
-          aircraftStateSteps.push_back(gp.aircraftState);
+          aircraftStateSteps.push_back(aircraftState);
         }
 
         // save results of this run
@@ -192,7 +192,7 @@ int main(int argc, char* argv[]) {
     std::cerr << "Usage: minisim <id> <port>" << std::endl;
     return 1;
   }
-  std:string id = argv[1];
+std:string id = argv[1];
 
   // Create the adf function/terminal set and print it out.
   createNodeSet(adfNs);
