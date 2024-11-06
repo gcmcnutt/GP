@@ -33,6 +33,8 @@ std::string crashReasonToString(CrashReason type) {
   case CrashReason::Boot: return "Boot";
   case CrashReason::Sim: return "Sim";
   case CrashReason::Eval: return "Eval";
+  case CrashReason::Time: return "Time";
+  case CrashReason::Distance: return "Distance";
   default: return "*?*";
   }
 };
@@ -226,7 +228,7 @@ void MyGP::evalTask(WorkerContext& context)
 
   // How did it go?
   context.evalResults = receiveRPC<EvalResults>(*context.socket);
-  // evalResults.dump(std::cerr);
+  // context.evalResults.dump(std::cerr);
 
   // Compute the fitness results for each path
   for (int i = 0; i < context.evalResults.pathList.size(); i++) {
@@ -336,7 +338,7 @@ void MyGP::evalTask(WorkerContext& context)
     localFitness = normalized_distance_error + normalized_angle_align + normalized_control_smoothness;
 
     if (isnan(localFitness)) {
-      nanDetector++;
+     nanDetector++;
     }
 
     if (crashReason != CrashReason::None) {

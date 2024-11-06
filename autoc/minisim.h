@@ -110,8 +110,8 @@ BOOST_CLASS_VERSION(Path, 1)
     AircraftState() {}
     AircraftState(int thisPathIndex, double relVel, Eigen::Quaterniond orientation,
       Eigen::Vector3d pos, double pc, double rc, double tc,
-      unsigned long int timeMsec, bool crashed)
-      : thisPathIndex(thisPathIndex), dRelVel(relVel), aircraft_orientation(orientation), position(pos), simTimeMsec(timeMsec), simCrashed(crashed),
+      unsigned long int timeMsec)
+      : thisPathIndex(thisPathIndex), dRelVel(relVel), aircraft_orientation(orientation), position(pos), simTimeMsec(timeMsec),
       pitchCommand(pc), rollCommand(rc), throttleCommand(tc) {
     }
 
@@ -130,9 +130,6 @@ BOOST_CLASS_VERSION(Path, 1)
 
     unsigned long int getSimTimeMsec() const { return simTimeMsec; }
     void setSimTimeMsec(unsigned long int timeMsec) { simTimeMsec = timeMsec; }
-
-    bool isSimCrashed() const { return simCrashed; }
-    void setSimCrashed(bool crashed) { simCrashed = crashed; }
 
     double getPitchCommand() const { return pitchCommand; }
     double setPitchCommand(double pitch) { return (pitchCommand = std::clamp(pitch, -1.0, 1.0)); }
@@ -180,7 +177,6 @@ BOOST_CLASS_VERSION(Path, 1)
     Eigen::Quaterniond aircraft_orientation;
     Eigen::Vector3d position;
     unsigned long int simTimeMsec;
-    bool simCrashed;
     double pitchCommand;
     double rollCommand;
     double throttleCommand;
@@ -197,7 +193,6 @@ BOOST_CLASS_VERSION(Path, 1)
       ar& rollCommand;
       ar& throttleCommand;
       ar& simTimeMsec;
-      ar& simCrashed;
     }
 };
 BOOST_CLASS_VERSION(AircraftState, 1)
@@ -225,8 +220,11 @@ enum class CrashReason {
   Boot,
   Sim,
   Eval,
+  Time,
+  Distance,
 };
 
+std::string crashReasonToString(CrashReason type);
 
 struct EvalResults {
   std::vector<CrashReason> crashReasonList;
@@ -245,6 +243,10 @@ struct EvalResults {
   void dump(std::ostream& os) {
     os << format("EvalResults: crash[%d] paths[%d] states[%d]\n Paths:\n")
       % crashReasonList.size() % pathList.size() % aircraftStateList.size();
+
+    for (int i = 0; i < crashReasonList.size(); i++) {
+      os << format("  Crash %3d: %s\n") % i % crashReasonToString(crashReasonList.at(i));
+    }
 
     for (int i = 0; i < pathList.size(); i++) {
       for (int j = 0; j < pathList.at(i).size(); j++) {

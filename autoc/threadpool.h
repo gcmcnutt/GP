@@ -10,6 +10,7 @@
 #include <functional>
 #include <memory>
 #include <atomic>
+#include <unistd.h>
 
 #include "autoc.h"
 #include "logger.h"
@@ -39,7 +40,7 @@ private:
     }
     else {
       std::string subprocess_path = extraCfg.minisimProgram;
-      std::vector<std::string> args = { std::to_string(id), std::to_string(port_) };
+      std::vector<std::string> args = { std::to_string(getpid()), std::to_string(id), std::to_string(port_) };
       *logger.info() << "Launching: [" << id << "] " << subprocess_path << " " << port_ << endl;
 
       context.child_process = boost::process::child(

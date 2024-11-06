@@ -171,7 +171,7 @@ bool Renderer::updateGenerationDisplay(int newGen) {
   std::string keyName = computedKeyName + "gen" + std::to_string(newGen) + ".dmp";
   request.SetKey(keyName);
   auto outcome = s3_client->GetObject(request);
-
+  std::cerr << "Fetched " << keyName << " result " << outcome.IsSuccess() << std::endl;
   if (outcome.IsSuccess()) {
     std::ostringstream oss;
     oss << outcome.GetResult().GetBody().rdbuf();
@@ -189,7 +189,7 @@ bool Renderer::updateGenerationDisplay(int newGen) {
     }
   }
   else {
-    std::cerr << "Error retrieving object from S3: " << outcome.GetError().GetMessage() << std::endl;
+    std::cerr << "Error retrieving object " << keyName << " from S3: " << outcome.GetError().GetMessage() << std::endl;
     return false;
   }
 

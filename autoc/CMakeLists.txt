@@ -8,6 +8,8 @@ find_package(AWSSDK REQUIRED COMPONENTS core s3)
 
 option(USE_SANITIZER "Build with Address Sanitizer" OFF)
 
+set(CMAKE_EXE_LINKER_FLAGS "-no-pie")
+
 if(USE_SANITIZER)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address -fno-omit-frame-pointer")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address -fno-omit-frame-pointer")

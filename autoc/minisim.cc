@@ -29,7 +29,6 @@ GPAdfNodeSet adfNs;
 
 class SimProcess {
 public:
-  bool simCrashed = false;
   SimProcess(boost::asio::io_context& io_context, unsigned short port) : socket_(io_context) {
     tcp::resolver resolver(io_context);
     auto endpoints = resolver.resolve("localhost", std::to_string(port));
@@ -74,14 +73,13 @@ public:
         }
 
         // reset sim state
-        aircraftState = AircraftState{ 0, SIM_INITIAL_VELOCITY, aircraft_orientation, initialPosition, 0.0, 0.0, SIM_INITIAL_THROTTLE, 0, false };
+        aircraftState = AircraftState{ 0, SIM_INITIAL_VELOCITY, aircraft_orientation, initialPosition, 0.0, 0.0, SIM_INITIAL_THROTTLE, 0 };
 
         // iterate the simulator
         unsigned long int duration_msec = 0; // how long have we been running
         CrashReason crashReason = CrashReason::None;
 
-        // as long as we are within the time limit and have not reached the end of the path
-        while (duration_msec < SIM_TOTAL_TIME_MSEC && aircraftState.getThisPathIndex() < path.size() - 2 && crashReason == CrashReason::None) {
+        while (crashReason == CrashReason::None) {
 
           // approximate pitch/roll/throttle to achieve goal
 
@@ -164,6 +162,15 @@ public:
 
           // record progress
           aircraftStateSteps.push_back(aircraftState);
+
+          // as long as we are within the time limit and have not reached the end of the path
+          if (duration_msec >= SIM_TOTAL_TIME_MSEC) {
+            crashReason = CrashReason::Time;
+          }
+
+          if (aircraftState.getThisPathIndex() >= path.size() - 2) {
+            crashReason = CrashReason::Distance;
+          }
         }
 
         // save results of this run
@@ -188,11 +195,11 @@ private:
 };
 
 int main(int argc, char* argv[]) {
-  if (argc != 3) {
-    std::cerr << "Usage: minisim <id> <port>" << std::endl;
+  if (argc != 4) {
+    std::cerr << "Usage: minisim <base> <id> <port>" << std::endl;
     return 1;
   }
-std:string id = argv[1];
+std:string id = argv[2];
 
   // Create the adf function/terminal set and print it out.
   createNodeSet(adfNs);
@@ -209,7 +216,7 @@ std:string id = argv[1];
   GPRegisterClass(new MyGene());
   GPRegisterClass(new MyGP());
 
-  unsigned short port = std::atoi(argv[2]);
+  unsigned short port = std::atoi(argv[3]);
   boost::asio::io_context io_context;
   SimProcess sim_process(io_context, port);
   sim_process.run();
