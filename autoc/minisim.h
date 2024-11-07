@@ -40,6 +40,7 @@ using boost::format;
 
 #define SIM_TOTAL_TIME_MSEC (30 * 1000)
 #define SIM_TIME_STEP_MSEC (200)
+#define SIM_MAX_INTERVAL_MSEC (SIM_TIME_STEP_MSEC * 5)
 
 namespace boost {
   namespace serialization {

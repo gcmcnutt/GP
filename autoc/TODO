@@ -35,5 +35,10 @@
 - odd behavior where header generation value seems offbyon from what is reported in logs and in runtime stdout - maybe related but the gp output generation number seems offbyon from what renderer sees -- e.g. if 25 completed, can't see it schange until 26 is rendered
 - clean shutdown method for terminating sims
 - double check fitness function is based on same goal as trackers (points to the same goal point)
+now that a crrcsim batch runs long, perhaps have polling loop for keepalive as when autoc exits crrcsim will exit
+
+
+Good Runs
+- autoc-9223370305983481960-2024-11-06T05:34:53.847Z -- this is minisim large run on 25 paths
 
 
