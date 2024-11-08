@@ -31,7 +31,7 @@ std::vector<Path> generateSmoothPath(int numPoints, double radius, double height
   std::vector<Eigen::Vector3d> controlPoints;
   std::vector<Path> path;
 
-// #define PATHGEN_FIXED_PATH 1
+#define PATHGEN_FIXED_PATH 1
 #ifdef PATHGEN_FIXED_PATH
   controlPoints.push_back({ 0, 0, base });
 
