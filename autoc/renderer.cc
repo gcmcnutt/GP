@@ -6,10 +6,13 @@
 #include <aws/s3/S3Client.h>
 #include <aws/s3/model/GetObjectRequest.h>
 #include <aws/s3/model/ListObjectsV2Request.h>
+#include <aws/core/auth/AWSCredentialsProvider.h>
+#include <aws/core/client/ClientConfiguration.h>
 
 EvalResults evalResults;
 std::string computedKeyName = "";
 Renderer renderer;
+std::shared_ptr<Aws::S3::S3Client> s3_client;
 
 void PrintPolyDataInfo(vtkPolyData* polyData)
 {
@@ -51,7 +54,7 @@ void PrintPolyDataInfo(vtkPolyData* polyData)
 // given i, and NUM_PATHS_PER_GEN, compute the offsets for this particular square
 Eigen::Vector3d Renderer::renderingOffset(int i) {
   // Calculate the dimension of the larger square
-  int sideLength = std::ceil(std::sqrt(evalResults.actualList.size()));
+  int sideLength = std::ceil(std::sqrt(evalResults.pathList.size()));
 
   int row = i / sideLength;
   int col = i % sideLength;
@@ -94,11 +97,12 @@ vtkSmartPointer<vtkPolyData> Renderer::createPointSet(Eigen::Vector3d offset, co
   return polyData;
 }
 
-vtkSmartPointer<vtkPolyData> Renderer::createSegmentSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> start, const std::vector<Eigen::Vector3d> end) {
+vtkSmartPointer<vtkPolyData> Renderer::createSegmentSet(Eigen::Vector3d offset, const std::vector<AircraftState> state, const std::vector<Eigen::Vector3d> end) {
   vtkSmartPointer<vtkPoints> points = vtkSmartPointer<vtkPoints>::New();
-  for (int i = 0; i < start.size(); i++) {
-    Eigen::Vector3d rStart = start[i] + offset;
-    Eigen::Vector3d rEnd = end[i] + offset;
+  for (int i = 0; i < state.size(); i++) {
+    auto& s = state.at(i);
+    Eigen::Vector3d rStart = Eigen::Vector3d{ s.getPosition()[0], s.getPosition()[1], s.getPosition()[2] } + offset;
+    Eigen::Vector3d rEnd = end[s.getThisPathIndex()] + offset;
     points->InsertNextPoint(rStart[0], rStart[1], rStart[2]);
     points->InsertNextPoint(rEnd[0], rEnd[1], rEnd[2]);
   }
@@ -162,13 +166,12 @@ vtkSmartPointer<vtkPolyData> Renderer::createTapeSet(Eigen::Vector3d offset, con
  */
 bool Renderer::updateGenerationDisplay(int newGen) {
   // now do initial fetch
-  Aws::S3::S3Client s3_client;
   Aws::S3::Model::GetObjectRequest request;
   request.SetBucket("autoc-storage"); // TODO extraCfg
   std::string keyName = computedKeyName + "gen" + std::to_string(newGen) + ".dmp";
   request.SetKey(keyName);
-  auto outcome = s3_client.GetObject(request);
-
+  auto outcome = s3_client->GetObject(request);
+  std::cerr << "Fetched " << keyName << " result " << outcome.IsSuccess() << std::endl;
   if (outcome.IsSuccess()) {
     std::ostringstream oss;
     oss << outcome.GetResult().GetBody().rdbuf();
@@ -186,7 +189,7 @@ bool Renderer::updateGenerationDisplay(int newGen) {
     }
   }
   else {
-    std::cerr << "Error retrieving object from S3: " << outcome.GetError().GetMessage() << std::endl;
+    std::cerr << "Error retrieving object " << keyName << " from S3: " << outcome.GetError().GetMessage() << std::endl;
     return false;
   }
 
@@ -200,16 +203,16 @@ bool Renderer::updateGenerationDisplay(int newGen) {
     Eigen::Vector3d offset = renderingOffset(i);
 
     std::vector<Eigen::Vector3d> p = pathToVector(evalResults.pathList[i]);
-    std::vector<Eigen::Vector3d> a = pathToVector(evalResults.actualList[i]);
+    std::vector<Eigen::Vector3d> a = stateToVector(evalResults.aircraftStateList[i]);
 
     if (!p.empty()) {
       this->paths->AddInputData(createPointSet(offset, p));
     }
     if (!a.empty()) {
-      this->actuals->AddInputData(createTapeSet(offset, a, pathToOrientation(evalResults.actualList[i])));
+      this->actuals->AddInputData(createTapeSet(offset, a, stateToOrientation(evalResults.aircraftStateList[i])));
     }
     if (!a.empty() && !p.empty()) {
-      this->segmentGaps->AddInputData(createSegmentSet(offset, a, p));
+      this->segmentGaps->AddInputData(createSegmentSet(offset, evalResults.aircraftStateList[i], p));
     }
 
     // Create a plane source at z = 0
@@ -498,10 +501,18 @@ std::vector<Eigen::Vector3d> Renderer::pathToVector(std::vector<Path> path) {
   return points;
 }
 
-std::vector<Eigen::Vector3d> Renderer::pathToOrientation(std::vector<Path> path) {
+std::vector<Eigen::Vector3d> Renderer::stateToVector(std::vector<AircraftState> state) {
   std::vector<Eigen::Vector3d> points;
-  for (const auto& p : path) {
-    points.push_back(p.orientation);
+  for (const auto& s : state) {
+    points.push_back({ s.getPosition()[0], s.getPosition()[1], s.getPosition()[2] });
+  }
+  return points;
+}
+
+std::vector<Eigen::Vector3d> Renderer::stateToOrientation(std::vector<AircraftState> state) {
+  std::vector<Eigen::Vector3d> points;
+  for (const auto& s : state) {
+    points.push_back(s.getOrientation() * -Eigen::Vector3d::UnitZ());
   }
   return points;
 }
@@ -532,7 +543,26 @@ int main(int argc, char** argv) {
   // AWS setup
   Aws::SDKOptions options;
   Aws::InitAPI(options);
-  Aws::S3::S3Client s3_client;
+
+  // real S3 or local minio?
+  Aws::Client::ClientConfiguration clientConfig;
+  Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy policy = Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::RequestDependent;
+  if (strcmp("default", "minio" /*extraCfg.s3Profile*/) != 0) {
+    clientConfig.endpointOverride = "http://localhost:9000"; // MinIO server address
+    clientConfig.scheme = Aws::Http::Scheme::HTTP; // Use HTTP instead of HTTPS
+    clientConfig.verifySSL = false; // Disable SSL verification for local testing
+
+    policy = Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never;
+  }
+
+  auto credentialsProvider = Aws::MakeShared<Aws::Auth::ProfileConfigFileAWSCredentialsProvider>("CredentialsProvider", "minio" /*extraCfg.s3Profile*/);
+
+  s3_client = Aws::MakeShared<Aws::S3::S3Client>("S3Client",
+    credentialsProvider,
+    clientConfig,
+    Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
+    false
+  );
 
   // should we look up the latest run?
   if (computedKeyName.empty()) {
@@ -543,7 +573,7 @@ int main(int argc, char** argv) {
 
     bool isTruncated = false;
     do {
-      auto outcome = s3_client.ListObjectsV2(listFolders);
+      auto outcome = s3_client->ListObjectsV2(listFolders);
       if (outcome.IsSuccess()) {
         const auto& result = outcome.GetResult();
 
@@ -572,7 +602,7 @@ int main(int argc, char** argv) {
   listItem.SetPrefix(computedKeyName + "gen");
   bool isTruncated = false;
   do {
-    auto outcome = s3_client.ListObjectsV2(listItem);
+    auto outcome = s3_client->ListObjectsV2(listItem);
     if (outcome.IsSuccess()) {
       // Objects are already in reverse lexicographical order
       for (const auto& object : outcome.GetResult().GetContents()) {

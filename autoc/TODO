@@ -7,31 +7,37 @@
 * replay functions
   - select board
   - animate path, including tracking behind
+  - add a couple renderer commands (capital N go to newest, capital P go to oldest)
 - consider fitness function for distance, alignment is ramped sensitivity for first couple of seconds (to allow capture from random start)
 - some memory leak is back...
 - control smoothness is maybe more about craft rotation as a function of optimal -- not control inputs
-- we have crash reason -- probably should record it
 - walk various classes for copy by reference, copy by pointer, copy by value == a smaller mem leak in autoc
-* we can buffer the best run over a population vs re-running it -- save the final eval steps
+- we can buffer the best run over a population vs re-running it -- save the final eval steps
 - can not interactively flip to autoc input as it attempts to use the callback port -- soften this dependency for when it is manually run (maybe if port not set, it falls back to Mouse)
-* probably need to do task queues per event type more than per GP -- especially with larger fanouts of test paths, we see long tail of evals
 - plumb stdout/stderr nicely for a build run -- perhaps hook this into archiving system too
 * get random start/orientation working in crrcsim
-* split out evaluator to be standalone in prep for onboard execution
 - figure out how to use crrcsim robots to form lead plane
-- more accurate hb1 model
+* more accurate hb1 model
 - Still getting thermal crash/corruption
 * 30fps 2x speed and 200msec update ask winds up being more like 250msec update -- need to figure out why
 - variations project - to get closer to zero-shot
   - vary wind, turbulence
   - maybe revisit thermal model
   - power, drag, service response times
-- Fixed path generation for pathgen for basic tests
+* Fixed path generation for pathgen for basic tests
 - GP to autoc in inav via controls
   - selector
   - activate
 - consider PID as basic controller (perhaps some other input/output to allow for slight tuning)
 - a field download/review of flight data
 - model and env dithering in crrcsim
+* odd behavior where header generation value seems offbyon from what is reported in logs and in runtime stdout - maybe related but the gp output generation number seems offbyon from what renderer sees -- e.g. if 25 completed, can't see it schange until 26 is rendered
+* clean shutdown method for terminating sims
+* double check fitness function is based on same goal as trackers (points to the same goal point)
+now that a crrcsim batch runs long, perhaps have polling loop for keepalive as when autoc exits crrcsim will exit
+
+
+Good Runs
+- autoc-9223370305983481960-2024-11-06T05:34:53.847Z -- this is minisim large run on 25 paths
 
 

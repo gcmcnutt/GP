@@ -1,13 +1,14 @@
 #! /bin/bash
 
 # ok we come in with an instanceID and port -- let's adjust
-INSTANCE=$1
-PORT=$2
+BASE=$1
+INSTANCE=$2
+PORT=$3
 
 PROGDIR=${HOME}/crsim/crrcsim-0.9.13
 PROG=build/crrcsim
 CRRCSIM_LOGDIR=/tmp/crrcsim
-CRRCSIM_LOG=${CRRCSIM_LOGDIR}/autoc_crrcsim.$$.log
+CRRCSIM_LOG=${CRRCSIM_LOGDIR}/autoc_crrcsim-$1.$$.log
 
 # point to an instance of Xvfb for all but the first
 # Xvfb :2 -screen 0 1024x768x8 &
@@ -18,9 +19,9 @@ case "$INSTANCE" in
   #   DISPLAY=:0
   #   ;;
   *)
-    DISPLAY=:2
+    DISPLAY=:0
     ;;
 esac
 
 cd $PROGDIR
-DISPLAY=$DISPLAY $PROG -g autoc_config.xml -p "$PORT" -i AUTOC > $CRRCSIM_LOG 2>&1
+DISPLAY=$DISPLAY stdbuf -o0 -e0 $PROG -g autoc_config.xml -p "$PORT" -i AUTOC > $CRRCSIM_LOG 2>&1

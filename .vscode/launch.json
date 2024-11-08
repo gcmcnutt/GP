@@ -3,6 +3,27 @@
   "configurations": [
 
     {
+      "name": "autoc: Core Dump Debug",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/autoc",
+      "args": [],
+      "stopAtEntry": false,
+      "cwd": "${workspaceFolder}",
+      "environment": [],
+      "externalConsole": false,
+      "MIMode": "gdb",
+      "setupCommands": [
+        {
+          "description": "Enable pretty-printing for gdb",
+          "text": "-enable-pretty-printing",
+          "ignoreFailures": true
+        }
+      ],
+      "coreDumpPath": "${input:coreDumpPathMinisim}",
+      "miDebuggerPath": "/usr/bin/gdb"
+    },
+    {
       "name": "minisim: Core Dump Debug",
       "type": "cppdbg",
       "request": "launch",
@@ -98,6 +119,7 @@
       "request": "launch",
       "program": "${workspaceFolder}/build/minisim",
       "args": [
+        "37",
         "1234"
       ],
       "stopAtEntry": false,

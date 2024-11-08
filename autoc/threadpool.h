@@ -5,22 +5,17 @@
 
 #include <boost/asio.hpp>
 #include <boost/thread.hpp>
-#include <boost/process.hpp>
 #include <vector>
 #include <queue>
 #include <functional>
 #include <memory>
 #include <atomic>
+#include <unistd.h>
 
 #include "autoc.h"
 #include "logger.h"
 
 using namespace std;
-
-struct WorkerContext {
-  std::unique_ptr<boost::asio::ip::tcp::socket> socket;
-  boost::process::child child_process;
-};
 
 class ThreadPool {
 private:
@@ -45,7 +40,7 @@ private:
     }
     else {
       std::string subprocess_path = extraCfg.minisimProgram;
-      std::vector<std::string> args = { std::to_string(id), std::to_string(port_) };
+      std::vector<std::string> args = { std::to_string(getpid()), std::to_string(id), std::to_string(port_) };
       *logger.info() << "Launching: [" << id << "] " << subprocess_path << " " << port_ << endl;
 
       context.child_process = boost::process::child(
