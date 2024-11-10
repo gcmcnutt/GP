@@ -27,6 +27,9 @@ boost::iostreams::stream<boost::iostreams::array_source> charArrayToIstream(cons
 
 GPAdfNodeSet adfNs;
 
+void MyGP::evaluate() {}
+void MyGP::evalTask(WorkerContext& context) {}
+
 class SimProcess {
 public:
   SimProcess(boost::asio::io_context& io_context, unsigned short port) : socket_(io_context) {

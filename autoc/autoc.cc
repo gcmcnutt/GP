@@ -45,6 +45,12 @@ using namespace std;
 namespace logging = boost::log;
 
 Logger logger;
+std::atomic_bool printEval = false; // verbose (used for rendering best of population)
+std::vector<MyGP*> tasks = std::vector<MyGP*>();
+std::vector<std::vector<Path>> generationPaths;
+std::atomic_ulong nanDetector = 0;
+std::ofstream fout;
+EvalResults bestOfEvalResults;
 
 // Define configuration parameters and the neccessary array to
 // read/write the configuration to a file.  If you need more
@@ -166,7 +172,152 @@ public:
   }
 };
 
+void MyGP::evaluate()
+{
+  tasks.push_back(this);
+}
 
+// Evaluate the fitness of a GP and save it into the class variable
+// fitness.
+void MyGP::evalTask(WorkerContext& context)
+{
+  stdFitness = 0;
+
+  // TODO this save is probably cheaper when GP knows about boost archives...
+  std::vector<char> buffer;
+  boost::iostreams::stream<boost::iostreams::back_insert_device<std::vector<char>>> outStream(buffer);
+  save(outStream);
+  outStream.flush();
+  EvalData evalData = { buffer, generationPaths };
+  sendRPC(*context.socket, evalData);
+
+  // How did it go?
+  context.evalResults = receiveRPC<EvalResults>(*context.socket);
+  // context.evalResults.dump(std::cerr);
+
+  // Compute the fitness results for each path
+  for (int i = 0; i < context.evalResults.pathList.size(); i++) {
+    bool printHeader = true;
+
+    // get path, actual and aircraft state
+    auto& path = context.evalResults.pathList.at(i);
+    auto& aircraftState = context.evalResults.aircraftStateList.at(i);
+    auto& crashReason = context.evalResults.crashReasonList.at(i);
+
+    // compute this path fitness
+    double localFitness = 0;
+    int stepIndex = 0; // where are we on the flight path?
+
+    // error accumulators
+    double distance_error_sum = 0;
+    double angle_error_sum = 0;
+    double control_smoothness_sum = 0;
+    int simulation_steps = 0;
+
+    // initial states
+    double roll_prev = aircraftState.at(stepIndex).getRollCommand();
+    double pitch_prev = aircraftState.at(stepIndex).getPitchCommand();
+    double throttle_prev = aircraftState.at(stepIndex).getThrottleCommand();
+
+    // now walk next steps of actual path
+    while (++stepIndex < aircraftState.size()) {
+      auto& stepAircraftState = aircraftState.at(stepIndex);
+      int pathIndex = stepAircraftState.getThisPathIndex();
+
+      // Compute the distance between the aircraft and the goal
+      double distanceFromGoal = (path.at(pathIndex).start - stepAircraftState.getPosition()).norm();
+      // normalize [100:0]
+      distanceFromGoal = distanceFromGoal * 100.0 / (2 * SIM_PATH_RADIUS_LIMIT);
+
+      // Compute vector from me to target
+      Eigen::Vector3d target_direction = (path.at(pathIndex + 1).start - path.at(pathIndex).start);
+      Eigen::Vector3d aircraft_to_target = (path.at(pathIndex).start - stepAircraftState.getPosition());
+      double dot_product = target_direction.dot(aircraft_to_target);
+      double angle_rad = std::acos(std::clamp(dot_product / (target_direction.norm() * aircraft_to_target.norm()), -1.0, 1.0));
+      // normalize [100:0]
+      angle_rad = angle_rad * 100.0 / M_PI;
+
+      // control smoothness -- internal vector distance
+      double smoothness = pow(roll_prev - stepAircraftState.getRollCommand(), 2.0);
+      smoothness += pow(pitch_prev - stepAircraftState.getPitchCommand(), 2.0);
+      smoothness += pow(throttle_prev - stepAircraftState.getThrottleCommand(), 2.0);
+      smoothness = sqrt(smoothness);
+      // normalize [100:0]
+      smoothness = smoothness * 100.0 / 3.46;
+
+      // ready for next cycle
+      roll_prev = stepAircraftState.getRollCommand();
+      pitch_prev = stepAircraftState.getPitchCommand();
+      throttle_prev = stepAircraftState.getThrottleCommand();
+
+      // accumulate the error
+      distance_error_sum += pow(distanceFromGoal, FITNESS_DISTANCE_WEIGHT);
+      angle_error_sum += pow(angle_rad, FITNESS_ALIGNMENT_WEIGHT);
+      control_smoothness_sum += pow(smoothness, FITNESS_CONTROL_WEIGHT);
+      simulation_steps++;
+
+      // use the ugly global to communicate best of gen
+      if (printEval) {
+
+        // TODO: need reference to best task somehow
+        bestOfEvalResults = context.evalResults;
+
+        if (printHeader) {
+          fout << "Pth:Step:   Time Idx  totDist   pathX    pathY    pathZ        X        Y        Z       dr       dp       dy   relVel     roll    pitch    power    distP   angleP controlP\n";
+          printHeader = false;
+        }
+
+        // convert aircraft_orientaton to euler
+        Eigen::Vector3d euler = stepAircraftState.getOrientation().toRotationMatrix().eulerAngles(2, 1, 0);
+
+        char outbuf[1000]; // XXX use c++20
+        sprintf(outbuf, "%03d:%04d: %06ld %3d % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f\n",
+          i, simulation_steps,
+          stepAircraftState.getSimTimeMsec(), pathIndex,
+          path.at(pathIndex).distanceFromStart,
+          path.at(pathIndex).start[0],
+          path.at(pathIndex).start[1],
+          path.at(pathIndex).start[2],
+          stepAircraftState.getPosition()[0],
+          stepAircraftState.getPosition()[1],
+          stepAircraftState.getPosition()[2],
+          euler[2],
+          euler[1],
+          euler[0],
+          stepAircraftState.getRelVel(),
+          stepAircraftState.getRollCommand(),
+          stepAircraftState.getPitchCommand(),
+          stepAircraftState.getThrottleCommand(),
+          distanceFromGoal,
+          angle_rad,
+          smoothness
+        );
+        fout << outbuf;
+      }
+    }
+
+    // tally up the normlized fitness based on steps and progress
+    double normalized_distance_error = (distance_error_sum / simulation_steps);
+    double normalized_angle_align = (angle_error_sum / simulation_steps);
+    double normalized_control_smoothness = (control_smoothness_sum / simulation_steps);
+    localFitness = normalized_distance_error + normalized_angle_align + normalized_control_smoothness;
+
+    if (isnan(localFitness)) {
+     nanDetector++;
+    }
+
+    if (crashReason != CrashReason::None) {
+      double fractional_distance_remaining = 1.0 - path.at(aircraftState.back().getThisPathIndex()).distanceFromStart / path.back().distanceFromStart;
+      localFitness += SIM_CRASH_PENALTY * fractional_distance_remaining;
+    }
+
+    // accumulate the local fitness
+    stdFitness += localFitness;
+  }
+
+  // normalize
+  stdFitness /= context.evalResults.pathList.size();
+}
 
 void newHandler()
 {

@@ -40,14 +40,8 @@ const int MyPopulationID = GPUserID + 2;
 
 class MyGP;
 
-extern std::atomic_bool printEval;
-extern std::vector<MyGP*> tasks;
-extern std::vector<std::vector<Path>> generationPaths;
-extern std::ofstream fout;
-extern std::atomic_ulong nanDetector;
 extern void createNodeSet(GPAdfNodeSet& adfNs);
 extern AircraftState aircraftState;
-extern EvalResults bestOfEvalResults;
 
 // Inherit the three GP classes GPGene, GP and GPPopulation
 class MyGene : public GPGene
@@ -115,7 +109,7 @@ public:
   }
 
   // async evaluator
-  void evalTask(WorkerContext& context);
+  virtual void evalTask(WorkerContext& context);
 };
 
 
