@@ -12,7 +12,28 @@
 EvalResults evalResults;
 std::string computedKeyName = "";
 Renderer renderer;
-std::shared_ptr<Aws::S3::S3Client> s3_client;
+
+std::shared_ptr<Aws::S3::S3Client> getS3Client() {
+  // real S3 or local minio?
+  Aws::Client::ClientConfiguration clientConfig;
+  Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy policy = Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::RequestDependent;
+  if (strcmp("default", "default" /*extraCfg.s3Profile*/) != 0) {
+    clientConfig.endpointOverride = "http://localhost:9000"; // MinIO server address
+    clientConfig.scheme = Aws::Http::Scheme::HTTP; // Use HTTP instead of HTTPS
+    clientConfig.verifySSL = false; // Disable SSL verification for local testing
+
+    policy = Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never;
+  }
+
+  auto credentialsProvider = Aws::MakeShared<Aws::Auth::ProfileConfigFileAWSCredentialsProvider>("CredentialsProvider", "default" /*extraCfg.s3Profile*/);
+
+  return Aws::MakeShared<Aws::S3::S3Client>("S3Client",
+    credentialsProvider,
+    clientConfig,
+    Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Always,
+    false
+  );
+}
 
 void PrintPolyDataInfo(vtkPolyData* polyData)
 {
@@ -170,7 +191,7 @@ bool Renderer::updateGenerationDisplay(int newGen) {
   request.SetBucket("autoc-storage"); // TODO extraCfg
   std::string keyName = computedKeyName + "gen" + std::to_string(newGen) + ".dmp";
   request.SetKey(keyName);
-  auto outcome = s3_client->GetObject(request);
+  auto outcome = getS3Client()->GetObject(request);
   std::cerr << "Fetched " << keyName << " result " << outcome.IsSuccess() << std::endl;
   if (outcome.IsSuccess()) {
     std::ostringstream oss;
@@ -544,25 +565,7 @@ int main(int argc, char** argv) {
   Aws::SDKOptions options;
   Aws::InitAPI(options);
 
-  // real S3 or local minio?
-  Aws::Client::ClientConfiguration clientConfig;
-  Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy policy = Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::RequestDependent;
-  if (strcmp("default", "minio" /*extraCfg.s3Profile*/) != 0) {
-    clientConfig.endpointOverride = "http://localhost:9000"; // MinIO server address
-    clientConfig.scheme = Aws::Http::Scheme::HTTP; // Use HTTP instead of HTTPS
-    clientConfig.verifySSL = false; // Disable SSL verification for local testing
-
-    policy = Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never;
-  }
-
-  auto credentialsProvider = Aws::MakeShared<Aws::Auth::ProfileConfigFileAWSCredentialsProvider>("CredentialsProvider", "minio" /*extraCfg.s3Profile*/);
-
-  s3_client = Aws::MakeShared<Aws::S3::S3Client>("S3Client",
-    credentialsProvider,
-    clientConfig,
-    Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
-    false
-  );
+  std::shared_ptr<Aws::S3::S3Client> s3_client = getS3Client();
 
   // should we look up the latest run?
   if (computedKeyName.empty()) {

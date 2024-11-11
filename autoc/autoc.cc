@@ -88,7 +88,6 @@ struct GPConfigVarInformation configArray[] =
 
 ThreadPool* threadPool;
 std::string computedKeyName;
-std::shared_ptr<Aws::S3::S3Client> s3_client;
 
 std::string generate_iso8601_timestamp() {
   auto now = std::chrono::system_clock::now();
@@ -102,6 +101,29 @@ std::string generate_iso8601_timestamp() {
   return ss.str();
 }
 
+std::shared_ptr<Aws::S3::S3Client> getS3Client() {
+  
+  // real S3 or local minio?
+  // Aws::Client::ClientConfiguration clientConfig;
+  // Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy policy = Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::RequestDependent;
+  // if (strcmp("default", extraCfg.s3Profile) != 0) {
+  //   clientConfig.endpointOverride = "http://localhost:9000"; // MinIO server address
+  //   clientConfig.scheme = Aws::Http::Scheme::HTTP; // Use HTTP instead of HTTPS
+  //   clientConfig.verifySSL = false; // Disable SSL verification for local testing
+
+  //   policy = Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never;
+  // }
+
+  // auto credentialsProvider = Aws::MakeShared<Aws::Auth::ProfileConfigFileAWSCredentialsProvider>("CredentialsProvider", extraCfg.s3Profile);
+
+  // s3_client = Aws::MakeShared<Aws::S3::S3Client>("S3Client",
+  //   credentialsProvider,
+  //   clientConfig,
+  //   Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
+  //   false
+  // );
+  return Aws::MakeShared<Aws::S3::S3Client>("S3Client");
+}
 
 class MyPopulation : public GPPopulation
 {
@@ -156,7 +178,7 @@ public:
       *ss << oss.str();
       request.SetBody(ss);
 
-      auto outcome = s3_client->PutObject(request);
+      auto outcome = getS3Client()->PutObject(request);
       if (!outcome.IsSuccess()) {
         *logger.error() << "Error: " << outcome.GetError().GetMessage() << std::endl;
       }
@@ -360,26 +382,6 @@ int main()
   // AWS setup
   Aws::SDKOptions options;
   Aws::InitAPI(options);
-
-  // real S3 or local minio?
-  Aws::Client::ClientConfiguration clientConfig;
-  Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy policy = Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::RequestDependent;
-  if (strcmp("default", extraCfg.s3Profile) != 0) {
-    clientConfig.endpointOverride = "http://localhost:9000"; // MinIO server address
-    clientConfig.scheme = Aws::Http::Scheme::HTTP; // Use HTTP instead of HTTPS
-    clientConfig.verifySSL = false; // Disable SSL verification for local testing
-
-    policy = Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never;
-  }
-
-  auto credentialsProvider = Aws::MakeShared<Aws::Auth::ProfileConfigFileAWSCredentialsProvider>("CredentialsProvider", extraCfg.s3Profile);
-
-  s3_client = Aws::MakeShared<Aws::S3::S3Client>("S3Client",
-    credentialsProvider,
-    clientConfig,
-    Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
-    false
-  );
 
   // initialize workers
   threadPool = new ThreadPool(extraCfg);

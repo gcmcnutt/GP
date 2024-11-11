@@ -19,7 +19,6 @@
 - figure out how to use crrcsim robots to form lead plane
 * more accurate hb1 model
 - Still getting thermal crash/corruption
-* 30fps 2x speed and 200msec update ask winds up being more like 250msec update -- need to figure out why
 - variations project - to get closer to zero-shot
   - vary wind, turbulence
   - maybe revisit thermal model
@@ -33,8 +32,7 @@
 - model and env dithering in crrcsim
 * odd behavior where header generation value seems offbyon from what is reported in logs and in runtime stdout - maybe related but the gp output generation number seems offbyon from what renderer sees -- e.g. if 25 completed, can't see it schange until 26 is rendered
 * clean shutdown method for terminating sims
-* double check fitness function is based on same goal as trackers (points to the same goal point)
-now that a crrcsim batch runs long, perhaps have polling loop for keepalive as when autoc exits crrcsim will exit
+- now that a crrcsim batch runs long, perhaps have polling loop for keepalive as when autoc exits crrcsim will exit
 
 
 Good Runs
