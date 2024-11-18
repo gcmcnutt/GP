@@ -228,6 +228,7 @@ enum class CrashReason {
 std::string crashReasonToString(CrashReason type);
 
 struct EvalResults {
+  std::vector<char> gp;
   std::vector<CrashReason> crashReasonList;
   std::vector<std::vector<Path>> pathList;
   std::vector<std::vector<AircraftState>> aircraftStateList;
@@ -236,6 +237,7 @@ struct EvalResults {
 
   template<class Archive>
   void serialize(Archive& ar, const unsigned int version) {
+    ar& gp;
     ar& crashReasonList;
     ar& pathList;
     ar& aircraftStateList;
@@ -244,6 +246,8 @@ struct EvalResults {
   void dump(std::ostream& os) {
     os << format("EvalResults: crash[%d] paths[%d] states[%d]\n Paths:\n")
       % crashReasonList.size() % pathList.size() % aircraftStateList.size();
+
+    os << format("GP: %s\n") % "TODO";
 
     for (int i = 0; i < crashReasonList.size(); i++) {
       os << format("  Crash %3d: %s\n") % i % crashReasonToString(crashReasonList.at(i));

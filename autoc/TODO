@@ -3,7 +3,6 @@
 - benchmark the impact of debug mode code
 - llm fitness function evolution
 - try to simplify the eval tree by passing a class reference instead of N args
-* need to save generations
 * replay functions
   - select board
   - animate path, including tracking behind
@@ -32,7 +31,8 @@
 - model and env dithering in crrcsim
 * odd behavior where header generation value seems offbyon from what is reported in logs and in runtime stdout - maybe related but the gp output generation number seems offbyon from what renderer sees -- e.g. if 25 completed, can't see it schange until 26 is rendered
 * clean shutdown method for terminating sims
-- now that a crrcsim batch runs long, perhaps have polling loop for keepalive as when autoc exits crrcsim will exit
+  - now that a crrcsim batch runs long, perhaps have polling loop for keepalive as when autoc exits crrcsim will exit
+- develop an offline fitness validator where a recorded path set and GP can be replayed, perhaps on a different path (e.g. old GP on different path set), etc
 
 
 Good Runs

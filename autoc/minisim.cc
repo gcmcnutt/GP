@@ -45,6 +45,9 @@ public:
       // ok what does main say to do
       EvalData evalData = receiveRPC<EvalData>(socket_);
 
+      // flip this back for return trip
+      evalResults.gp = evalData.gp;
+
       // for each path, evaluate
       for (int i = 0; i < evalData.pathList.size(); i++) {
         std::vector<Path> path = evalData.pathList.at(i);

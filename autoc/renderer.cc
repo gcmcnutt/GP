@@ -17,7 +17,7 @@ std::shared_ptr<Aws::S3::S3Client> getS3Client() {
   // real S3 or local minio?
   Aws::Client::ClientConfiguration clientConfig;
   Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy policy = Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::RequestDependent;
-  if (strcmp("default", "default" /*extraCfg.s3Profile*/) != 0) {
+  if (strcmp("default", "minio" /*extraCfg.s3Profile*/) != 0) {
     clientConfig.endpointOverride = "http://localhost:9000"; // MinIO server address
     clientConfig.scheme = Aws::Http::Scheme::HTTP; // Use HTTP instead of HTTPS
     clientConfig.verifySSL = false; // Disable SSL verification for local testing
@@ -25,7 +25,7 @@ std::shared_ptr<Aws::S3::S3Client> getS3Client() {
     policy = Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never;
   }
 
-  auto credentialsProvider = Aws::MakeShared<Aws::Auth::ProfileConfigFileAWSCredentialsProvider>("CredentialsProvider", "default" /*extraCfg.s3Profile*/);
+  auto credentialsProvider = Aws::MakeShared<Aws::Auth::ProfileConfigFileAWSCredentialsProvider>("CredentialsProvider", "minio" /*extraCfg.s3Profile*/);
 
   return Aws::MakeShared<Aws::S3::S3Client>("S3Client",
     credentialsProvider,

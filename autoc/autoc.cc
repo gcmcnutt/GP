@@ -102,27 +102,26 @@ std::string generate_iso8601_timestamp() {
 }
 
 std::shared_ptr<Aws::S3::S3Client> getS3Client() {
-  
-  // real S3 or local minio?
-  // Aws::Client::ClientConfiguration clientConfig;
-  // Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy policy = Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::RequestDependent;
-  // if (strcmp("default", extraCfg.s3Profile) != 0) {
-  //   clientConfig.endpointOverride = "http://localhost:9000"; // MinIO server address
-  //   clientConfig.scheme = Aws::Http::Scheme::HTTP; // Use HTTP instead of HTTPS
-  //   clientConfig.verifySSL = false; // Disable SSL verification for local testing
+  if (strcmp("default", extraCfg.s3Profile) != 0) {
 
-  //   policy = Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never;
-  // }
+    Aws::Client::ClientConfiguration clientConfig;
+    clientConfig.endpointOverride = "http://localhost:9000"; // MinIO server address
+    clientConfig.scheme = Aws::Http::Scheme::HTTP; // Use HTTP instead of HTTPS
+    clientConfig.verifySSL = false; // Disable SSL verification for local testing
 
-  // auto credentialsProvider = Aws::MakeShared<Aws::Auth::ProfileConfigFileAWSCredentialsProvider>("CredentialsProvider", extraCfg.s3Profile);
-
-  // s3_client = Aws::MakeShared<Aws::S3::S3Client>("S3Client",
-  //   credentialsProvider,
-  //   clientConfig,
-  //   Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
-  //   false
-  // );
-  return Aws::MakeShared<Aws::S3::S3Client>("S3Client");
+    auto policy = Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never;
+    auto credentialsProvider = Aws::MakeShared<Aws::Auth::ProfileConfigFileAWSCredentialsProvider>("CredentialsProvider", extraCfg.s3Profile);
+    auto s3_client = Aws::MakeShared<Aws::S3::S3Client>("S3Client",
+      credentialsProvider,
+      clientConfig,
+      Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
+      false
+    );
+    return s3_client;
+  }
+  else {
+    return Aws::MakeShared<Aws::S3::S3Client>("S3Client");
+  }
 }
 
 class MyPopulation : public GPPopulation
@@ -130,7 +129,8 @@ class MyPopulation : public GPPopulation
 public:
   // Constructor (mandatory)
   MyPopulation(GPVariables& GPVar_, GPAdfNodeSet& adfNs_) :
-    GPPopulation(GPVar_, adfNs_) {}
+    GPPopulation(GPVar_, adfNs_) {
+  }
 
   // Duplication (mandatory)
   MyPopulation(MyPopulation& gpo) : GPPopulation(gpo) {}
@@ -325,7 +325,7 @@ void MyGP::evalTask(WorkerContext& context)
     localFitness = normalized_distance_error + normalized_angle_align + normalized_control_smoothness;
 
     if (isnan(localFitness)) {
-     nanDetector++;
+      nanDetector++;
     }
 
     if (crashReason != CrashReason::None) {
