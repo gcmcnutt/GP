@@ -40,8 +40,10 @@ const int MyPopulationID = GPUserID + 2;
 
 class MyGP;
 
+extern GPAdfNodeSet adfNs;
 extern void createNodeSet(GPAdfNodeSet& adfNs);
 extern AircraftState aircraftState;
+extern void initializeSimGP();
 
 // Inherit the three GP classes GPGene, GP and GPPopulation
 class MyGene : public GPGene

@@ -172,7 +172,6 @@ public:
       boost::archive::text_oarchive oa(oss);
       oa << bestOfEvalResults;
 
-      // TODO: dump the selected GP
       // TODO: dump out fitness
       std::shared_ptr<Aws::StringStream> ss = Aws::MakeShared<Aws::StringStream>("");
       *ss << oss.str();
@@ -394,7 +393,6 @@ int main()
   *logger.info() << "MinisimPortOverride: " << extraCfg.minisimPortOverride << endl << endl;
 
   // Create the adf function/terminal set and print it out.
-  GPAdfNodeSet adfNs;
   createNodeSet(adfNs);
   *logger.info() << adfNs << endl;
 

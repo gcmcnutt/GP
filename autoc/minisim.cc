@@ -25,8 +25,6 @@ boost::iostreams::stream<boost::iostreams::array_source> charArrayToIstream(cons
   );
 }
 
-GPAdfNodeSet adfNs;
-
 void MyGP::evaluate() {}
 void MyGP::evalTask(WorkerContext& context) {}
 
@@ -205,22 +203,8 @@ int main(int argc, char* argv[]) {
     std::cerr << "Usage: minisim <base> <id> <port>" << std::endl;
     return 1;
   }
-std:string id = argv[2];
 
-  // Create the adf function/terminal set and print it out.
-  createNodeSet(adfNs);
-
-  // partial registration ( TODO may be easier just to load all in clients )
-  GPRegisterClass(new GPContainer());
-  GPRegisterClass(new GPNode());
-  GPRegisterClass(new GPNodeSet());
-  GPRegisterClass(new GPAdfNodeSet());
-  GPRegisterClass(new GPGene());
-  GPRegisterClass(new GP());
-
-  // manually add our classes for load operation
-  GPRegisterClass(new MyGene());
-  GPRegisterClass(new MyGP());
+  initializeSimGP();
 
   unsigned short port = std::atoi(argv[3]);
   boost::asio::io_context io_context;

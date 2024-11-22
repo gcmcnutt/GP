@@ -8,6 +8,8 @@
 #include "minisim.h"
 #include "autoc.h"
 
+GPAdfNodeSet adfNs;
+
 // TODO really get rid of this global!
 AircraftState aircraftState;
 
@@ -22,6 +24,25 @@ std::string crashReasonToString(CrashReason type) {
   default: return "*?*";
   }
 };
+
+// initialize the GP engine
+void initializeSimGP() {
+
+  // Create the adf function/terminal set and print it out.
+  createNodeSet(adfNs);
+
+  // partial registration ( TODO may be easier just to load all in clients )
+  GPRegisterClass(new GPContainer());
+  GPRegisterClass(new GPNode());
+  GPRegisterClass(new GPNodeSet());
+  GPRegisterClass(new GPAdfNodeSet());
+  GPRegisterClass(new GPGene());
+  GPRegisterClass(new GP());
+
+  // manually add our classes for load operation
+  GPRegisterClass(new MyGene());
+  GPRegisterClass(new MyGP());
+}
 
 // Create function and terminal set
 void createNodeSet(GPAdfNodeSet& adfNs)
