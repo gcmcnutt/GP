@@ -78,6 +78,7 @@ struct GPConfigVarInformation configArray[] =
   {"SteadyState", DATAINT, &cfg.SteadyState},
   {"SimNumPathsPerGeneration", DATAINT, &extraCfg.simNumPathsPerGen},
   {"EvalThreads", DATAINT, &extraCfg.evalThreads},
+  {"PathGeneratorMethod", DATASTRING, &extraCfg.generatorMethod},
   {"MinisimProgram", DATASTRING, &extraCfg.minisimProgram},
   {"MinisimPortOverride", DATAINT, &extraCfg.minisimPortOverride},
   {"S3Bucket", DATASTRING, &extraCfg.s3Bucket},
@@ -406,7 +407,7 @@ int main()
   ofstream bout(strStatFile.str());
 
   // prime the paths?
-  generationPaths = generateSmoothPaths(extraCfg.simNumPathsPerGen, NUM_SEGMENTS_PER_PATH, SIM_PATH_BOUNDS, SIM_PATH_BOUNDS);
+  generationPaths = generateSmoothPaths(extraCfg.generatorMethod, extraCfg.simNumPathsPerGen, SIM_PATH_BOUNDS, SIM_PATH_BOUNDS);
 
   // Create a population with this configuration
   *logger.info() << "Creating initial population ..." << endl;
@@ -423,7 +424,7 @@ int main()
   for (int gen = 1; gen <= cfg.NumberOfGenerations; gen++)
   {
     // For this generation, build a smooth path goal
-    generationPaths = generateSmoothPaths(extraCfg.simNumPathsPerGen, NUM_SEGMENTS_PER_PATH, SIM_PATH_BOUNDS, SIM_PATH_BOUNDS);
+    generationPaths = generateSmoothPaths(extraCfg.generatorMethod, extraCfg.simNumPathsPerGen, SIM_PATH_BOUNDS, SIM_PATH_BOUNDS);
 
     // Create a new generation from the old one by applying the genetic operators
     if (!cfg.SteadyState)

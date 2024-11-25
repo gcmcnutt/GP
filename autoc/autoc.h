@@ -8,6 +8,7 @@
 class ExtraConfig {
 public:
   int simNumPathsPerGen = 1;
+  char* generatorMethod = "classic";
   int evalThreads = 1;
   char* minisimProgram = "../build/minisim";
   unsigned short minisimPortOverride = 0;
