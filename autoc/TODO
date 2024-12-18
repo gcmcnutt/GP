@@ -22,7 +22,6 @@
   - vary wind, turbulence
   - maybe revisit thermal model
   - power, drag, service response times
-* Fixed path generation for pathgen for basic tests
 - GP to autoc in inav via controls
   - selector
   - activate
