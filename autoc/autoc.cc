@@ -290,7 +290,33 @@ void MyGP::evalTask(WorkerContext& context)
         }
 
         // convert aircraft_orientaton to euler
-        Eigen::Vector3d euler = stepAircraftState.getOrientation().toRotationMatrix().eulerAngles(2, 1, 0);
+        Eigen::Matrix3d rotMatrix = stepAircraftState.getOrientation().toRotationMatrix();
+
+        // Extract Euler angles
+        // Note: atan2 returns angle in range [-pi, pi]
+        Eigen::Vector3d euler;
+
+        // Handle special case near pitch = ±90° (gimbal lock)
+        if (std::abs(rotMatrix(2, 0)) > 0.99999) {
+          // Gimbal lock case
+          euler[0] = 0; // Roll becomes undefined, set to zero
+
+          // Determine pitch based on r31 sign
+          if (rotMatrix(2, 0) > 0) {
+            euler[1] = -M_PI / 2; // pitch = -90°
+            euler[2] = -atan2(rotMatrix(1, 2), rotMatrix(0, 2)); // yaw
+          }
+          else {
+            euler[1] = M_PI / 2;  // pitch = 90°
+            euler[2] = atan2(rotMatrix(1, 2), rotMatrix(0, 2)); // yaw
+          }
+        }
+        else {
+          // Normal case
+          euler[0] = atan2(rotMatrix(2, 1), rotMatrix(2, 2)); // roll (phi)
+          euler[1] = -asin(rotMatrix(2, 0));                 // pitch (theta)
+          euler[2] = atan2(rotMatrix(1, 0), rotMatrix(0, 0)); // yaw (psi)
+        }
 
         char outbuf[1000]; // XXX use c++20
         sprintf(outbuf, "%03d:%04d: %06ld %3d % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f\n",
