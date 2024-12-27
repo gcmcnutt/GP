@@ -93,12 +93,26 @@ int getIndex(std::vector<Path>& path, MyGP& gp, double arg) {
     return aircraftState.getThisPathIndex();
   }
 
-  // a range of steps to check, can't go lower than the beginning index
-  // TODO this checks path next, not the actual simulation steps...
-  // XXX for now, this allows forecasting the future path
-  int idx = std::clamp((int)arg, -5, 5) + aircraftState.getThisPathIndex();
-  idx = std::clamp(idx, 0, (int)path.size() - 1);
-  return idx;
+  // how many rabbit steps are we estimating?
+  int steps = std::clamp((int)arg, -5, 5);
+
+  // determine the current distance and then the distance to the selected point as a function of rabbit speed
+  double distanceSoFar = (path.at(aircraftState.getThisPathIndex()).distanceFromStart);
+  double distanceGoal = distanceSoFar + steps * SIM_RABBIT_VELOCITY * (SIM_TIME_STEP_MSEC / 1000.0);
+
+  // ok, we have a goal and our current position, walk up or down the paths to find the closest point
+  int currentStep = aircraftState.getThisPathIndex();
+  if (steps > 0) {
+    while (path.at(currentStep).distanceFromStart < distanceGoal && currentStep < path.size() - 1) {
+      currentStep++;
+    }
+  }
+  else {
+    while (path.at(currentStep).distanceFromStart > distanceGoal && currentStep > 0) {
+      currentStep--;
+    }
+  }
+  return currentStep;
 }
 
 // This function evaluates the fitness of a genetic tree.  We have the

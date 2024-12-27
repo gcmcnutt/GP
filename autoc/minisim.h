@@ -37,6 +37,7 @@ using boost::format;
 #define SIM_PATH_BOUNDS 40.0
 #define SIM_PATH_RADIUS_LIMIT 60.0
 #define SIM_MIN_ELEVATION -7.0
+#define SIM_MAX_ELEVATION -110.0
 
 #define SIM_TOTAL_TIME_MSEC (30 * 1000)
 #define SIM_TIME_STEP_MSEC (200)
