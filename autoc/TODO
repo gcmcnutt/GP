@@ -14,7 +14,6 @@
 - we can buffer the best run over a population vs re-running it -- save the final eval steps
 - can not interactively flip to autoc input as it attempts to use the callback port -- soften this dependency for when it is manually run (maybe if port not set, it falls back to Mouse)
 - plumb stdout/stderr nicely for a build run -- perhaps hook this into archiving system too
-* get random start/orientation working in crrcsim
 - figure out how to use crrcsim robots to form lead plane
 * more accurate hb1 model
 - Still getting thermal crash/corruption
@@ -22,12 +21,13 @@
   - vary wind, turbulence
   - maybe revisit thermal model
   - power, drag, service response times
+  - get random start/orientation working in crrcsim
+  - model and env dithering in crrcsim
 - GP to autoc in inav via controls
   - selector
   - activate
 - consider PID as basic controller (perhaps some other input/output to allow for slight tuning)
 - a field download/review of flight data
-- model and env dithering in crrcsim
 * odd behavior where header generation value seems offbyon from what is reported in logs and in runtime stdout - maybe related but the gp output generation number seems offbyon from what renderer sees -- e.g. if 25 completed, can't see it schange until 26 is rendered
 * clean shutdown method for terminating sims
   - now that a crrcsim batch runs long, perhaps have polling loop for keepalive as when autoc exits crrcsim will exit

@@ -16,7 +16,7 @@ sudo apt-get install -y libboost-all-dev libeigen3-dev libvtk9-dev xvfb g++ cmak
 ```
 mkdir build
 cd build
-cmake -DCMAKE_BUILD_TYPE=Debug ..
+cmake -DCMAKE_BUILD_TYPE=Debug ../autoc
 make
 ```
 
