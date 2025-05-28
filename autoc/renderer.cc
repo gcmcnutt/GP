@@ -469,7 +469,7 @@ void Renderer::initialize() {
   property->SetFrontfaceCulling(false);
 
   // Set different colors for front and back faces
-  property->SetColor(1.0, 0.7, 0.0);  // Orange for front face (top)
+  property->SetColor(1.0, 1.0, 0.2);  // Yellow for front face (top)
   property->SetAmbient(0.1);
   property->SetDiffuse(0.8);
   property->SetSpecular(0.1);
