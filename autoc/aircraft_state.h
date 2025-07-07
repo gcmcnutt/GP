@@ -2,8 +2,13 @@
 #ifndef AIRCRAFT_STATE_H
 #define AIRCRAFT_STATE_H
 
+#ifdef GP_BUILD
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
+#else
+#include <ArduinoEigenDense.h>
+// #include <ArduinoEigen/ArduinoEigen/Eigen/Geometry>
+#endif
 
 #define SIM_MAX_ROLL_RATE_RADSEC (M_PI)
 #define SIM_MAX_PITCH_RATE_RADSEC (M_PI)
@@ -88,11 +93,11 @@ BOOST_CLASS_VERSION(Path, 1)
     void setSimTimeMsec(unsigned long int timeMsec) { simTimeMsec = timeMsec; }
 
     double getPitchCommand() const { return pitchCommand; }
-    double setPitchCommand(double pitch) { return (pitchCommand = std::clamp(pitch, -1.0, 1.0)); }
+    double setPitchCommand(double pitch) { return (pitchCommand = min(1.0, max(-1.0, pitch))); }
     double getRollCommand() const { return rollCommand; }
-    double setRollCommand(double roll) { return (rollCommand = std::clamp(roll, -1.0, 1.0)); }
+    double setRollCommand(double roll) { return (rollCommand = min(1.0, max(-1.0, roll))); }
     double getThrottleCommand() const { return throttleCommand; }
-    double setThrottleCommand(double throttle) { return (throttleCommand = std::clamp(throttle, -1.0, 1.0)); }
+    double setThrottleCommand(double throttle) { return (throttleCommand = min(1.0, max(-1.0, throttle))); }
 
     void minisimAdvanceState(double dt) {
       double dtSec = dt / 1000.0;
