@@ -24,8 +24,10 @@ add_definitions(-DGP_BUILD)
 
 add_executable(autoc autoc.cc autoc.h autoc-eval.cc minisim.h aircraft_state.h pathgen.cc pathgen.h threadpool.h logger.cc logger.h)
 add_executable(minisim minisim.cc minisim.h aircraft_state.h autoc.h autoc-eval.cc)
-add_executable(renderer renderer.cc renderer.h minisim.h aircraft_state.h autoc.h)
+add_executable(renderer renderer.cc renderer.h minisim.h aircraft_state.h autoc.h blackbox_extractor_simple.cc blackbox_extractor_simple.h)
+add_executable(test_blackbox_simple test_blackbox_simple.cc blackbox_extractor_simple.cc blackbox_extractor_simple.h)
 
 target_link_libraries(autoc gp ${Boost_LIBRARIES} Eigen3::Eigen ${AWSSDK_LIBRARIES})
 target_link_libraries(minisim gp ${Boost_LIBRARIES} Eigen3::Eigen)
 target_link_libraries(renderer ${VTK_LIBRARIES} ${Boost_LIBRARIES} Eigen3::Eigen ${AWSSDK_LIBRARIES})
+target_link_libraries(test_blackbox_simple Eigen3::Eigen)

@@ -2,6 +2,7 @@
 #define RENDERER_H
 
 #include "minisim.h"
+#include "blackbox_extractor_simple.h"
 
 #include <vtkPoints.h>
 #include <vtkSmartPointer.h>
@@ -72,8 +73,10 @@ public:
   void initialize();
   bool isRunning();
   bool updateGenerationDisplay(int genNumber);
+  bool loadBlackboxData(const std::string& filename);
 
   int genNumber = 0;
+  bool blackboxEnabled = false;
 
   vtkSmartPointer<vtkRenderWindow> renderWindow;
   vtkSmartPointer<vtkRenderWindowInteractor> renderWindowInteractor;
@@ -84,10 +87,16 @@ private:
   vtkSmartPointer<vtkAppendPolyData> actuals;
   vtkSmartPointer<vtkAppendPolyData> segmentGaps;
   vtkSmartPointer<vtkAppendPolyData> planeData;
+  vtkSmartPointer<vtkAppendPolyData> blackboxData;
 
   vtkSmartPointer<vtkActor> actor1;
   vtkSmartPointer<vtkActor> actor2;
   vtkSmartPointer<vtkActor> actor3;
+  vtkSmartPointer<vtkActor> blackboxActor;
+  
+  BlackboxExtractor blackboxExtractor;
+  std::vector<SimpleAircraftState> blackboxStates;
+  vtkSmartPointer<vtkRenderer> mainRenderer;
 
   Eigen::Vector3d renderingOffset(int i); // locate a coordinate offset for our rendering screen
   vtkSmartPointer<vtkPolyData> createPointSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> points);
@@ -96,6 +105,8 @@ private:
   std::vector<Eigen::Vector3d> pathToVector(const std::vector<Path> path);
   std::vector<Eigen::Vector3d> stateToVector(const std::vector<AircraftState> path);
   std::vector<Eigen::Vector3d> stateToOrientation(const std::vector<AircraftState> state);
+  std::vector<Eigen::Vector3d> blackboxToVector(const std::vector<SimpleAircraftState>& states);
+  std::vector<Eigen::Vector3d> blackboxToOrientation(const std::vector<SimpleAircraftState>& states);
 };
 
 #endif

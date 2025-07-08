@@ -219,6 +219,7 @@ bool Renderer::updateGenerationDisplay(int newGen) {
   this->actuals->RemoveAllInputs();
   this->segmentGaps->RemoveAllInputs();
   this->planeData->RemoveAllInputs();
+  this->blackboxData->RemoveAllInputs();
 
   for (int i = 0; i < evalResults.pathList.size(); i++) {
     Eigen::Vector3d offset = renderingOffset(i);
@@ -270,10 +271,26 @@ bool Renderer::updateGenerationDisplay(int newGen) {
     planeData->AddInputConnection(planeSource->GetOutputPort());
   }
 
+  // Add blackbox data if enabled
+  if (blackboxEnabled && !blackboxStates.empty()) {
+    Eigen::Vector3d offset = renderingOffset(0); // Use first position
+    std::vector<Eigen::Vector3d> blackboxPoints = blackboxToVector(blackboxStates);
+    std::vector<Eigen::Vector3d> blackboxOrientations = blackboxToOrientation(blackboxStates);
+    
+    if (!blackboxPoints.empty()) {
+      this->blackboxData->AddInputData(createTapeSet(offset, blackboxPoints, blackboxOrientations));
+    }
+  }
+
   this->planeData->Update();
   this->paths->Update();
   this->actuals->Update();
   this->segmentGaps->Update();
+  
+  // Only update blackbox data if enabled
+  if (blackboxEnabled) {
+    this->blackboxData->Update();
+  }
 
   // Update the window title
   std::string title = keyName + " - " + std::to_string(10000 - newGen);
@@ -351,9 +368,9 @@ public:
 
 void Renderer::initialize() {
   // Create a renderer and render window interactor
-  vtkNew<vtkRenderer> renderer;
+  mainRenderer = vtkSmartPointer<vtkRenderer>::New();
   renderWindow = vtkSmartPointer<vtkRenderWindow>::New();
-  renderWindow->AddRenderer(renderer);
+  renderWindow->AddRenderer(mainRenderer);
   renderWindow->SetSize(1080, 900);
 
   renderWindowInteractor = vtkSmartPointer<vtkRenderWindowInteractor>::New();
@@ -381,8 +398,8 @@ void Renderer::initialize() {
   camera->SetViewAngle(60);             // Set the field of view (FOV) in degrees
 
   // Apply the camera settings to the renderer
-  renderer->SetActiveCamera(camera);
-  renderer->ResetCameraClippingRange(); // Adjust clipping range based on the scene
+  mainRenderer->SetActiveCamera(camera);
+  mainRenderer->ResetCameraClippingRange(); // Adjust clipping range based on the scene
 
   // Create the orientation marker widget
   vtkNew<vtkAxesActor> axes;
@@ -408,13 +425,14 @@ void Renderer::initialize() {
   actor3->GetProperty()->SetColor(colors->GetColor3d("Blue").GetData());
   actor3->GetProperty()->SetPointSize(2);
 
-  renderer->SetBackground(colors->GetColor3d("Black").GetData());
+  mainRenderer->SetBackground(colors->GetColor3d("Black").GetData());
 
   // Create empty append poly data filters
   paths = vtkSmartPointer<vtkAppendPolyData>::New();
   actuals = vtkSmartPointer<vtkAppendPolyData>::New();
   segmentGaps = vtkSmartPointer<vtkAppendPolyData>::New();
   planeData = vtkSmartPointer<vtkAppendPolyData>::New();
+  blackboxData = vtkSmartPointer<vtkAppendPolyData>::New();
 
   // Temporary until first update
   vtkNew<vtkPolyData> emptyPolyData;
@@ -426,6 +444,7 @@ void Renderer::initialize() {
   actuals->AddInputData(emptyPolyData);
   segmentGaps->AddInputData(emptyPolyData);
   planeData->AddInputData(emptyPolyData);
+  blackboxData->AddInputData(emptyPolyData);
 
   // Update planeData to ensure it has an input port
   planeData->Update();
@@ -459,6 +478,8 @@ void Renderer::initialize() {
   actor2->SetMapper(mapper2);
   actor3->SetMapper(mapper3);
 
+  // Blackbox actor will be created later if blackbox data is loaded
+
   // Set properties for the tape (actor2)
   vtkProperty* property = actor2->GetProperty();
 
@@ -490,10 +511,11 @@ void Renderer::initialize() {
   // Set the back face property
   actor2->SetBackfaceProperty(backProperty);
 
-  renderer->AddActor(planeActor);
-  renderer->AddActor(actor1);
-  renderer->AddActor(actor2);
-  renderer->AddActor(actor3);
+  mainRenderer->AddActor(planeActor);
+  mainRenderer->AddActor(actor1);
+  mainRenderer->AddActor(actor2);
+  mainRenderer->AddActor(actor3);
+  // blackboxActor will be added later if blackbox data is loaded
 
   // Enable anti-aliasing (multi-sampling)
   renderWindow->SetMultiSamples(4); // Use 4x MSAA
@@ -501,9 +523,9 @@ void Renderer::initialize() {
   // Enable depth peeling for proper transparency rendering
   renderWindow->SetAlphaBitPlanes(1);
   renderWindow->SetMultiSamples(0);
-  renderer->SetUseDepthPeeling(1);
-  renderer->SetMaximumNumberOfPeels(100);  // Maximum number of depth peels
-  renderer->SetOcclusionRatio(0.1);        // Occlusion ratio
+  mainRenderer->SetUseDepthPeeling(1);
+  mainRenderer->SetMaximumNumberOfPeels(100);  // Maximum number of depth peels
+  mainRenderer->SetOcclusionRatio(0.1);        // Occlusion ratio
 
   // render
   renderWindow->Render();
@@ -538,6 +560,44 @@ std::vector<Eigen::Vector3d> Renderer::stateToOrientation(std::vector<AircraftSt
   return points;
 }
 
+std::vector<Eigen::Vector3d> Renderer::blackboxToVector(const std::vector<SimpleAircraftState>& states) {
+  std::vector<Eigen::Vector3d> points;
+  for (const auto& s : states) {
+    points.push_back(s.position);
+  }
+  return points;
+}
+
+std::vector<Eigen::Vector3d> Renderer::blackboxToOrientation(const std::vector<SimpleAircraftState>& states) {
+  std::vector<Eigen::Vector3d> points;
+  for (const auto& s : states) {
+    points.push_back(s.orientation * -Eigen::Vector3d::UnitZ());
+  }
+  return points;
+}
+
+bool Renderer::loadBlackboxData(const std::string& filename) {
+  if (blackboxExtractor.loadBlackboxFile(filename)) {
+    blackboxStates = blackboxExtractor.extractAircraftStates();
+    blackboxEnabled = true;
+    
+    // Create and configure blackbox actor
+    blackboxActor = vtkSmartPointer<vtkActor>::New();
+    vtkNew<vtkPolyDataMapper> blackboxMapper;
+    blackboxMapper->SetInputConnection(blackboxData->GetOutputPort());
+    blackboxActor->SetMapper(blackboxMapper);
+    blackboxActor->GetProperty()->SetColor(0.0, 1.0, 0.0); // Green for blackbox data
+    blackboxActor->GetProperty()->SetPointSize(4);
+    
+    // Add the blackbox actor to the renderer
+    mainRenderer->AddActor(blackboxActor);
+    
+    std::cout << "Loaded blackbox data with " << blackboxStates.size() << " records" << std::endl;
+    return true;
+  }
+  return false;
+}
+
 // Extract the generation number from the key
 int extractGenNumber(const std::string& input) {
   std::regex pattern("autoc-.*\\/gen(\\d+)\\.dmp");
@@ -552,13 +612,30 @@ int extractGenNumber(const std::string& input) {
 
 // main method
 int main(int argc, char** argv) {
+  // Check for help argument
+  if (argc > 1 && (std::string(argv[1]) == "--help" || std::string(argv[1]) == "-h")) {
+    std::cout << "Usage: " << argv[0] << " [simulation_key] [blackbox_file.TXT]" << std::endl;
+    std::cout << "  simulation_key: S3 key for simulation data (optional, uses latest if empty)" << std::endl;
+    std::cout << "  blackbox_file:  iNav blackbox log file to overlay (optional)" << std::endl;
+    std::cout << "Examples:" << std::endl;
+    std::cout << "  " << argv[0] << "                                    # Latest simulation only" << std::endl;
+    std::cout << "  " << argv[0] << " autoc-20250708-123456/             # Specific simulation only" << std::endl;
+    std::cout << "  " << argv[0] << " \"\" blackbox_log.TXT               # Latest simulation + blackbox" << std::endl;
+    std::cout << "  " << argv[0] << " autoc-20250708/ blackbox_log.TXT   # Specific simulation + blackbox" << std::endl;
+    return 0;
+  }
+
   // which build are we going to look at
   std::string keyName = "";
+  std::string blackboxFile = "";
 
   if (argc > 1) {
     computedKeyName = argv[1];
   }
-  else {
+  if (argc > 2) {
+    blackboxFile = argv[2];
+  }
+  if (argc == 1) {
     // later, we'll search for latest build
   }
   // AWS setup
@@ -628,6 +705,13 @@ int main(int argc, char** argv) {
 
   // Create a renderer
   renderer.initialize();
+
+  // Load blackbox data if provided
+  if (!blackboxFile.empty()) {
+    if (!renderer.loadBlackboxData(blackboxFile)) {
+      std::cerr << "Warning: Failed to load blackbox file: " << blackboxFile << std::endl;
+    }
+  }
 
   // display initial data
   renderer.genNumber = extractGenNumber(keyName);
