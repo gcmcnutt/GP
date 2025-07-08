@@ -5,9 +5,11 @@
 #ifdef GP_BUILD
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
+#define CLAMP_DEF(v, min, max) std::clamp(v, min, max) 
 #else
 #include <ArduinoEigenDense.h>
 // #include <ArduinoEigen/ArduinoEigen/Eigen/Geometry>
+#define CLAMP_DEF(v, min, max) (min(1.0, max(-1.0, v)))
 #endif
 
 #define SIM_MAX_ROLL_RATE_RADSEC (M_PI)
@@ -93,11 +95,11 @@ BOOST_CLASS_VERSION(Path, 1)
     void setSimTimeMsec(unsigned long int timeMsec) { simTimeMsec = timeMsec; }
 
     double getPitchCommand() const { return pitchCommand; }
-    double setPitchCommand(double pitch) { return (pitchCommand = min(1.0, max(-1.0, pitch))); }
+    double setPitchCommand(double pitch) { return (pitchCommand = CLAMP_DEF(pitch, -1.0, 1.0)); }
     double getRollCommand() const { return rollCommand; }
-    double setRollCommand(double roll) { return (rollCommand = min(1.0, max(-1.0, roll))); }
+    double setRollCommand(double roll) { return (rollCommand = CLAMP_DEF(roll, -1.0, 1.0)); }
     double getThrottleCommand() const { return throttleCommand; }
-    double setThrottleCommand(double throttle) { return (throttleCommand = min(1.0, max(-1.0, throttle))); }
+    double setThrottleCommand(double throttle) { return (throttleCommand = CLAMP_DEF(throttle, -1.0, 1.0)); }
 
     void minisimAdvanceState(double dt) {
       double dtSec = dt / 1000.0;
