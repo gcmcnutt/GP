@@ -9,7 +9,7 @@
 #else
 #include <ArduinoEigenDense.h>
 // #include <ArduinoEigen/ArduinoEigen/Eigen/Geometry>
-#define CLAMP_DEF(v, min, max) (min(1.0, max(-1.0, v)))
+#define CLAMP_DEF(v, min, max) ((v) < (min) ? (min) : ((v) > (max) ? (max) : (v)))
 #endif
 
 #define SIM_MAX_ROLL_RATE_RADSEC (M_PI)
