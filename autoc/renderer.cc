@@ -778,7 +778,7 @@ bool parseBlackboxData(const std::string& csvData) {
   
   // Find column indices
   int latIndex = -1, lonIndex = -1, altIndex = -1, timeIndex = -1;
-  int yawIndex = -1, pitchIndex = -1, rollIndex = -1;
+  int quatWIndex = -1, quatXIndex = -1, quatYIndex = -1, quatZIndex = -1;
   
   while (std::getline(stream, line)) {
     if (line.empty() || line.find("End of log") != std::string::npos) {
@@ -801,9 +801,10 @@ bool parseBlackboxData(const std::string& csvData) {
         else if (header == "navPos[1]") lonIndex = index;
         else if (header == "navPos[2]") altIndex = index;
         else if (header == "time (us)") timeIndex = index;
-        else if (header == "attitude[0]") rollIndex = index;
-        else if (header == "attitude[1]") pitchIndex = index;
-        else if (header == "attitude[2]") yawIndex = index;
+        else if (header == "quaternion[0]") quatWIndex = index;
+        else if (header == "quaternion[1]") quatXIndex = index;
+        else if (header == "quaternion[2]") quatYIndex = index;
+        else if (header == "quaternion[3]") quatZIndex = index;
         index++;
       }
       headerParsed = true;
@@ -823,6 +824,18 @@ bool parseBlackboxData(const std::string& csvData) {
     }
     
     if (row.size() < headers.size()) continue;
+    
+    // Sample at 50ms intervals (50,000 microseconds)
+    static unsigned long int lastSampleTime = 0;
+    const unsigned long int SAMPLE_INTERVAL_US = 50000; // 50ms in microseconds
+    
+    if (timeIndex >= 0) {
+      unsigned long int currentTime = std::stoul(row[timeIndex]);
+      if (lastSampleTime > 0 && (currentTime - lastSampleTime) < SAMPLE_INTERVAL_US) {
+        continue; // Skip this record, not enough time has passed
+      }
+      lastSampleTime = currentTime;
+    }
     
     // Extract navPos coordinates and convert to meters
     if (latIndex >= 0 && lonIndex >= 0 && altIndex >= 0) {
@@ -861,16 +874,18 @@ bool parseBlackboxData(const std::string& csvData) {
         blackboxPoints.push_back(newPoint);
         
         // Create AircraftState object
-        if (rollIndex >= 0 && pitchIndex >= 0 && yawIndex >= 0) {
-          double roll = std::stod(row[rollIndex]) * M_PI / 1800.0;   // deciseconds to radians
-          double pitch = std::stod(row[pitchIndex]) * M_PI / 1800.0; // deciseconds to radians
-          double yaw = std::stod(row[yawIndex]) * M_PI / 1800.0;     // deciseconds to radians
+        if (quatWIndex >= 0 && quatXIndex >= 0 && quatYIndex >= 0 && quatZIndex >= 0) {
+          // Parse normalized quaternion values (stored as integers * 10000)
+          double qw = std::stod(row[quatWIndex]) / 10000.0;
+          double qx = std::stod(row[quatXIndex]) / 10000.0;
+          double qy = std::stod(row[quatYIndex]) / 10000.0;
+          double qz = std::stod(row[quatZIndex]) / 10000.0;
           
-          // Convert Euler angles to quaternion (same as AircraftState.getOrientation())
-          // Roll-pitch-yaw to quaternion (ZYX convention)
-          Eigen::Quaterniond q = Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()) *
-                                 Eigen::AngleAxisd(pitch, Eigen::Vector3d::UnitY()) *
-                                 Eigen::AngleAxisd(roll, Eigen::Vector3d::UnitX());
+          // Create quaternion directly from normalized values
+          Eigen::Quaterniond q(qw, qx, qy, qz);
+          
+          // Ensure quaternion is normalized (should already be, but safety check)
+          q.normalize();
           
           // Get time if available, otherwise use index
           unsigned long int timeMs = (timeIndex >= 0) ? std::stoul(row[timeIndex]) : blackboxAircraftStates.size() * 100;
@@ -882,14 +897,14 @@ bool parseBlackboxData(const std::string& csvData) {
           // Debug: print first few states
           if (blackboxAircraftStates.size() <= 5) {
             Eigen::Vector3d testNormal = q * (-Eigen::Vector3d::UnitZ());
-            std::cout << "AircraftState " << blackboxAircraftStates.size()-1 << ": attitude=(" 
-                      << roll*180/M_PI << "°," << pitch*180/M_PI << "°," << yaw*180/M_PI 
-                      << "°) -> normal=(" << testNormal[0] << "," << testNormal[1] << "," << testNormal[2] << ")" << std::endl;
+            std::cout << "AircraftState " << blackboxAircraftStates.size()-1 << ": quaternion=(" 
+                      << qw << "," << qx << "," << qy << "," << qz 
+                      << ") -> normal=(" << testNormal[0] << "," << testNormal[1] << "," << testNormal[2] << ")" << std::endl;
           }
         } else {
-          // Error: attitude information is required for proper tape orientation
-          std::cerr << "Error: Blackbox data missing attitude information (attitude[0], attitude[1], attitude[2])" << std::endl;
-          std::cerr << "Cannot render tape with proper orientation without aircraft attitude data" << std::endl;
+          // Error: quaternion information is required for proper tape orientation
+          std::cerr << "Error: Blackbox data missing quaternion information (quaternion[0], quaternion[1], quaternion[2], quaternion[3])" << std::endl;
+          std::cerr << "Cannot render tape with proper orientation without aircraft quaternion data" << std::endl;
           return false;
         }
       }
