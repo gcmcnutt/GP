@@ -89,6 +89,31 @@
       ]
     },
     {
+      "name": "(gdb) gpextractor Launch",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/gpextractor",
+      "args": [],
+      "stopAtEntry": false,
+      "cwd": "${workspaceFolder}/autoc",
+      "environment": [],
+      "externalConsole": false,
+      "MIMode": "gdb",
+      "preLaunchTask": "make", // Add this line
+      "setupCommands": [
+        {
+          "description": "Enable pretty-printing for gdb",
+          "text": "-enable-pretty-printing",
+          "ignoreFailures": true
+        },
+        {
+          "description": "Set Disassembly Flavor to Intel",
+          "text": "-gdb-set disassembly-flavor intel",
+          "ignoreFailures": true
+        }
+      ]
+    },
+    {
       "name": "(gdb) renderer Launch",
       "type": "cppdbg",
       "request": "launch",
