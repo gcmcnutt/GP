@@ -91,6 +91,10 @@ public:
   virtual GPGene* createChild(GPNode& gpo) {
     return new MyGene(gpo);
   }
+  
+  // Helper method for code generation
+  int getNodeValue() const { return node ? node->value() : -1; }
+  MyGene* getNthChild(int n) { return (MyGene*)NthChild(n); }
 };
 
 // Minimal MyGP class for loading (from autoc.h)
@@ -143,12 +147,15 @@ void printUsage(const char* progName) {
   std::cout << "Options:\n";
   std::cout << "  -k, --keyname KEYNAME    Specify GP log key name\n";
   std::cout << "  -g, --generation GEN     Specify generation number\n";
+  std::cout << "  -c, --codegen            Generate C++ evaluator code\n";
+  std::cout << "  -o, --output FILE        Output file for generated code\n";
   std::cout << "  -h, --help               Show this help message\n";
   std::cout << "\n";
   std::cout << "Examples:\n";
   std::cout << "  " << progName << "                          # Extract latest run, latest generation\n";
   std::cout << "  " << progName << " -k autoc-20250101-12345  # Extract specific run, latest generation\n";
   std::cout << "  " << progName << " -g 50                    # Extract latest run, generation 50\n";
+  std::cout << "  " << progName << " -c -o gp_evaluator.cpp   # Generate C++ evaluator code\n";
 }
 
 // Extract the generation number from the key
@@ -163,27 +170,265 @@ int extractGenNumber(const std::string& input) {
   return -1;
 }
 
+// Generate C++ code for a GP tree node
+std::string generateNodeCode(MyGene* gene, int& tempVarCounter) {
+  if (!gene) {
+    return "0.0";
+  }
+  
+  int nodeValue = gene->getNodeValue();
+  if (nodeValue == -1) {
+    return "0.0";
+  }
+  std::string result;
+  
+  switch (nodeValue) {
+    case ADD: {
+      std::string left = generateNodeCode(gene->getNthChild(0), tempVarCounter);
+      std::string right = generateNodeCode(gene->getNthChild(1), tempVarCounter);
+      result = "(" + left + " + " + right + ")";
+      break;
+    }
+    case SUB: {
+      std::string left = generateNodeCode(gene->getNthChild(0), tempVarCounter);
+      std::string right = generateNodeCode(gene->getNthChild(1), tempVarCounter);
+      result = "(-" + left + " - " + right + ")";
+      break;
+    }
+    case MUL: {
+      std::string left = generateNodeCode(gene->getNthChild(0), tempVarCounter);
+      std::string right = generateNodeCode(gene->getNthChild(1), tempVarCounter);
+      result = "(" + left + " * " + right + ")";
+      break;
+    }
+    case DIV: {
+      std::string dividend = generateNodeCode(gene->getNthChild(0), tempVarCounter);
+      std::string divisor = generateNodeCode(gene->getNthChild(1), tempVarCounter);
+      std::string tempVar = "temp" + std::to_string(tempVarCounter++);
+      result = "([&]() { double " + tempVar + " = " + divisor + "; return (" + tempVar + " == 0.0) ? 0.0 : (" + dividend + " / " + tempVar + "); })()";
+      break;
+    }
+    case IF: {
+      std::string condition = generateNodeCode(gene->getNthChild(0), tempVarCounter);
+      std::string trueVal = generateNodeCode(gene->getNthChild(1), tempVarCounter);
+      std::string falseVal = generateNodeCode(gene->getNthChild(2), tempVarCounter);
+      result = "((" + condition + ") ? (" + trueVal + ") : (" + falseVal + "))";
+      break;
+    }
+    case EQ: {
+      std::string left = generateNodeCode(gene->getNthChild(0), tempVarCounter);
+      std::string right = generateNodeCode(gene->getNthChild(1), tempVarCounter);
+      result = "((" + left + ") == (" + right + ") ? 1.0 : 0.0)";
+      break;
+    }
+    case GT: {
+      std::string left = generateNodeCode(gene->getNthChild(0), tempVarCounter);
+      std::string right = generateNodeCode(gene->getNthChild(1), tempVarCounter);
+      result = "((" + left + ") > (" + right + ") ? 1.0 : 0.0)";
+      break;
+    }
+    case SETPITCH: {
+      std::string value = generateNodeCode(gene->getNthChild(0), tempVarCounter);
+      result = "aircraftState.setPitchCommand(" + value + ")";
+      break;
+    }
+    case SETROLL: {
+      std::string value = generateNodeCode(gene->getNthChild(0), tempVarCounter);
+      result = "aircraftState.setRollCommand(" + value + ")";
+      break;
+    }
+    case SETTHROTTLE: {
+      std::string value = generateNodeCode(gene->getNthChild(0), tempVarCounter);
+      result = "aircraftState.setThrottleCommand(" + value + ")";
+      break;
+    }
+    case GETPITCH:
+      result = "aircraftState.getPitchCommand()";
+      break;
+    case GETROLL:
+      result = "aircraftState.getRollCommand()";
+      break;
+    case GETTHROTTLE:
+      result = "aircraftState.getThrottleCommand()";
+      break;
+    case SIN: {
+      std::string value = generateNodeCode(gene->getNthChild(0), tempVarCounter);
+      result = "sin(" + value + ")";
+      break;
+    }
+    case COS: {
+      std::string value = generateNodeCode(gene->getNthChild(0), tempVarCounter);
+      result = "cos(" + value + ")";
+      break;
+    }
+    case PI:
+      result = "M_PI";
+      break;
+    case ZERO:
+      result = "0.0";
+      break;
+    case ONE:
+      result = "1.0";
+      break;
+    case TWO:
+      result = "2.0";
+      break;
+    case PROGN: {
+      std::string first = generateNodeCode(gene->getNthChild(0), tempVarCounter);
+      std::string second = generateNodeCode(gene->getNthChild(1), tempVarCounter);
+      result = "([&]() { " + first + "; return " + second + "; })()";
+      break;
+    }
+    case GETVEL:
+      result = "aircraftState.getRelVel()";
+      break;
+    case GETDPHI: {
+      std::string argValue = generateNodeCode(gene->getNthChild(0), tempVarCounter);
+      std::string tempVar = "temp" + std::to_string(tempVarCounter++);
+      result = "([&]() { "
+               "int " + tempVar + " = getIndex(path, " + argValue + "); "
+               "Eigen::Vector3d craftToTarget = path.at(" + tempVar + ").start - aircraftState.getPosition(); "
+               "Eigen::Vector3d target_local = aircraftState.getOrientation().inverse() * craftToTarget; "
+               "Eigen::Vector3d projectedVector(0, target_local.y(), target_local.z()); "
+               "return std::atan2(projectedVector.y(), -projectedVector.z()); "
+               "})()";
+      break;
+    }
+    case GETDTHETA: {
+      std::string argValue = generateNodeCode(gene->getNthChild(0), tempVarCounter);
+      std::string tempVar = "temp" + std::to_string(tempVarCounter++);
+      result = "([&]() { "
+               "int " + tempVar + " = getIndex(path, " + argValue + "); "
+               "Eigen::Vector3d craftToTarget = path.at(" + tempVar + ").start - aircraftState.getPosition(); "
+               "Eigen::Vector3d target_local = aircraftState.getOrientation().inverse() * craftToTarget; "
+               "Eigen::Vector3d projectedVector(0, target_local.y(), target_local.z()); "
+               "double rollEstimate = std::atan2(projectedVector.y(), -projectedVector.z()); "
+               "Eigen::Quaterniond rollRotation(Eigen::AngleAxisd(rollEstimate, Eigen::Vector3d::UnitX())); "
+               "Eigen::Quaterniond virtualOrientation = aircraftState.getOrientation() * rollRotation; "
+               "Eigen::Vector3d newLocalTargetVector = virtualOrientation.inverse() * craftToTarget; "
+               "return std::atan2(-newLocalTargetVector.z(), newLocalTargetVector.x()); "
+               "})()";
+      break;
+    }
+    case GETDTARGET: {
+      std::string argValue = generateNodeCode(gene->getNthChild(0), tempVarCounter);
+      std::string tempVar = "temp" + std::to_string(tempVarCounter++);
+      result = "([&]() { "
+               "int " + tempVar + " = getIndex(path, " + argValue + "); "
+               "double distance = (path.at(" + tempVar + ").start - aircraftState.getPosition()).norm(); "
+               "return CLAMP_DEF((distance - 10.0) / aircraftState.getRelVel(), -1.0, 1.0); "
+               "})()";
+      break;
+    }
+    case GETDHOME:
+      result = "(Eigen::Vector3d(0, 0, -10.0) - aircraftState.getPosition()).norm()";
+      break;
+    default:
+      result = "0.0";
+      break;
+  }
+  
+  return result;
+}
+
+// Generate complete C++ evaluator file
+void generateCppEvaluator(MyGP& gp, const std::string& outputFile) {
+  std::ofstream out(outputFile);
+  if (!out.is_open()) {
+    std::cerr << "Error: Cannot open output file " << outputFile << std::endl;
+    return;
+  }
+  
+  out << "// Generated GP Evaluator - DO NOT EDIT MANUALLY\n";
+  out << "// Generated from GP with fitness: " << gp.getFitness() << "\n";
+  out << "// GP Length: " << gp.length() << ", Depth: " << gp.depth() << "\n\n";
+  
+  out << "#include <cmath>\n";
+  out << "#include <algorithm>\n";
+  out << "#include <vector>\n";
+  out << "#ifndef GP_BUILD\n";
+  out << "#include <ArduinoEigenDense.h>\n";
+  out << "#else\n";
+  out << "#include <Eigen/Dense>\n";
+  out << "#include <Eigen/Geometry>\n";
+  out << "#endif\n";
+  out << "#include \"GP/autoc/aircraft_state.h\"\n\n";
+  
+  // Add getIndex helper function
+  out << "static int getIndex(const std::vector<Path>& path, double arg) {\n";
+  out << "  extern AircraftState aircraftState;\n";
+  out << "  if (std::isnan(arg)) {\n";
+  out << "    return aircraftState.getThisPathIndex();\n";
+  out << "  }\n";
+  out << "  int steps = CLAMP_DEF((int)arg, -5, 5);\n";
+  out << "  double distanceSoFar = path.at(aircraftState.getThisPathIndex()).distanceFromStart;\n";
+  out << "  double distanceGoal = distanceSoFar + steps * 22.0 * (200.0 / 1000.0);\n";
+  out << "  int currentStep = aircraftState.getThisPathIndex();\n";
+  out << "  if (steps > 0) {\n";
+  out << "    while (path.at(currentStep).distanceFromStart < distanceGoal && currentStep < path.size() - 1) {\n";
+  out << "      currentStep++;\n";
+  out << "    }\n";
+  out << "  } else {\n";
+  out << "    while (path.at(currentStep).distanceFromStart > distanceGoal && currentStep > 0) {\n";
+  out << "      currentStep--;\n";
+  out << "    }\n";
+  out << "  }\n";
+  out << "  return currentStep;\n";
+  out << "}\n\n";
+  
+  out << "double evaluateGP(AircraftState& aircraftState, const std::vector<Path>& path, double arg) {\n";
+  out << "  double returnValue;\n\n";
+  
+  // Generate the main evaluation code
+  MyGene* rootGene = (MyGene*)gp.NthGene(0);
+  int tempVarCounter = 0;
+  std::string evalCode = generateNodeCode(rootGene, tempVarCounter);
+  
+  out << "  returnValue = " << evalCode << ";\n\n";
+  
+  // Add range limiting
+  out << "  const double RANGELIMIT = 1000000.0;\n";
+  out << "  if (returnValue < -RANGELIMIT) return -RANGELIMIT;\n";
+  out << "  if (returnValue > RANGELIMIT) return RANGELIMIT;\n";
+  out << "  if (std::abs(returnValue) < 0.000001) return 0.0;\n";
+  out << "  return returnValue;\n";
+  out << "}\n";
+  
+  out.close();
+  std::cout << "Generated C++ evaluator: " << outputFile << std::endl;
+}
+
 int main(int argc, char** argv) {
   // Parse command line arguments
   static struct option long_options[] = {
     {"keyname", required_argument, 0, 'k'},
     {"generation", required_argument, 0, 'g'},
+    {"codegen", no_argument, 0, 'c'},
+    {"output", required_argument, 0, 'o'},
     {"help", no_argument, 0, 'h'},
     {0, 0, 0, 0}
   };
   
   std::string computedKeyName = "";
   int specifiedGeneration = -1;
+  bool generateCode = false;
+  std::string outputFile = "gp_evaluator.cpp";
   int option_index = 0;
   int c;
   
-  while ((c = getopt_long(argc, argv, "k:g:h", long_options, &option_index)) != -1) {
+  while ((c = getopt_long(argc, argv, "k:g:co:h", long_options, &option_index)) != -1) {
     switch (c) {
       case 'k':
         computedKeyName = optarg;
         break;
       case 'g':
         specifiedGeneration = std::stoi(optarg);
+        break;
+      case 'c':
+        generateCode = true;
+        break;
+      case 'o':
+        outputFile = optarg;
         break;
       case 'h':
         printUsage(argv[0]);
@@ -339,16 +584,21 @@ int main(int argc, char** argv) {
   // Resolve node values (required for printOn to work)
   gp.resolveNodeValues(adfNs);
 
-  // Print the GP in human readable format
-  std::cout << "Extracted GP from: " << keyName << std::endl;
-  std::cout << "Generation: " << extractGenNumber(keyName) << std::endl;
-  std::cout << "GP Length: " << gp.length() << std::endl;
-  std::cout << "GP Depth: " << gp.depth() << std::endl;
-  std::cout << "Fitness: " << gp.getFitness() << std::endl;
-  std::cout << std::endl;
-  
-  // Print the GP tree structure
-  gp.printOn(std::cout);
+  if (generateCode) {
+    // Generate C++ evaluator code
+    generateCppEvaluator(gp, outputFile);
+  } else {
+    // Print the GP in human readable format
+    std::cout << "Extracted GP from: " << keyName << std::endl;
+    std::cout << "Generation: " << extractGenNumber(keyName) << std::endl;
+    std::cout << "GP Length: " << gp.length() << std::endl;
+    std::cout << "GP Depth: " << gp.depth() << std::endl;
+    std::cout << "Fitness: " << gp.getFitness() << std::endl;
+    std::cout << std::endl;
+    
+    // Print the GP tree structure
+    gp.printOn(std::cout);
+  }
 
   // Cleanup AWS
   Aws::ShutdownAPI(options);
