@@ -1,4 +1,12 @@
 #include <regex>
+#include <getopt.h>
+#include <iostream>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <vector>
+#include <cstdlib>
+#include <cmath>
 
 #include "renderer.h"
 
@@ -12,6 +20,20 @@
 EvalResults evalResults;
 std::string computedKeyName = "";
 Renderer renderer;
+
+// Blackbox-related global variables
+std::string decoderCommand = "";
+vtkSmartPointer<vtkAppendPolyData> blackboxTape;
+std::vector<Eigen::Vector3d> blackboxPoints;
+std::vector<Eigen::Vector3d> blackboxNormals;
+std::vector<AircraftState> blackboxAircraftStates;
+Eigen::Vector3d blackboxOrigin(0.0, 0.0, 0.0);
+double blackboxTimeOffset = 0.0;
+
+// Forward declarations
+bool parseBlackboxData(const std::string& csvData);
+bool loadBlackboxData();
+void printUsage(const char* progName);
 
 std::shared_ptr<Aws::S3::S3Client> getS3Client() {
   // real S3 or local minio?
@@ -219,8 +241,10 @@ bool Renderer::updateGenerationDisplay(int newGen) {
   this->actuals->RemoveAllInputs();
   this->segmentGaps->RemoveAllInputs();
   this->planeData->RemoveAllInputs();
+  this->blackboxTapes->RemoveAllInputs();
 
-  for (int i = 0; i < evalResults.pathList.size(); i++) {
+  int maxArenas = (!blackboxAircraftStates.empty()) ? 1 : evalResults.pathList.size();
+  for (int i = 0; i < maxArenas; i++) {
     Eigen::Vector3d offset = renderingOffset(i);
 
     std::vector<Eigen::Vector3d> p = pathToVector(evalResults.pathList[i]);
@@ -268,12 +292,36 @@ bool Renderer::updateGenerationDisplay(int newGen) {
     planeSource->GetOutput()->GetCellData()->SetScalars(cellData);
     planeSource->Update();
     planeData->AddInputConnection(planeSource->GetOutputPort());
+    
+    // Add blackbox data to first arena only
+    if (i == 0 && !blackboxAircraftStates.empty()) {
+      // Center blackbox data in the arena by adding the arena offset
+      // The blackbox data is already origin-centered, so we add the arena offset to position it properly
+      Eigen::Vector3d blackboxOffset = offset;
+      std::cout << "Arena offset: (" << offset[0] << "," << offset[1] << "," << offset[2] << ")" << std::endl;
+      std::cout << "Blackbox states: " << blackboxAircraftStates.size() << std::endl;
+      if (blackboxAircraftStates.size() > 0) {
+        auto firstPos = blackboxAircraftStates[0].getPosition();
+        auto lastPos = blackboxAircraftStates.back().getPosition();
+        std::cout << "First blackbox point: (" << firstPos[0] << "," << firstPos[1] << "," << firstPos[2] << ")" << std::endl;
+        std::cout << "Last blackbox point: (" << lastPos[0] << "," << lastPos[1] << "," << lastPos[2] << ")" << std::endl;
+      }
+      
+      // Use the same rendering pipeline as the blue/yellow tape
+      std::vector<Eigen::Vector3d> a = stateToVector(blackboxAircraftStates);
+      this->blackboxTapes->AddInputData(createTapeSet(blackboxOffset, a, stateToOrientation(blackboxAircraftStates)));
+    }
   }
 
   this->planeData->Update();
   this->paths->Update();
   this->actuals->Update();
   this->segmentGaps->Update();
+  
+  // Only update blackbox tapes if there's blackbox data
+  if (!blackboxAircraftStates.empty()) {
+    this->blackboxTapes->Update();
+  }
 
   // Update the window title
   std::string title = keyName + " - " + std::to_string(10000 - newGen);
@@ -415,6 +463,7 @@ void Renderer::initialize() {
   actuals = vtkSmartPointer<vtkAppendPolyData>::New();
   segmentGaps = vtkSmartPointer<vtkAppendPolyData>::New();
   planeData = vtkSmartPointer<vtkAppendPolyData>::New();
+  blackboxTapes = vtkSmartPointer<vtkAppendPolyData>::New();
 
   // Temporary until first update
   vtkNew<vtkPolyData> emptyPolyData;
@@ -426,6 +475,7 @@ void Renderer::initialize() {
   actuals->AddInputData(emptyPolyData);
   segmentGaps->AddInputData(emptyPolyData);
   planeData->AddInputData(emptyPolyData);
+  blackboxTapes->AddInputData(emptyPolyData);
 
   // Update planeData to ensure it has an input port
   planeData->Update();
@@ -453,6 +503,37 @@ void Renderer::initialize() {
   tubeFilter3->SetRadius(0.1);
   tubeFilter3->SetNumberOfSides(10);
   mapper3->SetInputConnection(tubeFilter3->GetOutputPort());
+
+  // Create blackbox actor
+  blackboxActor = vtkSmartPointer<vtkActor>::New();
+  vtkNew<vtkPolyDataMapper> blackboxMapper;
+  blackboxMapper->SetInputConnection(blackboxTapes->GetOutputPort());
+  blackboxActor->SetMapper(blackboxMapper);
+  
+  // Set properties for the blackbox tape (top/bottom coloring)
+  vtkProperty* blackboxProperty = blackboxActor->GetProperty();
+  blackboxProperty->SetColor(0.0, 1.0, 0.0);  // Green for top face
+  blackboxProperty->SetLighting(true);
+  blackboxProperty->SetInterpolation(VTK_FLAT);
+  blackboxProperty->SetBackfaceCulling(false);
+  blackboxProperty->SetFrontfaceCulling(false);
+  blackboxProperty->SetAmbient(0.1);
+  blackboxProperty->SetDiffuse(0.8);
+  blackboxProperty->SetSpecular(0.1);
+  blackboxProperty->SetSpecularPower(10);
+  blackboxProperty->SetOpacity(1.0);
+  
+  // Create a new property for the back face (bottom)
+  vtkNew<vtkProperty> blackboxBackProperty;
+  blackboxBackProperty->SetColor(1.0, 0.5, 0.0);  // Orange for bottom face
+  blackboxBackProperty->SetAmbient(0.1);
+  blackboxBackProperty->SetDiffuse(0.8);
+  blackboxBackProperty->SetSpecular(0.1);
+  blackboxBackProperty->SetSpecularPower(10);
+  blackboxBackProperty->SetOpacity(1.0);
+  
+  // Set the back face property
+  blackboxActor->SetBackfaceProperty(blackboxBackProperty);
 
   // Update actors
   actor1->SetMapper(mapper1);
@@ -494,6 +575,11 @@ void Renderer::initialize() {
   renderer->AddActor(actor1);
   renderer->AddActor(actor2);
   renderer->AddActor(actor3);
+  
+  // Only add blackbox actor if there's blackbox data
+  if (!blackboxAircraftStates.empty()) {
+    renderer->AddActor(blackboxActor);
+  }
 
   // Enable anti-aliasing (multi-sampling)
   renderWindow->SetMultiSamples(4); // Use 4x MSAA
@@ -533,6 +619,7 @@ std::vector<Eigen::Vector3d> Renderer::stateToVector(std::vector<AircraftState> 
 std::vector<Eigen::Vector3d> Renderer::stateToOrientation(std::vector<AircraftState> state) {
   std::vector<Eigen::Vector3d> points;
   for (const auto& s : state) {
+    // Use the aircraft body Z-axis (up direction) for ribbon orientation
     points.push_back(s.getOrientation() * -Eigen::Vector3d::UnitZ());
   }
   return points;
@@ -552,20 +639,59 @@ int extractGenNumber(const std::string& input) {
 
 // main method
 int main(int argc, char** argv) {
-  // which build are we going to look at
+  // Parse command line arguments
+  static struct option long_options[] = {
+    {"keyname", required_argument, 0, 'k'},
+    {"decoder", required_argument, 0, 'd'},
+    {"help", no_argument, 0, 'h'},
+    {0, 0, 0, 0}
+  };
+  
+  int option_index = 0;
+  int c;
+  
+  while ((c = getopt_long(argc, argv, "k:d:h", long_options, &option_index)) != -1) {
+    switch (c) {
+      case 'k':
+        computedKeyName = optarg;
+        break;
+      case 'd':
+        decoderCommand = optarg;
+        break;
+      case 'h':
+        printUsage(argv[0]);
+        return 0;
+      case '?':
+        printUsage(argv[0]);
+        return 1;
+      default:
+        break;
+    }
+  }
+  
+  // Handle positional arguments for backward compatibility
+  if (computedKeyName.empty() && optind < argc) {
+    computedKeyName = argv[optind];
+  }
+  
   std::string keyName = "";
-
-  if (argc > 1) {
-    computedKeyName = argv[1];
-  }
-  else {
-    // later, we'll search for latest build
-  }
+  
   // AWS setup
   Aws::SDKOptions options;
   Aws::InitAPI(options);
 
   std::shared_ptr<Aws::S3::S3Client> s3_client = getS3Client();
+  
+  // Load blackbox data if decoder command is specified
+  if (!decoderCommand.empty()) {
+    if (!loadBlackboxData()) {
+      std::cerr << "Failed to load blackbox data" << std::endl;
+      return 1;
+    }
+    if (!blackboxAircraftStates.empty()) {
+      std::cout << "Blackbox data loaded: " << blackboxAircraftStates.size() << " states" << std::endl;
+    }
+  }
 
   // should we look up the latest run?
   if (computedKeyName.empty()) {
@@ -637,4 +763,211 @@ int main(int argc, char** argv) {
   renderer.renderWindowInteractor->Start();
 
   return 0;
+}
+
+// Parse blackbox decode CSV output
+bool parseBlackboxData(const std::string& csvData) {
+  std::istringstream stream(csvData);
+  std::string line;
+  std::vector<std::string> headers;
+  bool headerParsed = false;
+  
+  blackboxPoints.clear();
+  blackboxNormals.clear();
+  blackboxAircraftStates.clear();
+  
+  // Find column indices
+  int latIndex = -1, lonIndex = -1, altIndex = -1, timeIndex = -1;
+  int quatWIndex = -1, quatXIndex = -1, quatYIndex = -1, quatZIndex = -1;
+  
+  while (std::getline(stream, line)) {
+    if (line.empty() || line.find("End of log") != std::string::npos) {
+      continue;
+    }
+    
+    // Parse header
+    if (!headerParsed) {
+      std::istringstream headerStream(line);
+      std::string header;
+      int index = 0;
+      
+      while (std::getline(headerStream, header, ',')) {
+        // Trim whitespace from header
+        header.erase(0, header.find_first_not_of(" \t"));
+        header.erase(header.find_last_not_of(" \t") + 1);
+        
+        headers.push_back(header);
+        if (header == "navPos[0]") latIndex = index;
+        else if (header == "navPos[1]") lonIndex = index;
+        else if (header == "navPos[2]") altIndex = index;
+        else if (header == "time (us)") timeIndex = index;
+        else if (header == "quaternion[0]") quatWIndex = index;
+        else if (header == "quaternion[1]") quatXIndex = index;
+        else if (header == "quaternion[2]") quatYIndex = index;
+        else if (header == "quaternion[3]") quatZIndex = index;
+        index++;
+      }
+      headerParsed = true;
+      continue;
+    }
+    
+    // Parse data rows
+    std::istringstream dataStream(line);
+    std::string cell;
+    std::vector<std::string> row;
+    
+    while (std::getline(dataStream, cell, ',')) {
+      // Trim whitespace from cell
+      cell.erase(0, cell.find_first_not_of(" \t"));
+      cell.erase(cell.find_last_not_of(" \t") + 1);
+      row.push_back(cell);
+    }
+    
+    if (row.size() < headers.size()) continue;
+    
+    // Sample at 50ms intervals (50,000 microseconds)
+    static unsigned long int lastSampleTime = 0;
+    const unsigned long int SAMPLE_INTERVAL_US = 50000; // 50ms in microseconds
+    
+    if (timeIndex >= 0) {
+      unsigned long int currentTime = std::stoul(row[timeIndex]);
+      if (lastSampleTime > 0 && (currentTime - lastSampleTime) < SAMPLE_INTERVAL_US) {
+        continue; // Skip this record, not enough time has passed
+      }
+      lastSampleTime = currentTime;
+    }
+    
+    // Extract navPos coordinates and convert to meters
+    if (latIndex >= 0 && lonIndex >= 0 && altIndex >= 0) {
+      double navX = std::stod(row[latIndex]);  // navPos[0] in cm
+      double navY = std::stod(row[lonIndex]);  // navPos[1] in cm
+      double navZ = std::stod(row[altIndex]);  // navPos[2] in cm
+      
+      // Convert from centimeters to meters and center on origin
+      static bool firstPoint = true;
+      static double originX, originY, originZ;
+      
+      if (firstPoint) {
+        originX = navX;
+        originY = navY;
+        originZ = navZ;
+        firstPoint = false;
+      }
+      
+      // Convert to meters and translate to origin
+      // NED coordinates: North=X, East=Y, Down=Z
+      // For VTK visualization, flip Z to make "up" positive (NED Down -> VTK Up)
+      double x = (navX - originX) / 100.0;   // cm to m, North
+      double y = (navY - originY) / 100.0;   // cm to m, East  
+      double z = -(navZ - originZ) / 100.0;  // cm to m, Down->Up (flip sign)
+      
+      Eigen::Vector3d newPoint(x, y, z);
+      
+      // Filter out coincident points to avoid VTK ribbon filter issues
+      if (blackboxPoints.empty() || (newPoint - blackboxPoints.back()).norm() > 0.01) {
+        // Debug output for first few points
+        if (blackboxPoints.size() < 5) {
+          std::cout << "Point " << blackboxPoints.size() << ": navPos=(" << navX << "," << navY << "," << navZ 
+                    << ") -> local=(" << x << "," << y << "," << z << ")" << std::endl;
+        }
+        
+        blackboxPoints.push_back(newPoint);
+        
+        // Create AircraftState object
+        if (quatWIndex >= 0 && quatXIndex >= 0 && quatYIndex >= 0 && quatZIndex >= 0) {
+          // Parse normalized quaternion values (stored as integers * 10000)
+          double qw = std::stod(row[quatWIndex]) / 10000.0;
+          double qx = std::stod(row[quatXIndex]) / 10000.0;
+          double qy = std::stod(row[quatYIndex]) / 10000.0;
+          double qz = std::stod(row[quatZIndex]) / 10000.0;
+          
+          // Create quaternion directly from normalized values
+          Eigen::Quaterniond q(qw, qx, qy, qz);
+          
+          // Ensure quaternion is normalized (should already be, but safety check)
+          q.normalize();
+          
+          // Get time if available, otherwise use index
+          unsigned long int timeMs = (timeIndex >= 0) ? std::stoul(row[timeIndex]) : blackboxAircraftStates.size() * 100;
+          
+          // Create AircraftState with blackbox data
+          AircraftState state(blackboxAircraftStates.size(), 20.0, q, newPoint, 0.0, 0.0, 0.0, timeMs);
+          blackboxAircraftStates.push_back(state);
+          
+          // Debug: print first few states
+          if (blackboxAircraftStates.size() <= 5) {
+            Eigen::Vector3d testNormal = q * (-Eigen::Vector3d::UnitZ());
+            std::cout << "AircraftState " << blackboxAircraftStates.size()-1 << ": quaternion=(" 
+                      << qw << "," << qx << "," << qy << "," << qz 
+                      << ") -> normal=(" << testNormal[0] << "," << testNormal[1] << "," << testNormal[2] << ")" << std::endl;
+          }
+        } else {
+          // Error: quaternion information is required for proper tape orientation
+          std::cerr << "Error: Blackbox data missing quaternion information (quaternion[0], quaternion[1], quaternion[2], quaternion[3])" << std::endl;
+          std::cerr << "Cannot render tape with proper orientation without aircraft quaternion data" << std::endl;
+          return false;
+        }
+      }
+    }
+  }
+  
+  return !blackboxAircraftStates.empty();
+}
+
+
+// Load CSV data from decoder command or stdin
+bool loadBlackboxData() {
+  std::string csvData;
+  
+  if (decoderCommand == "-") {
+    // Read from stdin
+    std::ostringstream result;
+    std::string line;
+    while (std::getline(std::cin, line)) {
+      result << line << "\n";
+    }
+    csvData = result.str();
+  } else {
+    // Execute the decoder command
+    FILE* pipe = popen(decoderCommand.c_str(), "r");
+    if (!pipe) {
+      std::cerr << "Failed to execute decoder command: " << decoderCommand << std::endl;
+      return false;
+    }
+    
+    std::ostringstream result;
+    char buffer[256];
+    while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+      result << buffer;
+    }
+    
+    int exitCode = pclose(pipe);
+    if (exitCode != 0) {
+      std::cerr << "Decoder command failed with exit code: " << exitCode << std::endl;
+      return false;
+    }
+    
+    csvData = result.str();
+  }
+  
+  return parseBlackboxData(csvData);
+}
+
+
+
+// Print usage information
+void printUsage(const char* progName) {
+  std::cout << "Usage: " << progName << " [OPTIONS]\n";
+  std::cout << "Options:\n";
+  std::cout << "  -k, --keyname KEYNAME    Specify GP log key name\n";
+  std::cout << "  -d, --decoder COMMAND    Specify shell command to generate CSV data\n";
+  std::cout << "                           Use '-' to read CSV data from stdin\n";
+  std::cout << "                           If not specified, no blackbox data is loaded\n";
+  std::cout << "  -h, --help               Show this help message\n";
+  std::cout << "\n";
+  std::cout << "Examples:\n";
+  std::cout << "  " << progName << "                                    # Render all arenas without blackbox data\n";
+  std::cout << "  " << progName << " -d 'blackbox_decode file.bbl'     # Pipe through decoder command\n";
+  std::cout << "  " << progName << " -d -                              # Read CSV from stdin\n";
+  std::cout << "  cat data.csv | " << progName << " -d -               # Read CSV from stdin (alternative)\n";
 }

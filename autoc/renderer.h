@@ -84,10 +84,12 @@ private:
   vtkSmartPointer<vtkAppendPolyData> actuals;
   vtkSmartPointer<vtkAppendPolyData> segmentGaps;
   vtkSmartPointer<vtkAppendPolyData> planeData;
+  vtkSmartPointer<vtkAppendPolyData> blackboxTapes;
 
   vtkSmartPointer<vtkActor> actor1;
   vtkSmartPointer<vtkActor> actor2;
   vtkSmartPointer<vtkActor> actor3;
+  vtkSmartPointer<vtkActor> blackboxActor;
 
   Eigen::Vector3d renderingOffset(int i); // locate a coordinate offset for our rendering screen
   vtkSmartPointer<vtkPolyData> createPointSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> points);
