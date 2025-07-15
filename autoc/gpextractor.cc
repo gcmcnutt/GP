@@ -332,7 +332,7 @@ std::string generateNodeCode(MyGene* gene, int& tempVarCounter) {
 }
 
 // Generate complete C++ evaluator file
-void generateCppEvaluator(MyGP& gp, const std::string& outputFile) {
+void generateCppEvaluator(MyGP& gp, const std::string& outputFile, const std::string& s3Key, int generation) {
   std::ofstream out(outputFile);
   if (!out.is_open()) {
     std::cerr << "Error: Cannot open output file " << outputFile << std::endl;
@@ -340,8 +340,25 @@ void generateCppEvaluator(MyGP& gp, const std::string& outputFile) {
   }
   
   out << "// Generated GP Evaluator - DO NOT EDIT MANUALLY\n";
+  out << "// S3 Key: " << s3Key << "\n";
+  out << "// Generation: " << generation << "\n";
   out << "// Generated from GP with fitness: " << gp.getFitness() << "\n";
-  out << "// GP Length: " << gp.length() << ", Depth: " << gp.depth() << "\n\n";
+  out << "// GP Length: " << gp.length() << ", Depth: " << gp.depth() << "\n";
+  out << "//\n";
+  out << "// Human readable GP structure:\n";
+  
+  // Capture printOn output in a string and add as comments
+  std::ostringstream gpStructure;
+  gp.printOn(gpStructure);
+  std::string gpStr = gpStructure.str();
+  
+  // Add each line of the GP structure as a comment
+  std::istringstream iss(gpStr);
+  std::string line;
+  while (std::getline(iss, line)) {
+    out << "// " << line << "\n";
+  }
+  out << "\n";
   
   out << "#include <cmath>\n";
   out << "#include <algorithm>\n";
@@ -586,7 +603,8 @@ int main(int argc, char** argv) {
 
   if (generateCode) {
     // Generate C++ evaluator code
-    generateCppEvaluator(gp, outputFile);
+    int generation = extractGenNumber(keyName);
+    generateCppEvaluator(gp, outputFile, keyName, generation);
   } else {
     // Print the GP in human readable format
     std::cout << "Extracted GP from: " << keyName << std::endl;
