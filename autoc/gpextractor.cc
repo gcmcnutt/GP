@@ -365,11 +365,15 @@ void generateCppEvaluator(MyGP& gp, const std::string& outputFile, const std::st
   out << "#include <vector>\n";
   out << "#ifndef GP_BUILD\n";
   out << "#include <ArduinoEigenDense.h>\n";
+  out << "#include \"GP/autoc/aircraft_state.h\"\n";
   out << "#else\n";
   out << "#include <Eigen/Dense>\n";
   out << "#include <Eigen/Geometry>\n";
-  out << "#endif\n";
-  out << "#include \"GP/autoc/aircraft_state.h\"\n\n";
+  out << "#include <boost/serialization/version.hpp>\n";
+  out << "#include <boost/serialization/access.hpp>\n";
+  out << "#include <boost/format.hpp>\n";
+  out << "#include \"aircraft_state.h\"\n";
+  out << "#endif\n\n";
   
   // Add getIndex helper function
   out << "static int getIndex(const std::vector<Path>& path, double arg) {\n";

@@ -14,6 +14,7 @@ public:
   unsigned short minisimPortOverride = 0;
   char* s3Bucket = "autoc-storage";
   char* s3Profile = "default";
+  int evaluateMode = 0;
 
   // // Custom implementation of the << operator for the extraCfg type
   // std::ostream& operator << (std::ostream& os) {
