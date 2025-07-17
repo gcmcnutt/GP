@@ -1,6 +1,11 @@
 #ifndef AUTOC_H
 #define AUTOC_H
 
+#include "gp.h"
+
+// Forward declarations
+struct WorkerContext;
+
 #define FITNESS_DISTANCE_WEIGHT 1.5
 #define FITNESS_ALIGNMENT_WEIGHT 1.3
 #define FITNESS_CONTROL_WEIGHT 1.0
@@ -14,7 +19,8 @@ public:
   unsigned short minisimPortOverride = 0;
   char* s3Bucket = "autoc-storage";
   char* s3Profile = "default";
-  int evaluateMode = 0;
+  int evaluateMode = 0;  // 0=normal GP evolution, 1=bytecode verification
+  char* bytecodeFile = "gp_program.dat";  // Bytecode file for verification mode
 
   // // Custom implementation of the << operator for the extraCfg type
   // std::ostream& operator << (std::ostream& os) {

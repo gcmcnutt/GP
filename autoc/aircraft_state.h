@@ -5,6 +5,9 @@
 #ifdef GP_BUILD
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
+#include <boost/format.hpp>
+#include <boost/serialization/access.hpp>
+#include <boost/serialization/version.hpp>
 #define CLAMP_DEF(v, min, max) std::clamp(v, min, max) 
 #else
 #include <ArduinoEigenDense.h>
@@ -57,7 +60,7 @@ public:
     ar& orientation;
     ar& distanceFromStart;
     ar& radiansFromStart;
-}
+  }
 #endif
 };
 #ifdef GP_BUILD
@@ -67,7 +70,7 @@ BOOST_CLASS_VERSION(Path, 1)
 /*
 * portable aircraft state
  */
-  struct AircraftState {
+struct AircraftState {
   public:
 
     AircraftState() {}
@@ -157,7 +160,7 @@ BOOST_CLASS_VERSION(Path, 1)
       ar& rollCommand;
       ar& throttleCommand;
       ar& simTimeMsec;
-}
+    }
 #endif
 };
 #ifdef GP_BUILD

@@ -20,6 +20,7 @@
 
 #include "../include/gp.h"
 #include "minisim.h"
+#include "gp_bytecode.h"
 
 // Node set definitions (from autoc.h)
 enum Operators {
@@ -147,15 +148,15 @@ void printUsage(const char* progName) {
   std::cout << "Options:\n";
   std::cout << "  -k, --keyname KEYNAME    Specify GP log key name\n";
   std::cout << "  -g, --generation GEN     Specify generation number\n";
-  std::cout << "  -c, --codegen            Generate C++ evaluator code\n";
-  std::cout << "  -o, --output FILE        Output file for generated code\n";
+  std::cout << "  -b, --bytecode           Generate bytecode for interpreter\n";
+  std::cout << "  -o, --output FILE        Output file for bytecode (default: gp_program.dat)\n";
   std::cout << "  -h, --help               Show this help message\n";
   std::cout << "\n";
   std::cout << "Examples:\n";
   std::cout << "  " << progName << "                          # Extract latest run, latest generation\n";
   std::cout << "  " << progName << " -k autoc-20250101-12345  # Extract specific run, latest generation\n";
   std::cout << "  " << progName << " -g 50                    # Extract latest run, generation 50\n";
-  std::cout << "  " << progName << " -c -o gp_evaluator.cpp   # Generate C++ evaluator code\n";
+  std::cout << "  " << progName << " -b -o gp_program.dat     # Generate bytecode file\n";
 }
 
 // Extract the generation number from the key
@@ -170,253 +171,98 @@ int extractGenNumber(const std::string& input) {
   return -1;
 }
 
-// Generate C++ code for a GP tree node
-std::string generateNodeCode(MyGene* gene, int& tempVarCounter) {
+// Generate bytecode from GP tree (postfix traversal)
+void generateBytecode(MyGene* gene, std::vector<GPBytecode>& program) {
   if (!gene) {
-    return "0.0";
+    return;
   }
   
   int nodeValue = gene->getNodeValue();
   if (nodeValue == -1) {
-    return "0.0";
-  }
-  std::string result;
-  
-  switch (nodeValue) {
-    case ADD: {
-      std::string left = generateNodeCode(gene->getNthChild(0), tempVarCounter);
-      std::string right = generateNodeCode(gene->getNthChild(1), tempVarCounter);
-      result = "(" + left + " + " + right + ")";
-      break;
-    }
-    case SUB: {
-      std::string left = generateNodeCode(gene->getNthChild(0), tempVarCounter);
-      std::string right = generateNodeCode(gene->getNthChild(1), tempVarCounter);
-      result = "(-" + left + " - " + right + ")";
-      break;
-    }
-    case MUL: {
-      std::string left = generateNodeCode(gene->getNthChild(0), tempVarCounter);
-      std::string right = generateNodeCode(gene->getNthChild(1), tempVarCounter);
-      result = "(" + left + " * " + right + ")";
-      break;
-    }
-    case DIV: {
-      std::string dividend = generateNodeCode(gene->getNthChild(0), tempVarCounter);
-      std::string divisor = generateNodeCode(gene->getNthChild(1), tempVarCounter);
-      std::string tempVar = "temp" + std::to_string(tempVarCounter++);
-      result = "([&]() { double " + tempVar + " = " + divisor + "; return (" + tempVar + " == 0.0) ? 0.0 : (" + dividend + " / " + tempVar + "); })()";
-      break;
-    }
-    case IF: {
-      std::string condition = generateNodeCode(gene->getNthChild(0), tempVarCounter);
-      std::string trueVal = generateNodeCode(gene->getNthChild(1), tempVarCounter);
-      std::string falseVal = generateNodeCode(gene->getNthChild(2), tempVarCounter);
-      result = "((" + condition + ") ? (" + trueVal + ") : (" + falseVal + "))";
-      break;
-    }
-    case EQ: {
-      std::string left = generateNodeCode(gene->getNthChild(0), tempVarCounter);
-      std::string right = generateNodeCode(gene->getNthChild(1), tempVarCounter);
-      result = "((" + left + ") == (" + right + ") ? 1.0 : 0.0)";
-      break;
-    }
-    case GT: {
-      std::string left = generateNodeCode(gene->getNthChild(0), tempVarCounter);
-      std::string right = generateNodeCode(gene->getNthChild(1), tempVarCounter);
-      result = "((" + left + ") > (" + right + ") ? 1.0 : 0.0)";
-      break;
-    }
-    case SETPITCH: {
-      std::string value = generateNodeCode(gene->getNthChild(0), tempVarCounter);
-      result = "aircraftState.setPitchCommand(" + value + ")";
-      break;
-    }
-    case SETROLL: {
-      std::string value = generateNodeCode(gene->getNthChild(0), tempVarCounter);
-      result = "aircraftState.setRollCommand(" + value + ")";
-      break;
-    }
-    case SETTHROTTLE: {
-      std::string value = generateNodeCode(gene->getNthChild(0), tempVarCounter);
-      result = "aircraftState.setThrottleCommand(" + value + ")";
-      break;
-    }
-    case GETPITCH:
-      result = "aircraftState.getPitchCommand()";
-      break;
-    case GETROLL:
-      result = "aircraftState.getRollCommand()";
-      break;
-    case GETTHROTTLE:
-      result = "aircraftState.getThrottleCommand()";
-      break;
-    case SIN: {
-      std::string value = generateNodeCode(gene->getNthChild(0), tempVarCounter);
-      result = "sin(" + value + ")";
-      break;
-    }
-    case COS: {
-      std::string value = generateNodeCode(gene->getNthChild(0), tempVarCounter);
-      result = "cos(" + value + ")";
-      break;
-    }
-    case PI:
-      result = "M_PI";
-      break;
-    case ZERO:
-      result = "0.0";
-      break;
-    case ONE:
-      result = "1.0";
-      break;
-    case TWO:
-      result = "2.0";
-      break;
-    case PROGN: {
-      std::string first = generateNodeCode(gene->getNthChild(0), tempVarCounter);
-      std::string second = generateNodeCode(gene->getNthChild(1), tempVarCounter);
-      result = "([&]() { " + first + "; return " + second + "; })()";
-      break;
-    }
-    case GETVEL:
-      result = "aircraftState.getRelVel()";
-      break;
-    case GETDPHI: {
-      std::string argValue = generateNodeCode(gene->getNthChild(0), tempVarCounter);
-      std::string tempVar = "temp" + std::to_string(tempVarCounter++);
-      result = "([&]() { "
-               "int " + tempVar + " = getIndex(path, " + argValue + "); "
-               "Eigen::Vector3d craftToTarget = path.at(" + tempVar + ").start - aircraftState.getPosition(); "
-               "Eigen::Vector3d target_local = aircraftState.getOrientation().inverse() * craftToTarget; "
-               "Eigen::Vector3d projectedVector(0, target_local.y(), target_local.z()); "
-               "return std::atan2(projectedVector.y(), -projectedVector.z()); "
-               "})()";
-      break;
-    }
-    case GETDTHETA: {
-      std::string argValue = generateNodeCode(gene->getNthChild(0), tempVarCounter);
-      std::string tempVar = "temp" + std::to_string(tempVarCounter++);
-      result = "([&]() { "
-               "int " + tempVar + " = getIndex(path, " + argValue + "); "
-               "Eigen::Vector3d craftToTarget = path.at(" + tempVar + ").start - aircraftState.getPosition(); "
-               "Eigen::Vector3d target_local = aircraftState.getOrientation().inverse() * craftToTarget; "
-               "Eigen::Vector3d projectedVector(0, target_local.y(), target_local.z()); "
-               "double rollEstimate = std::atan2(projectedVector.y(), -projectedVector.z()); "
-               "Eigen::Quaterniond rollRotation(Eigen::AngleAxisd(rollEstimate, Eigen::Vector3d::UnitX())); "
-               "Eigen::Quaterniond virtualOrientation = aircraftState.getOrientation() * rollRotation; "
-               "Eigen::Vector3d newLocalTargetVector = virtualOrientation.inverse() * craftToTarget; "
-               "return std::atan2(-newLocalTargetVector.z(), newLocalTargetVector.x()); "
-               "})()";
-      break;
-    }
-    case GETDTARGET: {
-      std::string argValue = generateNodeCode(gene->getNthChild(0), tempVarCounter);
-      std::string tempVar = "temp" + std::to_string(tempVarCounter++);
-      result = "([&]() { "
-               "int " + tempVar + " = getIndex(path, " + argValue + "); "
-               "double distance = (path.at(" + tempVar + ").start - aircraftState.getPosition()).norm(); "
-               "return CLAMP_DEF((distance - 10.0) / aircraftState.getRelVel(), -1.0, 1.0); "
-               "})()";
-      break;
-    }
-    case GETDHOME:
-      result = "(Eigen::Vector3d(0, 0, -10.0) - aircraftState.getPosition()).norm()";
-      break;
-    default:
-      result = "0.0";
-      break;
-  }
-  
-  return result;
-}
-
-// Generate complete C++ evaluator file
-void generateCppEvaluator(MyGP& gp, const std::string& outputFile, const std::string& s3Key, int generation) {
-  std::ofstream out(outputFile);
-  if (!out.is_open()) {
-    std::cerr << "Error: Cannot open output file " << outputFile << std::endl;
     return;
   }
   
-  out << "// Generated GP Evaluator - DO NOT EDIT MANUALLY\n";
-  out << "// S3 Key: " << s3Key << "\n";
-  out << "// Generation: " << generation << "\n";
-  out << "// Generated from GP with fitness: " << gp.getFitness() << "\n";
-  out << "// GP Length: " << gp.length() << ", Depth: " << gp.depth() << "\n";
-  out << "//\n";
-  out << "// Human readable GP structure:\n";
-  
-  // Capture printOn output in a string and add as comments
-  std::ostringstream gpStructure;
-  gp.printOn(gpStructure);
-  std::string gpStr = gpStructure.str();
-  
-  // Add each line of the GP structure as a comment
-  std::istringstream iss(gpStr);
-  std::string line;
-  while (std::getline(iss, line)) {
-    out << "// " << line << "\n";
+  // First, process children (postfix order)
+  for (int i = 0; i < gene->containerSize(); i++) {
+    generateBytecode(gene->getNthChild(i), program);
   }
-  out << "\n";
   
-  out << "#include <cmath>\n";
-  out << "#include <algorithm>\n";
-  out << "#include <vector>\n";
-  out << "#ifndef GP_BUILD\n";
-  out << "#include <ArduinoEigenDense.h>\n";
-  out << "#include \"GP/autoc/aircraft_state.h\"\n";
-  out << "#else\n";
-  out << "#include <Eigen/Dense>\n";
-  out << "#include <Eigen/Geometry>\n";
-  out << "#include <boost/serialization/version.hpp>\n";
-  out << "#include <boost/serialization/access.hpp>\n";
-  out << "#include <boost/format.hpp>\n";
-  out << "#include \"aircraft_state.h\"\n";
-  out << "#endif\n\n";
+  // Then add the current node
+  GPBytecode instruction;
+  instruction.opcode = nodeValue;
+  instruction.argc = gene->containerSize();
+  instruction.constant = 0.0f;
   
-  // Add getIndex helper function
-  out << "static int getIndex(const std::vector<Path>& path, double arg) {\n";
-  out << "  extern AircraftState aircraftState;\n";
-  out << "  if (std::isnan(arg)) {\n";
-  out << "    return aircraftState.getThisPathIndex();\n";
-  out << "  }\n";
-  out << "  int steps = CLAMP_DEF((int)arg, -5, 5);\n";
-  out << "  double distanceSoFar = path.at(aircraftState.getThisPathIndex()).distanceFromStart;\n";
-  out << "  double distanceGoal = distanceSoFar + steps * 22.0 * (200.0 / 1000.0);\n";
-  out << "  int currentStep = aircraftState.getThisPathIndex();\n";
-  out << "  if (steps > 0) {\n";
-  out << "    while (path.at(currentStep).distanceFromStart < distanceGoal && currentStep < path.size() - 1) {\n";
-  out << "      currentStep++;\n";
-  out << "    }\n";
-  out << "  } else {\n";
-  out << "    while (path.at(currentStep).distanceFromStart > distanceGoal && currentStep > 0) {\n";
-  out << "      currentStep--;\n";
-  out << "    }\n";
-  out << "  }\n";
-  out << "  return currentStep;\n";
-  out << "}\n\n";
+  // For constants, store the value
+  switch (nodeValue) {
+    case PI:
+      instruction.constant = M_PI;
+      break;
+    case ZERO:
+      instruction.constant = 0.0f;
+      break;
+    case ONE:
+      instruction.constant = 1.0f;
+      break;
+    case TWO:
+      instruction.constant = 2.0f;
+      break;
+  }
   
-  out << "double evaluateGP(AircraftState& aircraftState, const std::vector<Path>& path, double arg) {\n";
-  out << "  double returnValue;\n\n";
+  program.push_back(instruction);
+}
+
+// Export GP as bytecode file
+bool exportBytecode(MyGP& gp, const std::string& outputFile, const std::string& s3Key, int generation) {
+  std::ofstream file(outputFile, std::ios::binary);
+  if (!file.is_open()) {
+    std::cerr << "Error: Cannot create bytecode file: " << outputFile << std::endl;
+    return false;
+  }
   
-  // Generate the main evaluation code
+  // Generate bytecode program
+  std::vector<GPBytecode> program;
   MyGene* rootGene = (MyGene*)gp.NthGene(0);
-  int tempVarCounter = 0;
-  std::string evalCode = generateNodeCode(rootGene, tempVarCounter);
+  generateBytecode(rootGene, program);
   
-  out << "  returnValue = " << evalCode << ";\n\n";
+  // Create header
+  GPBytecodeHeader header;
+  header.magic = GPBytecodeHeader::MAGIC;
+  header.version = GPBytecodeHeader::VERSION;
+  header.instruction_count = program.size();
+  header.fitness_int = (uint32_t)(gp.getFitness() * 1000000.0); // Fixed point
+  header.length = gp.length();
+  header.depth = gp.depth();
+  header.generation = generation;
   
-  // Add range limiting
-  out << "  const double RANGELIMIT = 1000000.0;\n";
-  out << "  if (returnValue < -RANGELIMIT) return -RANGELIMIT;\n";
-  out << "  if (returnValue > RANGELIMIT) return RANGELIMIT;\n";
-  out << "  if (std::abs(returnValue) < 0.000001) return 0.0;\n";
-  out << "  return returnValue;\n";
-  out << "}\n";
+  // Copy S3 key (truncate if too long)
+  strncpy(header.s3_key, s3Key.c_str(), sizeof(header.s3_key) - 1);
+  header.s3_key[sizeof(header.s3_key) - 1] = '\0';
   
-  out.close();
-  std::cout << "Generated C++ evaluator: " << outputFile << std::endl;
+  // Write header
+  file.write(reinterpret_cast<const char*>(&header), sizeof(header));
+  if (file.fail()) {
+    std::cerr << "Error writing bytecode header" << std::endl;
+    return false;
+  }
+  
+  // Write instructions
+  for (const auto& instruction : program) {
+    file.write(reinterpret_cast<const char*>(&instruction), sizeof(instruction));
+    if (file.fail()) {
+      std::cerr << "Error writing bytecode instruction" << std::endl;
+      return false;
+    }
+  }
+  
+  file.close();
+  
+  std::cout << "Generated bytecode file: " << outputFile << std::endl;
+  std::cout << "  Instructions: " << program.size() << std::endl;
+  std::cout << "  Original GP Length: " << gp.length() << ", Depth: " << gp.depth() << std::endl;
+  std::cout << "  Original GP Fitness: " << gp.getFitness() << std::endl;
+  
+  return true;
 }
 
 int main(int argc, char** argv) {
@@ -424,7 +270,7 @@ int main(int argc, char** argv) {
   static struct option long_options[] = {
     {"keyname", required_argument, 0, 'k'},
     {"generation", required_argument, 0, 'g'},
-    {"codegen", no_argument, 0, 'c'},
+    {"bytecode", no_argument, 0, 'b'},
     {"output", required_argument, 0, 'o'},
     {"help", no_argument, 0, 'h'},
     {0, 0, 0, 0}
@@ -432,12 +278,12 @@ int main(int argc, char** argv) {
   
   std::string computedKeyName = "";
   int specifiedGeneration = -1;
-  bool generateCode = false;
-  std::string outputFile = "gp_evaluator.cpp";
+  bool generateBytecode = false;
+  std::string outputFile = "gp_program.dat";
   int option_index = 0;
   int c;
   
-  while ((c = getopt_long(argc, argv, "k:g:co:h", long_options, &option_index)) != -1) {
+  while ((c = getopt_long(argc, argv, "k:g:bo:h", long_options, &option_index)) != -1) {
     switch (c) {
       case 'k':
         computedKeyName = optarg;
@@ -445,8 +291,8 @@ int main(int argc, char** argv) {
       case 'g':
         specifiedGeneration = std::stoi(optarg);
         break;
-      case 'c':
-        generateCode = true;
+      case 'b':
+        generateBytecode = true;
         break;
       case 'o':
         outputFile = optarg;
@@ -605,10 +451,10 @@ int main(int argc, char** argv) {
   // Resolve node values (required for printOn to work)
   gp.resolveNodeValues(adfNs);
 
-  if (generateCode) {
-    // Generate C++ evaluator code
+  if (generateBytecode) {
+    // Generate bytecode file
     int generation = extractGenNumber(keyName);
-    generateCppEvaluator(gp, outputFile, keyName, generation);
+    exportBytecode(gp, outputFile, keyName, generation);
   } else {
     // Print the GP in human readable format
     std::cout << "Extracted GP from: " << keyName << std::endl;

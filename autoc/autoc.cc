@@ -18,6 +18,7 @@ From skeleton/skeleton.cc
 #include <memory>
 
 #include "gp.h"
+#include "gp_bytecode.h"
 #include "gpconfig.h"
 #include "minisim.h"
 #include "threadpool.h"
@@ -241,6 +242,7 @@ struct GPConfigVarInformation configArray[] =
   {"S3Bucket", DATASTRING, &extraCfg.s3Bucket},
   {"S3Profile", DATASTRING, &extraCfg.s3Profile},
   {"EvaluateMode", DATAINT, &extraCfg.evaluateMode},
+  {"BytecodeFile", DATASTRING, &extraCfg.bytecodeFile},
   {"", DATAINT, NULL}
 };
 
@@ -595,31 +597,78 @@ int main()
   generationPaths = generateSmoothPaths(extraCfg.generatorMethod, extraCfg.simNumPathsPerGen, SIM_PATH_BOUNDS, SIM_PATH_BOUNDS);
 
   if (extraCfg.evaluateMode) {
-    // Evaluation mode: test generated code instead of running GP evolution
-    *logger.info() << "Running in evaluation mode - testing generated code..." << endl;
+    // Evaluation mode: test bytecode interpreter instead of running GP evolution
+    *logger.info() << "Running in bytecode verification mode..." << endl;
+    *logger.info() << "Loading bytecode file: " << extraCfg.bytecodeFile << endl;
     
-    // Create a single evaluation GP instance for testing generated code
-    EvaluationGP* testGP = new EvaluationGP();
+    // Load the bytecode program
+    GPBytecodeInterpreter interpreter;
+    if (!interpreter.loadProgram(extraCfg.bytecodeFile)) {
+      *logger.error() << "Failed to load bytecode file: " << extraCfg.bytecodeFile << endl;
+      exit(1);
+    }
     
-    // TODO: Here we would load the generated code from gpextractor.cc
-    // For now, create a minimal test case
+    // Run verification simulation
+    double totalFitness = 0.0;
+    int pathCount = generationPaths.size();
     
-    // Force evaluation with debug output
-    printEval = true;
-    computedKeyName = startTime + "/evaluation-test.dmp";
+    *logger.info() << "Running verification on " << pathCount << " paths..." << endl;
     
-    // Evaluate the test GP across all paths
-    testGP->evaluate();
+    for (int pathIndex = 0; pathIndex < pathCount; pathIndex++) {
+      auto& path = generationPaths[pathIndex];
+      
+      // Initialize aircraft state for this path
+      AircraftState aircraftState;
+      aircraftState.setPosition(path[0].start);
+      // Convert Vector3d orientation to Quaterniond (assuming identity for now)
+      aircraftState.setOrientation(Eigen::Quaterniond::Identity());
+      aircraftState.setThisPathIndex(0);
+      aircraftState.setRelVel(22.0); // Default velocity
+      
+      // Run simulation steps
+      double pathFitness = 0.0;
+      int simSteps = 0;
+      const int MAX_SIM_STEPS = 1000;
+      
+      while (simSteps < MAX_SIM_STEPS && aircraftState.getThisPathIndex() < path.size() - 1) {
+        // Get control command from bytecode interpreter
+        double controlResult = interpreter.evaluate(aircraftState, path, 0.0);
+        
+        // Simple physics simulation step (simplified minisim)
+        double dt = 0.1; // 100ms time step
+        
+        // Update aircraft position based on velocity and control commands
+        Eigen::Vector3d velocity = aircraftState.getOrientation() * Eigen::Vector3d(aircraftState.getRelVel() * dt, 0, 0);
+        aircraftState.setPosition(aircraftState.getPosition() + velocity);
+        
+        // Update path index based on distance
+        while (aircraftState.getThisPathIndex() < path.size() - 1) {
+          double distToNext = (path[aircraftState.getThisPathIndex() + 1].start - aircraftState.getPosition()).norm();
+          if (distToNext < 5.0) { // Within 5m of next waypoint
+            aircraftState.setThisPathIndex(aircraftState.getThisPathIndex() + 1);
+          } else {
+            break;
+          }
+        }
+        
+        // Compute fitness for this step
+        int targetIndex = aircraftState.getThisPathIndex();
+        double distance = (path[targetIndex].start - aircraftState.getPosition()).norm();
+        pathFitness += 1.0 / (1.0 + distance); // Inverse distance fitness
+        
+        simSteps++;
+      }
+      
+      totalFitness += pathFitness / simSteps;
+      *logger.info() << "Path " << pathIndex << " fitness: " << (pathFitness / simSteps) << " (steps: " << simSteps << ")" << endl;
+    }
     
-    // Process the evaluation (this will run the simulation and compute fitness)
-    MyPopulation tempPop(cfg, adfNs);
-    tempPop.endOfEvaluation();
+    double avgFitness = totalFitness / pathCount;
+    *logger.info() << "Bytecode verification complete!" << endl;
+    *logger.info() << "Average fitness: " << avgFitness << endl;
+    *logger.info() << "Original GP fitness: " << interpreter.getFitness() << endl;
     
-    printEval = false;
-    
-    *logger.info() << "Evaluation complete. Fitness: " << testGP->getFitness() << endl;
-    
-    delete testGP;
+    // TODO: Compare with original GP fitness for verification
   } else {
     // Normal GP evolution mode
     // Create a population with this configuration
