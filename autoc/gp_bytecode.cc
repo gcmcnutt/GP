@@ -263,8 +263,10 @@ double GPBytecodeInterpreter::evaluate(AircraftState& aircraftState, std::vector
             }
             case PROGN: {
                 if (stack_ptr < 2) return 0.0;
+                // Stack has [first_value, second_value] with second_value on top
+                float second_value = stack[--stack_ptr];  // Pop second value (keep it)
                 stack[--stack_ptr];  // Discard first value
-                // Second value remains on stack as result
+                stack[stack_ptr++] = second_value;  // Push second value back as result
                 break;
             }
             default:

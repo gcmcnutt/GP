@@ -6,6 +6,14 @@
 #include <cstdint>
 #include "aircraft_state.h"
 
+#ifdef GP_BUILD
+#include <boost/serialization/access.hpp>
+#include <boost/serialization/version.hpp>
+#include <boost/serialization/vector.hpp>
+#include <boost/serialization/string.hpp>
+#include <boost/serialization/array.hpp>
+#endif
+
 // Bytecode instruction structure
 struct GPBytecode {
     uint8_t opcode;     // Operation code (maps to Operators enum)
@@ -14,6 +22,17 @@ struct GPBytecode {
     
     GPBytecode(uint8_t op = 0, uint8_t args = 0, float val = 0.0f) 
         : opcode(op), argc(args), constant(val) {}
+
+#ifdef GP_BUILD
+    friend class boost::serialization::access;
+    
+    template<class Archive>
+    void serialize(Archive& ar, const unsigned int file_version) {
+        ar& opcode;
+        ar& argc;
+        ar& constant;
+    }
+#endif
 };
 
 // Bytecode file header
@@ -29,6 +48,22 @@ struct GPBytecodeHeader {
     
     static const uint32_t MAGIC = 0x47504243; // "GPBC"
     static const uint32_t VERSION = 1;
+
+#ifdef GP_BUILD
+    friend class boost::serialization::access;
+    
+    template<class Archive>
+    void serialize(Archive& ar, const unsigned int file_version) {
+        ar& magic;
+        ar& version;
+        ar& instruction_count;
+        ar& fitness_int;
+        ar& length;
+        ar& depth;
+        ar& boost::serialization::make_array(s3_key, 256);
+        ar& generation;
+    }
+#endif
 };
 
 // Stack-based bytecode interpreter for autoc
@@ -66,6 +101,22 @@ public:
     // Debug functions
     void printProgram() const;
     bool isLoaded() const { return !program.empty(); }
+
+#ifdef GP_BUILD
+    friend class boost::serialization::access;
+    
+    template<class Archive>
+    void serialize(Archive& ar, const unsigned int file_version) {
+        ar& program;
+        ar& header;
+    }
+#endif
 };
+
+#ifdef GP_BUILD
+BOOST_CLASS_VERSION(GPBytecode, 1)
+BOOST_CLASS_VERSION(GPBytecodeHeader, 1)
+BOOST_CLASS_VERSION(GPBytecodeInterpreter, 1)
+#endif
 
 #endif // GP_BYTECODE_H

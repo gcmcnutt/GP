@@ -23,7 +23,7 @@ add_compile_options(-Wno-write-strings)
 add_definitions(-DGP_BUILD)
 
 add_executable(autoc autoc.cc autoc.h autoc-eval.cc minisim.h aircraft_state.h pathgen.cc pathgen.h threadpool.h logger.cc logger.h gp_evaluator.cc gp_evaluator.h gp_bytecode.cc gp_bytecode.h)
-add_executable(minisim minisim.cc minisim.h aircraft_state.h autoc.h autoc-eval.cc)
+add_executable(minisim minisim.cc minisim.h aircraft_state.h autoc.h autoc-eval.cc gp_bytecode.cc gp_bytecode.h)
 add_executable(renderer renderer.cc renderer.h minisim.h aircraft_state.h autoc.h)
 add_executable(gpextractor gpextractor.cc minisim.h aircraft_state.h)
 

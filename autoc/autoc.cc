@@ -45,6 +45,7 @@ From skeleton/skeleton.cc
 #include <boost/iostreams/stream.hpp>
 #include <boost/iostreams/device/back_inserter.hpp>
 #include <boost/archive/text_oarchive.hpp>
+#include <boost/archive/binary_oarchive.hpp>
 
 using namespace std;
 namespace logging = boost::log;
@@ -597,8 +598,8 @@ int main()
   generationPaths = generateSmoothPaths(extraCfg.generatorMethod, extraCfg.simNumPathsPerGen, SIM_PATH_BOUNDS, SIM_PATH_BOUNDS);
 
   if (extraCfg.evaluateMode) {
-    // Evaluation mode: test bytecode interpreter instead of running GP evolution
-    *logger.info() << "Running in bytecode verification mode..." << endl;
+    // Evaluation mode: use bytecode interpreter with external simulators
+    *logger.info() << "Running in bytecode evaluation mode with external simulators..." << endl;
     *logger.info() << "Loading bytecode file: " << extraCfg.bytecodeFile << endl;
     
     // Load the bytecode program
@@ -608,67 +609,204 @@ int main()
       exit(1);
     }
     
-    // Run verification simulation
-    double totalFitness = 0.0;
-    int pathCount = generationPaths.size();
-    
-    *logger.info() << "Running verification on " << pathCount << " paths..." << endl;
-    
-    for (int pathIndex = 0; pathIndex < pathCount; pathIndex++) {
-      auto& path = generationPaths[pathIndex];
+    // Create a custom evaluation GP class for bytecode
+    class BytecodeEvaluationGP : public MyGP {
+    public:
+      std::vector<char> bytecodeBuffer;
       
-      // Initialize aircraft state for this path
-      AircraftState aircraftState;
-      aircraftState.setPosition(path[0].start);
-      // Convert Vector3d orientation to Quaterniond (assuming identity for now)
-      aircraftState.setOrientation(Eigen::Quaterniond::Identity());
-      aircraftState.setThisPathIndex(0);
-      aircraftState.setRelVel(22.0); // Default velocity
+      BytecodeEvaluationGP(const std::vector<char>& buffer) : MyGP(1), bytecodeBuffer(buffer) {}
       
-      // Run simulation steps
-      double pathFitness = 0.0;
-      int simSteps = 0;
-      const int MAX_SIM_STEPS = 1000;
-      
-      while (simSteps < MAX_SIM_STEPS && aircraftState.getThisPathIndex() < path.size() - 1) {
-        // Get control command from bytecode interpreter
-        double controlResult = interpreter.evaluate(aircraftState, path, 0.0);
-        
-        // Simple physics simulation step (simplified minisim)
-        double dt = 0.1; // 100ms time step
-        
-        // Update aircraft position based on velocity and control commands
-        Eigen::Vector3d velocity = aircraftState.getOrientation() * Eigen::Vector3d(aircraftState.getRelVel() * dt, 0, 0);
-        aircraftState.setPosition(aircraftState.getPosition() + velocity);
-        
-        // Update path index based on distance
-        while (aircraftState.getThisPathIndex() < path.size() - 1) {
-          double distToNext = (path[aircraftState.getThisPathIndex() + 1].start - aircraftState.getPosition()).norm();
-          if (distToNext < 5.0) { // Within 5m of next waypoint
-            aircraftState.setThisPathIndex(aircraftState.getThisPathIndex() + 1);
-          } else {
-            break;
-          }
-        }
-        
-        // Compute fitness for this step
-        int targetIndex = aircraftState.getThisPathIndex();
-        double distance = (path[targetIndex].start - aircraftState.getPosition()).norm();
-        pathFitness += 1.0 / (1.0 + distance); // Inverse distance fitness
-        
-        simSteps++;
+      virtual void evaluate() override {
+        tasks.push_back(this);
       }
       
-      totalFitness += pathFitness / simSteps;
-      *logger.info() << "Path " << pathIndex << " fitness: " << (pathFitness / simSteps) << " (steps: " << simSteps << ")" << endl;
+      virtual void evalTask(WorkerContext& context) override {
+        stdFitness = 0;
+        
+        // Send bytecode evaluation request to simulator
+        EvalData evalData = { bytecodeBuffer, generationPaths };
+        sendRPC(*context.socket, evalData);
+        
+        // Get simulation results
+        context.evalResults = receiveRPC<EvalResults>(*context.socket);
+        
+        // Use same fitness computation as normal GP evaluation
+        for (int i = 0; i < context.evalResults.pathList.size(); i++) {
+          auto& path = context.evalResults.pathList.at(i);
+          auto& aircraftState = context.evalResults.aircraftStateList.at(i);
+          auto& crashReason = context.evalResults.crashReasonList.at(i);
+          
+          double localFitness = 0;
+          int stepIndex = 0;
+          
+          double distance_error_sum = 0;
+          double angle_error_sum = 0;
+          double control_smoothness_sum = 0;
+          int simulation_steps = 0;
+          
+          double roll_prev = aircraftState.at(stepIndex).getRollCommand();
+          double pitch_prev = aircraftState.at(stepIndex).getPitchCommand();
+          double throttle_prev = aircraftState.at(stepIndex).getThrottleCommand();
+          
+          while (++stepIndex < aircraftState.size()) {
+            auto& stepAircraftState = aircraftState.at(stepIndex);
+            int pathIndex = stepAircraftState.getThisPathIndex();
+            
+            double distanceFromGoal = (path.at(pathIndex).start - stepAircraftState.getPosition()).norm();
+            distanceFromGoal = distanceFromGoal * 100.0 / (2 * SIM_PATH_RADIUS_LIMIT);
+            
+            Eigen::Vector3d target_direction = (path.at(pathIndex + 1).start - path.at(pathIndex).start);
+            Eigen::Vector3d aircraft_to_target = (path.at(pathIndex).start - stepAircraftState.getPosition());
+            double dot_product = target_direction.dot(aircraft_to_target);
+            double angle_rad = std::acos(std::clamp(dot_product / (target_direction.norm() * aircraft_to_target.norm()), -1.0, 1.0));
+            angle_rad = angle_rad * 100.0 / M_PI;
+            
+            double smoothness = pow(roll_prev - stepAircraftState.getRollCommand(), 2.0);
+            smoothness += pow(pitch_prev - stepAircraftState.getPitchCommand(), 2.0);
+            smoothness += pow(throttle_prev - stepAircraftState.getThrottleCommand(), 2.0);
+            smoothness = sqrt(smoothness);
+            smoothness = smoothness * 100.0 / 3.46;
+            
+            roll_prev = stepAircraftState.getRollCommand();
+            pitch_prev = stepAircraftState.getPitchCommand();
+            throttle_prev = stepAircraftState.getThrottleCommand();
+            
+            distance_error_sum += pow(distanceFromGoal, FITNESS_DISTANCE_WEIGHT);
+            angle_error_sum += pow(angle_rad, FITNESS_ALIGNMENT_WEIGHT);
+            control_smoothness_sum += pow(smoothness, FITNESS_CONTROL_WEIGHT);
+            simulation_steps++;
+            
+            if (printEval) {
+              bestOfEvalResults = context.evalResults;
+              
+              if (stepIndex == 1) {
+                fout << "Pth:Step:   Time Idx  totDist   pathX    pathY    pathZ        X        Y        Z       dr       dp       dy   relVel     roll    pitch    power    distP   angleP controlP\n";
+              }
+              
+              Eigen::Matrix3d rotMatrix = stepAircraftState.getOrientation().toRotationMatrix();
+              Eigen::Vector3d euler;
+              
+              if (std::abs(rotMatrix(2, 0)) > 0.99999) {
+                euler[0] = 0;
+                if (rotMatrix(2, 0) > 0) {
+                  euler[1] = -M_PI / 2;
+                  euler[2] = -atan2(rotMatrix(1, 2), rotMatrix(0, 2));
+                } else {
+                  euler[1] = M_PI / 2;
+                  euler[2] = atan2(rotMatrix(1, 2), rotMatrix(0, 2));
+                }
+              } else {
+                euler[0] = atan2(rotMatrix(2, 1), rotMatrix(2, 2));
+                euler[1] = -asin(rotMatrix(2, 0));
+                euler[2] = atan2(rotMatrix(1, 0), rotMatrix(0, 0));
+              }
+              
+              char outbuf[1000];
+              sprintf(outbuf, "%03d:%04d: %06ld %3d % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f\n",
+                i, simulation_steps,
+                stepAircraftState.getSimTimeMsec(), pathIndex,
+                path.at(pathIndex).distanceFromStart,
+                path.at(pathIndex).start[0],
+                path.at(pathIndex).start[1],
+                path.at(pathIndex).start[2],
+                stepAircraftState.getPosition()[0],
+                stepAircraftState.getPosition()[1],
+                stepAircraftState.getPosition()[2],
+                euler[2],
+                euler[1],
+                euler[0],
+                stepAircraftState.getRelVel(),
+                stepAircraftState.getRollCommand(),
+                stepAircraftState.getPitchCommand(),
+                stepAircraftState.getThrottleCommand(),
+                distanceFromGoal,
+                angle_rad,
+                smoothness
+              );
+              fout << outbuf;
+            }
+          }
+          
+          double normalized_distance_error = (distance_error_sum / simulation_steps);
+          double normalized_angle_align = (angle_error_sum / simulation_steps);
+          double normalized_control_smoothness = (control_smoothness_sum / simulation_steps);
+          localFitness = normalized_distance_error + normalized_angle_align + normalized_control_smoothness;
+          
+          if (isnan(localFitness)) {
+            nanDetector++;
+          }
+          
+          if (crashReason != CrashReason::None) {
+            double fractional_distance_remaining = 1.0 - path.at(aircraftState.back().getThisPathIndex()).distanceFromStart / path.back().distanceFromStart;
+            localFitness += SIM_CRASH_PENALTY * fractional_distance_remaining;
+          }
+          
+          stdFitness += localFitness;
+        }
+        
+        stdFitness /= context.evalResults.pathList.size();
+      }
+      
+      double getFinalFitness() const { return stdFitness; }
+    };
+    
+    // Serialize the bytecode interpreter for transport to simulators
+    std::vector<char> bytecodeBuffer;
+    {
+      boost::iostreams::stream<boost::iostreams::back_insert_device<std::vector<char>>> outStream(bytecodeBuffer);
+      boost::archive::binary_oarchive archive(outStream);
+      archive << interpreter;
+      outStream.flush();
     }
     
-    double avgFitness = totalFitness / pathCount;
-    *logger.info() << "Bytecode verification complete!" << endl;
-    *logger.info() << "Average fitness: " << avgFitness << endl;
+    *logger.info() << "Running bytecode evaluation on " << generationPaths.size() << " paths..." << endl;
+    
+    // Initialize evaluation
+    printEval = true; // Enable detailed output
+    
+    // Create bytecode evaluation GP
+    BytecodeEvaluationGP evalGP(bytecodeBuffer);
+    evalGP.evaluate();
+    
+    // Execute the evaluation using the thread pool (same as MyPopulation::endOfEvaluation)
+    for (auto& task : tasks) {
+      threadPool->enqueue([task](WorkerContext& context) {
+        task->evalTask(context);
+        });
+    }
+    
+    // wait for all tasks to finish
+    threadPool->wait_for_tasks();
+    tasks.clear();
+    
+    *logger.info() << "Bytecode evaluation complete!" << endl;
+    *logger.info() << "Computed fitness: " << evalGP.getFinalFitness() << endl;
     *logger.info() << "Original GP fitness: " << interpreter.getFitness() << endl;
     
-    // TODO: Compare with original GP fitness for verification
+    // Set up S3 storage for results (use gen-1.dmp so renderer can interpret it)
+    computedKeyName = startTime + "/gen-1.dmp";
+    
+    // Store results to S3
+    if (bestOfEvalResults.pathList.size() > 0) {
+      Aws::S3::Model::PutObjectRequest request;
+      request.SetBucket(extraCfg.s3Bucket);
+      request.SetKey(computedKeyName);
+
+      std::ostringstream oss;
+      boost::archive::text_oarchive oa(oss);
+      oa << bestOfEvalResults;
+
+      std::shared_ptr<Aws::StringStream> ss = Aws::MakeShared<Aws::StringStream>("");
+      *ss << oss.str();
+      request.SetBody(ss);
+
+      auto outcome = getS3Client()->PutObject(request);
+      if (!outcome.IsSuccess()) {
+        *logger.error() << "Error storing results to S3: " << outcome.GetError().GetMessage() << std::endl;
+      } else {
+        *logger.info() << "Results stored to S3: " << computedKeyName << std::endl;
+      }
+    }
   } else {
     // Normal GP evolution mode
     // Create a population with this configuration

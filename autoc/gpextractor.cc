@@ -171,7 +171,8 @@ int extractGenNumber(const std::string& input) {
   return -1;
 }
 
-// Generate bytecode from GP tree (postfix traversal)
+// Generate bytecode from GP tree preserving left-to-right evaluation order
+// This is critical for operations with side effects like SETROLL, SETPITCH, etc.
 void generateBytecode(MyGene* gene, std::vector<GPBytecode>& program) {
   if (!gene) {
     return;
@@ -182,12 +183,81 @@ void generateBytecode(MyGene* gene, std::vector<GPBytecode>& program) {
     return;
   }
   
-  // First, process children (postfix order)
-  for (int i = 0; i < gene->containerSize(); i++) {
-    generateBytecode(gene->getNthChild(i), program);
+  // Handle different node types to preserve evaluation order
+  switch (nodeValue) {
+    // Operations that need left-to-right evaluation (like GP tree traversal)
+    case ADD:
+    case SUB:
+    case MUL:
+    case DIV:
+    case EQ:
+    case GT:
+      // Generate left child first, then right child, then operation
+      if (gene->containerSize() >= 2) {
+        generateBytecode(gene->getNthChild(0), program);
+        generateBytecode(gene->getNthChild(1), program);
+      }
+      break;
+      
+    case IF:
+      // IF needs condition, then true branch, then false branch
+      if (gene->containerSize() >= 3) {
+        generateBytecode(gene->getNthChild(0), program); // condition
+        generateBytecode(gene->getNthChild(1), program); // true branch
+        generateBytecode(gene->getNthChild(2), program); // false branch
+      }
+      break;
+      
+    case PROGN:
+      // PROGN executes children in order, returns last
+      for (int i = 0; i < gene->containerSize(); i++) {
+        generateBytecode(gene->getNthChild(i), program);
+      }
+      break;
+      
+    // Single-argument operations (unary)
+    case SIN:
+    case COS:
+    case SETPITCH:
+    case SETROLL:
+    case SETTHROTTLE:
+      // Generate child first
+      if (gene->containerSize() >= 1) {
+        generateBytecode(gene->getNthChild(0), program);
+      }
+      break;
+      
+    // Sensor functions with optional arguments
+    case GETDPHI:
+    case GETDTHETA:
+    case GETDTARGET:
+      if (gene->containerSize() >= 1) {
+        generateBytecode(gene->getNthChild(0), program);
+      }
+      break;
+      
+    // Terminals and constants - no children to process
+    case PI:
+    case ZERO:
+    case ONE:
+    case TWO:
+    case GETPITCH:
+    case GETROLL:
+    case GETTHROTTLE:
+    case GETVEL:
+    case GETDHOME:
+      // No children to process
+      break;
+      
+    default:
+      // For unknown operations, fall back to processing all children
+      for (int i = 0; i < gene->containerSize(); i++) {
+        generateBytecode(gene->getNthChild(i), program);
+      }
+      break;
   }
   
-  // Then add the current node
+  // Add the current node instruction
   GPBytecode instruction;
   instruction.opcode = nodeValue;
   instruction.argc = gene->containerSize();

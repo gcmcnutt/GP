@@ -14,21 +14,10 @@ The autoc project uses CMake and requires several dependencies:
 # Dependencies (Ubuntu 22.04)
 sudo apt-get install -y libboost-all-dev libeigen3-dev libvtk9-dev xvfb g++ cmake gdb qtbase5-dev
 
-# Build process
-mkdir build
-cd build
-cmake -DCMAKE_BUILD_TYPE=Debug ../autoc
-make
-
 # For headless operation (visualization)
 Xvfb :99 -screen 0 1024x768x24 &
 export DISPLAY=:99
 ```
-
-**Build targets:**
-- `autoc`: Main genetic programming evolution system
-- `minisim`: Lightweight aircraft simulator
-- `renderer`: 3D visualization tool for flight paths and blackbox data
 
 **Key dependencies:**
 - VTK 9.x for 3D visualization

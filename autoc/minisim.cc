@@ -1,5 +1,7 @@
 /* test sim for aircraft */
 #include <boost/asio.hpp>
+#include <boost/archive/text_iarchive.hpp>
+#include <boost/archive/binary_iarchive.hpp>
 #include <vector>
 #include <stdlib.h>
 #include <math.h>
@@ -15,6 +17,7 @@
 #include "gp.h"
 #include "minisim.h"
 #include "autoc.h"
+#include "gp_bytecode.h"
 
 using namespace std;
 using boost::asio::ip::tcp;
@@ -46,13 +49,55 @@ public:
       // flip this back for return trip
       evalResults.gp = evalData.gp;
 
+      // Detect if we have GP tree data or bytecode data
+      bool isGPTreeData = false;
+      bool isBytecodeData = false;
+      MyGP gp;
+      GPBytecodeInterpreter interpreter;
+      
+      // Check if the data starts with binary archive header (binary archives have specific magic bytes)
+      // Binary archives start with specific byte patterns, while GP tree data is typically text-based
+      bool looksLikeBinaryArchive = false;
+      if (evalData.gp.size() >= 4) {
+        // Check for binary archive magic bytes (boost binary archive typically starts with specific patterns)
+        unsigned char firstBytes[4] = {
+          (unsigned char)evalData.gp[0], 
+          (unsigned char)evalData.gp[1], 
+          (unsigned char)evalData.gp[2], 
+          (unsigned char)evalData.gp[3]
+        };
+        // Binary archives often start with version info in binary format
+        looksLikeBinaryArchive = (firstBytes[0] >= 0x16 && firstBytes[0] <= 0x20) && 
+                                (firstBytes[1] == 0x00 || firstBytes[2] == 0x00);
+      }
+      
+      if (looksLikeBinaryArchive) {
+        // This looks like Boost binary serialized bytecode data
+        try {
+          boost::iostreams::stream<boost::iostreams::array_source> bytecodeStream = charArrayToIstream(evalData.gp);
+          boost::archive::binary_iarchive archive(bytecodeStream);
+          archive >> interpreter;
+          isBytecodeData = true;
+        } catch (const std::exception& e) {
+          std::cerr << "Error loading bytecode data: " << e.what() << std::endl;
+          continue;
+        }
+      } else {
+        // This looks like GP tree data
+        try {
+          boost::iostreams::stream<boost::iostreams::array_source> gpStream = charArrayToIstream(evalData.gp);
+          gp.load(gpStream);
+          gp.resolveNodeValues(adfNs);
+          isGPTreeData = true;
+        } catch (const std::exception& e) {
+          std::cerr << "Error loading GP tree data: " << e.what() << std::endl;
+          continue;
+        }
+      }
+      
       // for each path, evaluate
       for (int i = 0; i < evalData.pathList.size(); i++) {
         std::vector<Path> path = evalData.pathList.at(i);
-        MyGP gp;
-        boost::iostreams::stream<boost::iostreams::array_source> is = charArrayToIstream(evalData.gp);
-        gp.load(is);
-        gp.resolveNodeValues(adfNs);
 
         // accumulate steps
         std::vector<AircraftState> aircraftStateSteps;
@@ -85,7 +130,7 @@ public:
 
         while (crashReason == CrashReason::None) {
 
-          // approximate pitch/roll/throttle to achieve goal
+          // approximate pitch/roll/throttle to achieve goal (BASELINE ESTIMATES - CRITICAL FOR BOTH MODES)
 
           // *** ROLL: Calculate the vector from craft to target in world frame
           Eigen::Vector3d craftToTarget = path.at(aircraftState.getThisPathIndex()).start - aircraftState.getPosition();
@@ -115,7 +160,7 @@ public:
           //   rollEstimate = -rollEstimate;
           // }
 
-          // range is -1:1
+          // range is -1:1 - SET BASELINE ESTIMATES FOR BOTH GP AND BYTECODE MODES
           aircraftState.setRollCommand(rollEstimate / M_PI);
           aircraftState.setPitchCommand(pitchEstimate / M_PI);
 
@@ -141,8 +186,22 @@ public:
           }
 #endif
 
-          // run the GP controller
-          gp.NthMyGene(0)->evaluate(path, gp, 0);
+          // Store control values before evaluation for comparison
+          double pre_roll = aircraftState.getRollCommand();
+          double pre_pitch = aircraftState.getPitchCommand();
+          double pre_throttle = aircraftState.getThrottleCommand();
+          
+          // run the controller (GP tree or bytecode interpreter) - BOTH NOW HAVE SAME BASELINE
+          double evaluation_result = 0.0;
+          if (isGPTreeData) {
+            evaluation_result = gp.NthMyGene(0)->evaluate(path, gp, 0);
+          } else if (isBytecodeData) {
+            // Use bytecode interpreter to evaluate and set control commands
+            // NOTE: Bytecode interpreter now starts with proper baseline estimates set above
+            evaluation_result = interpreter.evaluate(aircraftState, path, 0.0);
+            // Note: The bytecode interpreter can modify control commands via SETPITCH, SETROLL, SETTHROTTLE opcodes
+          }
+          
 
           // advance the aircraft
           aircraftState.minisimAdvanceState(SIM_TIME_STEP_MSEC);
