@@ -245,6 +245,39 @@ double GPBytecodeInterpreter::evaluate(AircraftState& aircraftState, std::vector
                 stack[stack_ptr++] = executeGetDHome(aircraftState);
                 break;
             }
+            case GETALPHA: {
+                // Get angle of attack
+                // Transform actual velocity vector to body frame
+                Eigen::Vector3d velocity_body = aircraftState.getOrientation().inverse() * aircraftState.getVelocity();
+                // Angle of attack is angle between velocity and body X axis (forward)
+                double alpha = std::atan2(-velocity_body.z(), velocity_body.x());
+                stack[stack_ptr++] = alpha;
+                break;
+            }
+            case GETBETA: {
+                // Get sideslip angle
+                // Transform actual velocity vector to body frame
+                Eigen::Vector3d velocity_body = aircraftState.getOrientation().inverse() * aircraftState.getVelocity();
+                // Sideslip angle is angle between velocity projection on XY plane and body X axis
+                double beta = std::atan2(velocity_body.y(), velocity_body.x());
+                stack[stack_ptr++] = beta;
+                break;
+            }
+            case GETVELX: {
+                // Get velocity X component (North in NED)
+                stack[stack_ptr++] = aircraftState.getVelocity().x();
+                break;
+            }
+            case GETVELY: {
+                // Get velocity Y component (East in NED)
+                stack[stack_ptr++] = aircraftState.getVelocity().y();
+                break;
+            }
+            case GETVELZ: {
+                // Get velocity Z component (Down in NED)
+                stack[stack_ptr++] = aircraftState.getVelocity().z();
+                break;
+            }
             case PI: {
                 stack[stack_ptr++] = M_PI;
                 break;

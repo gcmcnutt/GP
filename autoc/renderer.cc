@@ -890,8 +890,11 @@ bool parseBlackboxData(const std::string& csvData) {
           // Get time if available, otherwise use index
           unsigned long int timeMs = (timeIndex >= 0) ? std::stoul(row[timeIndex]) : blackboxAircraftStates.size() * 100;
           
+          // Create simple velocity vector for blackbox data (assuming forward flight)
+          Eigen::Vector3d velocity_vector = q * Eigen::Vector3d(20.0, 0, 0);
+          
           // Create AircraftState with blackbox data
-          AircraftState state(blackboxAircraftStates.size(), 20.0, q, newPoint, 0.0, 0.0, 0.0, timeMs);
+          AircraftState state(blackboxAircraftStates.size(), 20.0, velocity_vector, q, newPoint, 0.0, 0.0, 0.0, timeMs);
           blackboxAircraftStates.push_back(state);
           
           // Debug: print first few states

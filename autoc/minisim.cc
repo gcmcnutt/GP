@@ -121,8 +121,11 @@ public:
           initialPosition = Eigen::Vector3d(-2.19, 5.49, -36.93);
         }
 
+        // compute initial velocity vector based on aircraft orientation (keeping minisim simple)
+        Eigen::Vector3d initial_velocity = aircraft_orientation * Eigen::Vector3d(SIM_INITIAL_VELOCITY, 0, 0);
+        
         // reset sim state
-        aircraftState = AircraftState{ 0, SIM_INITIAL_VELOCITY, aircraft_orientation, initialPosition, 0.0, 0.0, SIM_INITIAL_THROTTLE, 0 };
+        aircraftState = AircraftState{ 0, SIM_INITIAL_VELOCITY, initial_velocity, aircraft_orientation, initialPosition, 0.0, 0.0, SIM_INITIAL_THROTTLE, 0 };
 
         // iterate the simulator
         unsigned long int duration_msec = 0; // how long have we been running

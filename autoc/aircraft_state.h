@@ -74,10 +74,10 @@ struct AircraftState {
   public:
 
     AircraftState() {}
-    AircraftState(int thisPathIndex, double relVel, Eigen::Quaterniond orientation,
+    AircraftState(int thisPathIndex, double relVel, Eigen::Vector3d vel, Eigen::Quaterniond orientation,
       Eigen::Vector3d pos, double pc, double rc, double tc,
       unsigned long int timeMsec)
-      : thisPathIndex(thisPathIndex), dRelVel(relVel), aircraft_orientation(orientation), position(pos), simTimeMsec(timeMsec),
+      : thisPathIndex(thisPathIndex), dRelVel(relVel), velocity(vel), aircraft_orientation(orientation), position(pos), simTimeMsec(timeMsec),
       pitchCommand(pc), rollCommand(rc), throttleCommand(tc) {
     }
 
@@ -87,6 +87,9 @@ struct AircraftState {
 
     double getRelVel() const { return dRelVel; }
     void setRelVel(double relVel) { dRelVel = relVel; }
+    
+    Eigen::Vector3d getVelocity() const { return velocity; }
+    void setVelocity(const Eigen::Vector3d& vel) { velocity = vel; }
 
     Eigen::Quaterniond getOrientation() const { return aircraft_orientation; }
     void setOrientation(Eigen::Quaterniond orientation) { aircraft_orientation = orientation; }
@@ -133,6 +136,9 @@ struct AircraftState {
       // Rotate the velocity vector using the updated quaternion
       Eigen::Vector3d velocity_world = aircraft_orientation * velocity_body;
 
+      // Store the actual velocity vector (convert from distance per timestep to velocity)
+      velocity = velocity_world / dtSec;
+
       // adjust position
       position += velocity_world;
     }
@@ -140,6 +146,7 @@ struct AircraftState {
   private:
     int thisPathIndex;
     double dRelVel;
+    Eigen::Vector3d velocity;  // Actual velocity vector (north, east, down)
     Eigen::Quaterniond aircraft_orientation;
     Eigen::Vector3d position;
     unsigned long int simTimeMsec;
@@ -154,6 +161,7 @@ struct AircraftState {
     void serialize(Archive& ar, const unsigned int version) {
       ar& thisPathIndex;
       ar& dRelVel;
+      ar& velocity;
       ar& aircraft_orientation;
       ar& position;
       ar& pitchCommand;

@@ -84,6 +84,11 @@ void createNodeSet(GPAdfNodeSet& adfNs)
   ns.putNode(*new GPNode(GETDTARGET, "GETDTARGET", 1));
   ns.putNode(*new GPNode(GETVEL, "GETVEL"));
   ns.putNode(*new GPNode(GETDHOME, "GETDHOME"));
+  ns.putNode(*new GPNode(GETALPHA, "GETALPHA"));
+  ns.putNode(*new GPNode(GETBETA, "GETBETA"));
+  ns.putNode(*new GPNode(GETVELX, "GETVELX"));
+  ns.putNode(*new GPNode(GETVELY, "GETVELY"));
+  ns.putNode(*new GPNode(GETVELZ, "GETVELZ"));
 }
 
 
@@ -209,6 +214,46 @@ double MyGene::evaluate(std::vector<Path>& path, MyGP& run, double arg)
   case GETDHOME: // get distance to the home point
   {
     returnValue = (Eigen::Vector3d(0, 0, SIM_INITIAL_ALTITUDE) - aircraftState.getPosition()).norm();
+    break;
+  }
+
+  case GETALPHA: // get angle of attack
+  {
+    // Transform actual velocity vector to body frame
+    Eigen::Vector3d velocity_body = aircraftState.getOrientation().inverse() * aircraftState.getVelocity();
+    
+    // Angle of attack is angle between velocity and body X axis (forward)
+    // atan2(vertical_component, forward_component)
+    returnValue = std::atan2(-velocity_body.z(), velocity_body.x());
+    break;
+  }
+
+  case GETBETA: // get sideslip angle
+  {
+    // Transform actual velocity vector to body frame
+    Eigen::Vector3d velocity_body = aircraftState.getOrientation().inverse() * aircraftState.getVelocity();
+    
+    // Sideslip is angle between velocity and body XZ plane
+    // atan2(side_component, forward_component)
+    returnValue = std::atan2(velocity_body.y(), velocity_body.x());
+    break;
+  }
+
+  case GETVELX: // get velocity X component (North)
+  {
+    returnValue = aircraftState.getVelocity().x();
+    break;
+  }
+
+  case GETVELY: // get velocity Y component (East)
+  {
+    returnValue = aircraftState.getVelocity().y();
+    break;
+  }
+
+  case GETVELZ: // get velocity Z component (Down/climb rate)
+  {
+    returnValue = aircraftState.getVelocity().z();
     break;
   }
 

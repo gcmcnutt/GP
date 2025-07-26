@@ -30,6 +30,7 @@ enum Operators {
   GETDPHI, GETDTHETA, GETDTARGET, GETDHOME, GETVEL,
   GETPITCH, GETROLL, GETTHROTTLE,
   SETPITCH, SETROLL, SETTHROTTLE,
+  GETALPHA, GETBETA, GETVELX, GETVELY, GETVELZ,
   PI, ZERO, ONE, TWO, PROGN, _END
 };
 const int OPERATORS_NR_ITEM = _END;
@@ -74,6 +75,11 @@ void createNodeSet(GPAdfNodeSet& adfNs)
   ns.putNode(*new GPNode(GETDTARGET, "GETDTARGET", 1));
   ns.putNode(*new GPNode(GETVEL, "GETVEL"));
   ns.putNode(*new GPNode(GETDHOME, "GETDHOME"));
+  ns.putNode(*new GPNode(GETALPHA, "GETALPHA"));
+  ns.putNode(*new GPNode(GETBETA, "GETBETA"));
+  ns.putNode(*new GPNode(GETVELX, "GETVELX"));
+  ns.putNode(*new GPNode(GETVELY, "GETVELY"));
+  ns.putNode(*new GPNode(GETVELZ, "GETVELZ"));
 }
 
 // Minimal MyGene class for loading (from autoc.h)
@@ -246,6 +252,11 @@ void generateBytecode(MyGene* gene, std::vector<GPBytecode>& program) {
     case GETTHROTTLE:
     case GETVEL:
     case GETDHOME:
+    case GETALPHA:
+    case GETBETA:
+    case GETVELX:
+    case GETVELY:
+    case GETVELZ:
       // No children to process
       break;
       
