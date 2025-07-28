@@ -278,6 +278,58 @@ double GPBytecodeInterpreter::evaluate(AircraftState& aircraftState, std::vector
                 stack[stack_ptr++] = aircraftState.getVelocity().z();
                 break;
             }
+            case GETROLL_RAD: {
+                // Get roll angle in radians
+                Eigen::Vector3d euler = aircraftState.getOrientation().toRotationMatrix().eulerAngles(2, 1, 0);
+                stack[stack_ptr++] = euler[2]; // Roll angle (rotation around X-axis)
+                break;
+            }
+            case GETPITCH_RAD: {
+                // Get pitch angle in radians
+                Eigen::Vector3d euler = aircraftState.getOrientation().toRotationMatrix().eulerAngles(2, 1, 0);
+                stack[stack_ptr++] = euler[1]; // Pitch angle (rotation around Y-axis)
+                break;
+            }
+            case CLAMP: {
+                if (stack_ptr < 3) return 0.0;
+                float maxVal = stack[--stack_ptr];
+                float minVal = stack[--stack_ptr];
+                float value = stack[--stack_ptr];
+                stack[stack_ptr++] = CLAMP_DEF(value, minVal, maxVal);
+                break;
+            }
+            case ATAN2: {
+                if (stack_ptr < 2) return 0.0;
+                float x = stack[--stack_ptr];
+                float y = stack[--stack_ptr];
+                stack[stack_ptr++] = ATAN2_DEF(y, x);
+                break;
+            }
+            case ABS: {
+                if (stack_ptr < 1) return 0.0;
+                stack[stack_ptr-1] = ABS_DEF(stack[stack_ptr-1]);
+                break;
+            }
+            case SQRT: {
+                if (stack_ptr < 1) return 0.0;
+                float value = stack[stack_ptr-1];
+                stack[stack_ptr-1] = (value >= 0.0f) ? SQRT_DEF(value) : 0.0f;
+                break;
+            }
+            case MIN: {
+                if (stack_ptr < 2) return 0.0;
+                float b = stack[--stack_ptr];
+                float a = stack[--stack_ptr];
+                stack[stack_ptr++] = MIN_DEF(a, b);
+                break;
+            }
+            case MAX: {
+                if (stack_ptr < 2) return 0.0;
+                float b = stack[--stack_ptr];
+                float a = stack[--stack_ptr];
+                stack[stack_ptr++] = MAX_DEF(a, b);
+                break;
+            }
             case PI: {
                 stack[stack_ptr++] = M_PI;
                 break;

@@ -31,6 +31,8 @@ enum Operators {
   GETPITCH, GETROLL, GETTHROTTLE,
   SETPITCH, SETROLL, SETTHROTTLE,
   GETALPHA, GETBETA, GETVELX, GETVELY, GETVELZ,
+  GETROLL_RAD, GETPITCH_RAD,
+  CLAMP, ATAN2, ABS, SQRT, MIN, MAX,
   PI, ZERO, ONE, TWO, PROGN, _END
 };
 const int OPERATORS_NR_ITEM = _END;
@@ -227,9 +229,30 @@ void generateBytecode(MyGene* gene, std::vector<GPBytecode>& program) {
     case SETPITCH:
     case SETROLL:
     case SETTHROTTLE:
+    case ABS:
+    case SQRT:
       // Generate child first
       if (gene->containerSize() >= 1) {
         generateBytecode(gene->getNthChild(0), program);
+      }
+      break;
+      
+    // Two-argument operations (binary) - evaluate left-to-right
+    case ATAN2:
+    case MIN:
+    case MAX:
+      if (gene->containerSize() >= 2) {
+        generateBytecode(gene->getNthChild(0), program);
+        generateBytecode(gene->getNthChild(1), program);
+      }
+      break;
+      
+    // Three-argument operations (ternary)
+    case CLAMP:
+      if (gene->containerSize() >= 3) {
+        generateBytecode(gene->getNthChild(0), program); // value
+        generateBytecode(gene->getNthChild(1), program); // min
+        generateBytecode(gene->getNthChild(2), program); // max
       }
       break;
       
@@ -257,6 +280,8 @@ void generateBytecode(MyGene* gene, std::vector<GPBytecode>& program) {
     case GETVELX:
     case GETVELY:
     case GETVELZ:
+    case GETROLL_RAD:
+    case GETPITCH_RAD:
       // No children to process
       break;
       

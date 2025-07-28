@@ -36,9 +36,10 @@ make install
 sudo apt-get install -y libboost-all-dev libeigen3-dev libvtk9-dev xvfb g++ cmake gdb qtbase5-dev
 
 # Build autoc system (requires core library built first)
-cd autoc
+# IMPORTANT: Build from ~/GP/build directory, not ~/GP/autoc/build
+cd ~/GP
 mkdir build && cd build
-cmake -DCMAKE_BUILD_TYPE=Debug ..
+cmake -DCMAKE_BUILD_TYPE=Debug ../autoc
 make
 
 # For headless operation (visualization)
@@ -175,6 +176,43 @@ The PROGN bytecode instruction preserves GP tree semantics for operations with s
 - 9-byte structure: opcode, argc, constant value
 - Stack-based execution model
 - Supports all GP operators and aircraft control functions
+
+## GP Operators and Sensors
+
+**Mathematical Operations:**
+- `ADD, SUB, MUL, DIV` - Basic arithmetic
+- `SIN, COS` - Trigonometric functions
+- `IF, EQ, GT` - Conditional and comparison operations
+- `CLAMP, ATAN2, ABS, SQRT, MIN, MAX` - Mathematical helper functions
+
+**Aircraft Control:**
+- `SETPITCH, SETROLL, SETTHROTTLE` - Set control commands (-1 to 1)
+- `GETPITCH, GETROLL, GETTHROTTLE` - Get current control commands
+
+**Navigation Sensors:**
+- `GETDPHI(steps)` - Roll angle to target at path step offset
+- `GETDTHETA(steps)` - Pitch angle to target at path step offset  
+- `GETDTARGET(steps)` - Distance-based throttle estimate to target
+- `GETDHOME` - Distance to home/origin point
+- `GETVEL` - Current aircraft speed magnitude
+
+**Attitude Sensors:**
+- `GETROLL_RAD` - Current roll angle in radians
+- `GETPITCH_RAD` - Current pitch angle in radians
+- `GETALPHA` - Angle of attack (alpha)
+- `GETBETA` - Sideslip angle (beta)
+
+**Velocity Sensors:**
+- `GETVELX` - North velocity component (NED)
+- `GETVELY` - East velocity component (NED)  
+- `GETVELZ` - Down velocity component (NED)
+
+**Constants:**
+- `PI, ZERO, ONE, TWO` - Mathematical constants
+- `PROGN` - Sequential execution operator (returns second argument)
+
+**Platform Compatibility:**
+All mathematical functions use platform-specific macros (e.g., `CLAMP_DEF`) to support both full C++ builds and Arduino/embedded platforms.
 
 ## Coordinate Systems
 

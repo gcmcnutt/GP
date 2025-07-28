@@ -9,10 +9,20 @@
 #include <boost/serialization/access.hpp>
 #include <boost/serialization/version.hpp>
 #define CLAMP_DEF(v, min, max) std::clamp(v, min, max) 
+#define ATAN2_DEF(y, x) std::atan2(y, x)
+#define ABS_DEF(v) std::abs(v)
+#define SQRT_DEF(v) std::sqrt(v)
+#define MIN_DEF(a, b) std::min(a, b)
+#define MAX_DEF(a, b) std::max(a, b)
 #else
 #include <ArduinoEigenDense.h>
 // #include <ArduinoEigen/ArduinoEigen/Eigen/Geometry>
 #define CLAMP_DEF(v, min, max) ((v) < (min) ? (min) : ((v) > (max) ? (max) : (v)))
+#define ATAN2_DEF(y, x) atan2(y, x)
+#define ABS_DEF(v) ((v) < 0 ? -(v) : (v))
+#define SQRT_DEF(v) sqrt(v)
+#define MIN_DEF(a, b) ((a) < (b) ? (a) : (b))
+#define MAX_DEF(a, b) ((a) > (b) ? (a) : (b))
 #endif
 
 #define SIM_MAX_ROLL_RATE_RADSEC (M_PI)

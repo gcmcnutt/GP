@@ -89,6 +89,14 @@ void createNodeSet(GPAdfNodeSet& adfNs)
   ns.putNode(*new GPNode(GETVELX, "GETVELX"));
   ns.putNode(*new GPNode(GETVELY, "GETVELY"));
   ns.putNode(*new GPNode(GETVELZ, "GETVELZ"));
+  ns.putNode(*new GPNode(GETROLL_RAD, "GETROLL_RAD"));
+  ns.putNode(*new GPNode(GETPITCH_RAD, "GETPITCH_RAD"));
+  ns.putNode(*new GPNode(CLAMP, "CLAMP", 3));
+  ns.putNode(*new GPNode(ATAN2, "ATAN2", 2));
+  ns.putNode(*new GPNode(ABS, "ABS", 1));
+  ns.putNode(*new GPNode(SQRT, "SQRT", 1));
+  ns.putNode(*new GPNode(MIN, "MIN", 2));
+  ns.putNode(*new GPNode(MAX, "MAX", 2));
 }
 
 
@@ -254,6 +262,69 @@ double MyGene::evaluate(std::vector<Path>& path, MyGP& run, double arg)
   case GETVELZ: // get velocity Z component (Down/climb rate)
   {
     returnValue = aircraftState.getVelocity().z();
+    break;
+  }
+
+  case GETROLL_RAD: // get roll angle in radians
+  {
+    // Convert quaternion to Euler angles using standard aerospace convention
+    Eigen::Vector3d euler = aircraftState.getOrientation().toRotationMatrix().eulerAngles(2, 1, 0);
+    returnValue = euler[2]; // Roll angle (rotation around X-axis)
+    break;
+  }
+
+  case GETPITCH_RAD: // get pitch angle in radians  
+  {
+    // Convert quaternion to Euler angles using standard aerospace convention
+    Eigen::Vector3d euler = aircraftState.getOrientation().toRotationMatrix().eulerAngles(2, 1, 0);
+    returnValue = euler[1]; // Pitch angle (rotation around Y-axis)
+    break;
+  }
+
+  case CLAMP: // clamp value between min and max
+  {
+    double value = NthMyChild(0)->evaluate(path, run, arg);
+    double minVal = NthMyChild(1)->evaluate(path, run, arg);
+    double maxVal = NthMyChild(2)->evaluate(path, run, arg);
+    returnValue = CLAMP_DEF(value, minVal, maxVal);
+    break;
+  }
+
+  case ATAN2: // atan2(y, x)
+  {
+    double y = NthMyChild(0)->evaluate(path, run, arg);
+    double x = NthMyChild(1)->evaluate(path, run, arg);
+    returnValue = ATAN2_DEF(y, x);
+    break;
+  }
+
+  case ABS: // absolute value
+  {
+    double value = NthMyChild(0)->evaluate(path, run, arg);
+    returnValue = ABS_DEF(value);
+    break;
+  }
+
+  case SQRT: // square root
+  {
+    double value = NthMyChild(0)->evaluate(path, run, arg);
+    returnValue = (value >= 0) ? SQRT_DEF(value) : 0.0;
+    break;
+  }
+
+  case MIN: // minimum of two values
+  {
+    double a = NthMyChild(0)->evaluate(path, run, arg);
+    double b = NthMyChild(1)->evaluate(path, run, arg);
+    returnValue = MIN_DEF(a, b);
+    break;
+  }
+
+  case MAX: // maximum of two values
+  {
+    double a = NthMyChild(0)->evaluate(path, run, arg);
+    double b = NthMyChild(1)->evaluate(path, run, arg);
+    returnValue = MAX_DEF(a, b);
     break;
   }
 
