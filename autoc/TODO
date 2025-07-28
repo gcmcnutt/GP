@@ -41,7 +41,8 @@
   - animated playback -- maybe render the flight controls input and some parameters power, velocity
   - blackbox logs are 1/32 which is still a lot of data, can we do subselect, perhaps 5 hz?
   - probably need to export quaternion data to blackbox so that we don't get tumble effects
-
+- seems renderer is dependent on s3 data sources -- even when in blackbox mode -- we may need to split this
+- also seems crrcsim is dependent on a valid DISPLAY even when in headless
 
 Good Runs
 - autoc-9223370305983481960-2024-11-06T05:34:53.847Z -- this is minisim large run on 25 paths
