@@ -120,11 +120,21 @@ public:
         double angle_rad = std::acos(std::clamp(dot_product / (target_direction.norm() * aircraft_to_target.norm()), -1.0, 1.0));
         angle_rad = angle_rad * 100.0 / M_PI;
         
-        double smoothness = pow(roll_prev - stepAircraftState.getRollCommand(), 2.0);
-        smoothness += pow(pitch_prev - stepAircraftState.getPitchCommand(), 2.0);
-        smoothness += pow(throttle_prev - stepAircraftState.getThrottleCommand(), 2.0);
-        smoothness = sqrt(smoothness);
-        smoothness = smoothness * 100.0 / 3.46;
+        // control duration penalty -- time spent with non-neutral controls
+        double control_penalty = 0.0;
+        double roll_cmd = stepAircraftState.getRollCommand();
+        double pitch_cmd = stepAircraftState.getPitchCommand();
+        double throttle_cmd = stepAircraftState.getThrottleCommand();
+        
+        // Penalize non-neutral roll and pitch (neutral = 0)
+        if (abs(roll_cmd) > 0.05) control_penalty += 1.0;  // Roll not neutral
+        if (abs(pitch_cmd) > 0.05) control_penalty += 1.0; // Pitch not neutral
+        
+        // Penalize throttle changes from previous value (movement penalty)
+        if (abs(throttle_cmd - throttle_prev) > 0.05) control_penalty += 1.0;
+        
+        // normalize [100:0] - max penalty is 3.0 per step
+        double smoothness = control_penalty * 100.0 / 3.0;
         
         roll_prev = stepAircraftState.getRollCommand();
         pitch_prev = stepAircraftState.getPitchCommand();
@@ -391,52 +401,106 @@ void MyGP::evalTask(WorkerContext& context)
     double localFitness = 0;
     int stepIndex = 0; // where are we on the flight path?
 
-    // error accumulators
-    double distance_error_sum = 0;
-    double angle_error_sum = 0;
-    double control_smoothness_sum = 0;
+    // Simplified multi-objective fitness components
+    double progress_component = 0;
+    double cross_track_component = 0;
+    double course_alignment_component = 0;
+    
+    // Phase tracking
+    enum FlightPhase { INTERCEPT, TRACKING, RECOVERY } currentPhase = INTERCEPT;
+    bool hasAchievedIntercept = false;
+    double tracking_tolerance = 15.0; // meters
+    double intercept_tolerance = tracking_tolerance * 2.0; // 30 meters
+    
     int simulation_steps = 0;
+    int max_path_index_reached = 0;
 
-    // initial states
+    // initial states for control and orientation tracking
     double roll_prev = aircraftState.at(stepIndex).getRollCommand();
     double pitch_prev = aircraftState.at(stepIndex).getPitchCommand();
     double throttle_prev = aircraftState.at(stepIndex).getThrottleCommand();
+    Eigen::Quaterniond orientation_prev = aircraftState.at(stepIndex).getOrientation();
 
     // now walk next steps of actual path
     while (++stepIndex < aircraftState.size()) {
       auto& stepAircraftState = aircraftState.at(stepIndex);
       int pathIndex = stepAircraftState.getThisPathIndex();
-
-      // Compute the distance between the aircraft and the goal
-      double distanceFromGoal = (path.at(pathIndex).start - stepAircraftState.getPosition()).norm();
-      // normalize [100:0]
-      distanceFromGoal = distanceFromGoal * 100.0 / (2 * SIM_PATH_RADIUS_LIMIT);
-
-      // Compute vector from me to target
-      Eigen::Vector3d target_direction = (path.at(pathIndex + 1).start - path.at(pathIndex).start);
-      Eigen::Vector3d aircraft_to_target = (path.at(pathIndex).start - stepAircraftState.getPosition());
-      double dot_product = target_direction.dot(aircraft_to_target);
-      double angle_rad = std::acos(std::clamp(dot_product / (target_direction.norm() * aircraft_to_target.norm()), -1.0, 1.0));
-      // normalize [100:0]
-      angle_rad = angle_rad * 100.0 / M_PI;
-
-      // control smoothness -- internal vector distance
-      double smoothness = pow(roll_prev - stepAircraftState.getRollCommand(), 2.0);
-      smoothness += pow(pitch_prev - stepAircraftState.getPitchCommand(), 2.0);
-      smoothness += pow(throttle_prev - stepAircraftState.getThrottleCommand(), 2.0);
-      smoothness = sqrt(smoothness);
-      // normalize [100:0]
-      smoothness = smoothness * 100.0 / 3.46;
-
-      // ready for next cycle
-      roll_prev = stepAircraftState.getRollCommand();
-      pitch_prev = stepAircraftState.getPitchCommand();
-      throttle_prev = stepAircraftState.getThrottleCommand();
-
-      // accumulate the error
-      distance_error_sum += pow(distanceFromGoal, FITNESS_DISTANCE_WEIGHT);
-      angle_error_sum += pow(angle_rad, FITNESS_ALIGNMENT_WEIGHT);
-      control_smoothness_sum += pow(smoothness, FITNESS_CONTROL_WEIGHT);
+      
+      // Track maximum progress made
+      max_path_index_reached = std::max(max_path_index_reached, pathIndex);
+      
+      // Compute cross-track error (perpendicular distance from path line)
+      Eigen::Vector3d aircraft_pos = stepAircraftState.getPosition();
+      Eigen::Vector3d path_start = path.at(pathIndex).start;
+      Eigen::Vector3d path_end = path.at(pathIndex + 1).start;
+      Eigen::Vector3d path_segment = path_end - path_start;
+      Eigen::Vector3d aircraft_to_start = aircraft_pos - path_start;
+      
+      // Project aircraft position onto path line
+      double along_track = aircraft_to_start.dot(path_segment.normalized());
+      Eigen::Vector3d cross_track_vector = aircraft_to_start - along_track * path_segment.normalized();
+      double cross_track_error = cross_track_vector.norm();
+      
+      // Phase detection based on cross-track error
+      double time_factor = (double)simulation_steps / (double)aircraftState.size();
+      
+      // Check for intercept achievement (close to path line)
+      if (!hasAchievedIntercept && cross_track_error <= intercept_tolerance) {
+        hasAchievedIntercept = true;
+        currentPhase = TRACKING;
+      } else if (hasAchievedIntercept && cross_track_error > intercept_tolerance * 1.5) {
+        currentPhase = RECOVERY;
+      } else if (currentPhase == RECOVERY && cross_track_error <= tracking_tolerance) {
+        currentPhase = TRACKING;
+      }
+      
+      // Phase-aware cross-track penalties
+      double cross_track_penalty = 0;
+      if (currentPhase == INTERCEPT) {
+        // Early leniency: first 10% of simulation has minimal penalty
+        double leniency_factor = std::max(0.1, time_factor);
+        cross_track_penalty = std::min(cross_track_error / intercept_tolerance, 1.0) * leniency_factor;
+      } else if (currentPhase == TRACKING) {
+        // Exponential penalty for deviations when on track
+        cross_track_penalty = pow(std::min(cross_track_error / tracking_tolerance, 2.0), 2.5);
+      } else { // RECOVERY
+        // Moderate penalty, encouraging return to track
+        cross_track_penalty = pow(std::min(cross_track_error / intercept_tolerance, 1.5), 2.0);
+      }
+      
+      // Velocity alignment: reward forward movement along desired course direction
+      double velocity_alignment_penalty = 0.0;
+      
+      if (pathIndex < path.size() - 1) {
+        // Desired course direction (from current waypoint to next)
+        Eigen::Vector3d desired_direction = (path.at(pathIndex + 1).start - path.at(pathIndex).start).normalized();
+        
+        // Actual aircraft velocity direction
+        Eigen::Vector3d aircraft_velocity = stepAircraftState.getVelocity();
+        double aircraft_speed = aircraft_velocity.norm();
+        
+        if (aircraft_speed > 1.0) { // Avoid division by zero
+          Eigen::Vector3d velocity_direction = aircraft_velocity / aircraft_speed;
+          
+          // Compute alignment between velocity and desired course direction
+          double velocity_alignment = desired_direction.dot(velocity_direction);
+          
+          // Penalty for misaligned velocity (ranges from 0 for perfect alignment to 2 for opposite direction)
+          velocity_alignment_penalty = (1.0 - velocity_alignment); // 0 to 2
+          
+          // Apply stronger penalty in tracking phase
+          if (currentPhase == TRACKING) {
+            velocity_alignment_penalty *= 2.0; // Double penalty when on track
+          }
+        }
+      }
+      
+      // Accumulate components
+      cross_track_component += cross_track_penalty;
+      course_alignment_component += velocity_alignment_penalty;
+      
+      // Update for next iteration
+      orientation_prev = stepAircraftState.getOrientation();
       simulation_steps++;
 
       // use the ugly global to communicate best of gen
@@ -497,27 +561,49 @@ void MyGP::evalTask(WorkerContext& context)
           stepAircraftState.getRollCommand(),
           stepAircraftState.getPitchCommand(),
           stepAircraftState.getThrottleCommand(),
-          distanceFromGoal,
-          angle_rad,
-          smoothness
+          cross_track_error,
+          0.0,  // angle_rad removed
+          velocity_alignment_penalty * 100.0
         );
         fout << outbuf;
       }
     }
 
-    // tally up the normlized fitness based on steps and progress
-    double normalized_distance_error = (distance_error_sum / simulation_steps);
-    double normalized_angle_align = (angle_error_sum / simulation_steps);
-    double normalized_control_smoothness = (control_smoothness_sum / simulation_steps);
-    localFitness = normalized_distance_error + normalized_angle_align + normalized_control_smoothness;
+    // Compute progress component (primary objective)
+    progress_component = (double)max_path_index_reached / (double)path.size();
+    
+    // Normalize components by simulation steps
+    if (simulation_steps > 0) {
+      cross_track_component /= simulation_steps;
+      course_alignment_component /= simulation_steps;
+    }
+    
+    // Simplified multi-objective fitness combination (lower is better)
+    localFitness = 
+      (1.0 - progress_component) * 200.0 +     // Primary: maximize forward progress (0-200 penalty)
+      cross_track_component * 80.0 +           // Cross-track error penalty (0-80)
+      course_alignment_component * 120.0;      // Velocity alignment penalty (0-240, up to 4x for anti-spiraling)
 
     if (isnan(localFitness)) {
       nanDetector++;
     }
 
+    // Progressive crash penalty that preserves partial progress signals
     if (crashReason != CrashReason::None) {
-      double fractional_distance_remaining = 1.0 - path.at(aircraftState.back().getThisPathIndex()).distanceFromStart / path.back().distanceFromStart;
-      localFitness += SIM_CRASH_PENALTY * fractional_distance_remaining;
+      double time_survived = (double)simulation_steps / (double)aircraftState.size();
+      double crash_penalty = 50.0; // Base crash penalty
+      
+      // Reduce penalty if good progress was made before crash
+      if (progress_component > 0.3) {
+        crash_penalty *= (1.0 - progress_component * 0.5); // Up to 50% reduction
+      }
+      
+      // Add penalty for early crashes (less signal)
+      if (time_survived < 0.2) {
+        crash_penalty *= 1.5; // 50% increase for very early crashes
+      }
+      
+      localFitness += crash_penalty;
     }
 
     // accumulate the local fitness
@@ -661,11 +747,21 @@ int main()
             double angle_rad = std::acos(std::clamp(dot_product / (target_direction.norm() * aircraft_to_target.norm()), -1.0, 1.0));
             angle_rad = angle_rad * 100.0 / M_PI;
             
-            double smoothness = pow(roll_prev - stepAircraftState.getRollCommand(), 2.0);
-            smoothness += pow(pitch_prev - stepAircraftState.getPitchCommand(), 2.0);
-            smoothness += pow(throttle_prev - stepAircraftState.getThrottleCommand(), 2.0);
-            smoothness = sqrt(smoothness);
-            smoothness = smoothness * 100.0 / 3.46;
+            // control duration penalty -- time spent with non-neutral controls
+            double control_penalty = 0.0;
+            double roll_cmd = stepAircraftState.getRollCommand();
+            double pitch_cmd = stepAircraftState.getPitchCommand();
+            double throttle_cmd = stepAircraftState.getThrottleCommand();
+            
+            // Penalize non-neutral roll and pitch (neutral = 0)
+            if (abs(roll_cmd) > 0.05) control_penalty += 1.0;  // Roll not neutral
+            if (abs(pitch_cmd) > 0.05) control_penalty += 1.0; // Pitch not neutral
+            
+            // Penalize throttle changes from previous value (movement penalty)
+            if (abs(throttle_cmd - throttle_prev) > 0.05) control_penalty += 1.0;
+            
+            // normalize [100:0] - max penalty is 3.0 per step
+            double smoothness = control_penalty * 100.0 / 3.0;
             
             roll_prev = stepAircraftState.getRollCommand();
             pitch_prev = stepAircraftState.getPitchCommand();
