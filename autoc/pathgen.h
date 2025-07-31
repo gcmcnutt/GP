@@ -275,8 +275,8 @@ class GenerateLine : public GeneratorMethod {
 
     std::vector<Path> path;
     double distance = 0.0;
-    for (double i = 0; i <= SIM_PATH_RADIUS_LIMIT; i += 5) {
-      Eigen::Vector3d interpolatedPoint = { i, i, SIM_INITIAL_ALTITUDE };
+    for (double i = -SIM_PATH_RADIUS_LIMIT; i <= SIM_PATH_RADIUS_LIMIT; i += 5) {
+      Eigen::Vector3d interpolatedPoint = { -30, i, SIM_INITIAL_ALTITUDE };
       Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), distance, 0.0 };
       path.push_back(pathSegment);
       distance += 5;
@@ -286,110 +286,75 @@ class GenerateLine : public GeneratorMethod {
 };
 
 class GenerateLongSequential : public GeneratorMethod {
-private:
-  // Helper function to add smooth transition between path segments
-  void addTransition(std::vector<Path>& longPath, const Eigen::Vector3d& fromPoint, 
-                     const Eigen::Vector3d& toPoint, double& totalDistance) {
-    // Add 10 interpolation points for smooth transition
-    for (int i = 1; i <= 10; i++) {
-      double t = (double)i / 10.0;
-      Eigen::Vector3d transitionPoint = fromPoint + t * (toPoint - fromPoint);
-      
-      double distance = (transitionPoint - (longPath.empty() ? fromPoint : longPath.back().start)).norm();
-      totalDistance += distance;
-      
-      Path pathSegment = { transitionPoint, Eigen::Vector3d::UnitX(), totalDistance, 0.0 };
-      longPath.push_back(pathSegment);
-    }
-  }
-
 public:
   std::vector<Path> method(int pathIndex, double radius, double height, double base) override {
     std::vector<Path> longPath;
     double totalDistance = 0.0;
-    
-    // Origin point: Use same altitude as craft starting elevation
-    Eigen::Vector3d origin(0, 0, SIM_INITIAL_ALTITUDE); // Same as craft starting altitude
-    double loopRadius = 20.0; // All maneuvers use 20m radius as specified
-    
-    // 1. ENTRY: Straight and level approach to origin (craft enters heading south)
-    // Rotated 180° around Z-axis: X becomes -X, Y becomes -Y
-    for (int i = 0; i < 10; i++) {
-      // Original: (-30.0 + i * 3.0, 0, 0) heading east (positive X)
-      // Rotated 180°: (30.0 - i * 3.0, 0, 0) heading west (negative X, which is now south)
-      Eigen::Vector3d point = origin + Eigen::Vector3d(30.0 - i * 3.0, 0, 0);
-      totalDistance += (i == 0) ? 0 : 3.0;
-      Path pathSegment = { point, Eigen::Vector3d::UnitX(), totalDistance, 0.0 };
-      longPath.push_back(pathSegment);
-    }
-    
-    // 2. VERTICAL PITCH-UP LOOP (starts at origin, ends at origin)
-    // Rotated 180°: X becomes -X (now heading south, pitching up)
+
+    // Origin point and radius
+    Eigen::Vector3d origin(0, 0, SIM_INITIAL_ALTITUDE);
+    double loopRadius = 20.0;
+
+    // 1. VERTICAL LOOP - Enter at origin heading south, pitch up through full loop
+    // Start at origin, loop goes down first then up and around
     for (double turn = 0; turn < M_PI * 2; turn += 0.05) {
-      // Vertical loop in XZ plane - now heading south, pitches up
-      Eigen::Vector3d point = origin + Eigen::Vector3d(-loopRadius * sin(turn), 0, -loopRadius * (1 - cos(turn)));
-      double distance = (point - longPath.back().start).norm();
+      Eigen::Vector3d circleCenter = origin + Eigen::Vector3d(0, 0, -loopRadius);
+      // Start at origin (turn=π): point at center + (0, 0, radius), heading south
+      Eigen::Vector3d point = circleCenter + Eigen::Vector3d(-loopRadius * sin(turn), 0, loopRadius * cos(turn));
+      double distance = (longPath.empty() ? 0 : (point - longPath.back().start).norm());
       totalDistance += distance;
       Path pathSegment = { point, Eigen::Vector3d::UnitX(), totalDistance, 0.0 };
       longPath.push_back(pathSegment);
     }
-    
-    // 3. HORIZONTAL RIGHT CIRCLE (starts at origin, turns right, ends at origin)
-    // Rotated 180°: what was east becomes west, Y becomes -Y
+
+    // 2. LEFT HORIZONTAL LOOP - Start at origin heading south, turn left (counter-clockwise)
+    // Circle center to the west of origin so we turn left around it  
     for (double turn = 0; turn < M_PI * 2; turn += 0.05) {
-      // Circle centered west of origin (was east), starting from origin
-      Eigen::Vector3d circleCenter = origin + Eigen::Vector3d(0, -loopRadius, 0); // center west of origin
+      Eigen::Vector3d circleCenter = origin + Eigen::Vector3d(0, -loopRadius, 0);
+      // Start at origin (turn=π): point at center + (-radius, 0, 0), heading south
       Eigen::Vector3d point = circleCenter + Eigen::Vector3d(-loopRadius * sin(turn), loopRadius * cos(turn), 0);
       double distance = (point - longPath.back().start).norm();
       totalDistance += distance;
       Path pathSegment = { point, Eigen::Vector3d::UnitX(), totalDistance, 0.0 };
       longPath.push_back(pathSegment);
     }
-    
-    // 4. HORIZONTAL LEFT CIRCLE (starts at origin, turns left, ends at origin) 
-    // Rotated 180°: what was west becomes east, Y becomes -Y
+
+    // 3. RIGHT HORIZONTAL LOOP - Start at origin heading south, turn right (clockwise)  
+    // Circle center to the east of origin so we turn right around it
     for (double turn = 0; turn < M_PI * 2; turn += 0.05) {
-      // Circle centered east of origin (was west), starting from origin
-      Eigen::Vector3d circleCenter = origin + Eigen::Vector3d(0, loopRadius, 0); // center east of origin
-      Eigen::Vector3d point = circleCenter + Eigen::Vector3d(loopRadius * sin(turn), -loopRadius * cos(turn), 0);
+      Eigen::Vector3d circleCenter = origin + Eigen::Vector3d(0, loopRadius, 0);
+      // Start at origin (turn=π): point at center + (-radius, 0, 0), heading south
+      Eigen::Vector3d point = circleCenter + Eigen::Vector3d(-loopRadius * sin(turn), -loopRadius * cos(turn), 0);
       double distance = (point - longPath.back().start).norm();
       totalDistance += distance;
       Path pathSegment = { point, Eigen::Vector3d::UnitX(), totalDistance, 0.0 };
       longPath.push_back(pathSegment);
     }
-    
-    // 5. 45-DEGREE TILTED LOOP (tilted to the west, starts and ends at origin)
-    // Rotated 180°: X becomes -X, eastward tilt becomes westward tilt
+
+    // 4. RIGHT TILT LOOP - Roll right 45°, pitch up through tilted circle
+    // Same as vertical loop is good enough, not rotated just stretched in y
     for (double turn = 0; turn < M_PI * 2; turn += 0.05) {
-      // 45-degree westward tilted loop (was eastward)
-      double tilt = M_PI / 4; // 45 degrees west tilt
-      Eigen::Vector3d point = origin + Eigen::Vector3d(
-        -loopRadius * sin(turn),                          // forward/back motion (now south)
-        -loopRadius * sin(tilt) * (1 - cos(turn)),       // westward tilt component  
-        -loopRadius * cos(tilt) * (1 - cos(turn))        // vertical component
-      );
-      double distance = (point - longPath.back().start).norm();
+      Eigen::Vector3d circleCenter = origin + Eigen::Vector3d(0, loopRadius, -loopRadius);
+      // Start at origin (turn=π): point at center + (0, 0, radius), heading south
+      Eigen::Vector3d point = circleCenter + Eigen::Vector3d(-loopRadius * sin(turn), -loopRadius * cos(turn), loopRadius * cos(turn));
+      double distance = (longPath.empty() ? 0 : (point - longPath.back().start).norm());
       totalDistance += distance;
       Path pathSegment = { point, Eigen::Vector3d::UnitX(), totalDistance, 0.0 };
       longPath.push_back(pathSegment);
     }
-    
-    // 6. 45-DEGREE TILTED LOOP (tilted to the east, starts and ends at origin)
-    // Rotated 180°: X becomes -X, westward tilt becomes eastward tilt
+
+    // 5. LEFT TILT LOOP - Roll left 45°, pitch up through tilted circle
+    // Start at origin, perform vertical loop tilted 45° to the left (toward -Y/west)
     for (double turn = 0; turn < M_PI * 2; turn += 0.05) {
-      // 45-degree eastward tilted loop (was westward)
-      double tilt = M_PI / 4; // 45 degrees east tilt
-      Eigen::Vector3d point = origin + Eigen::Vector3d(
-        -loopRadius * sin(turn),                          // forward/back motion (now south)
-        loopRadius * sin(tilt) * (1 - cos(turn)),        // eastward tilt component (positive Y)  
-        -loopRadius * cos(tilt) * (1 - cos(turn))        // vertical component
-      );
-      double distance = (point - longPath.back().start).norm();
+      Eigen::Vector3d circleCenter = origin + Eigen::Vector3d(0, -loopRadius, -loopRadius);
+      // Start at origin (turn=π): point at center + (0, 0, radius), heading south
+      Eigen::Vector3d point = circleCenter + Eigen::Vector3d(-loopRadius * sin(turn), loopRadius * cos(turn), loopRadius * cos(turn));
+      double distance = (longPath.empty() ? 0 : (point - longPath.back().start).norm());
       totalDistance += distance;
       Path pathSegment = { point, Eigen::Vector3d::UnitX(), totalDistance, 0.0 };
       longPath.push_back(pathSegment);
     }
-    
+
     return longPath;
   }
 };
