@@ -82,6 +82,14 @@ void createNodeSet(GPAdfNodeSet& adfNs)
   ns.putNode(*new GPNode(GETVELX, "GETVELX"));
   ns.putNode(*new GPNode(GETVELY, "GETVELY"));
   ns.putNode(*new GPNode(GETVELZ, "GETVELZ"));
+  ns.putNode(*new GPNode(GETROLL_RAD, "GETROLL_RAD"));
+  ns.putNode(*new GPNode(GETPITCH_RAD, "GETPITCH_RAD"));
+  ns.putNode(*new GPNode(CLAMP, "CLAMP", 3));
+  ns.putNode(*new GPNode(ATAN2, "ATAN2", 2));
+  ns.putNode(*new GPNode(ABS, "ABS", 1));
+  ns.putNode(*new GPNode(SQRT, "SQRT", 1));
+  ns.putNode(*new GPNode(MIN, "MIN", 2));
+  ns.putNode(*new GPNode(MAX, "MAX", 2));
 }
 
 // Minimal MyGene class for loading (from autoc.h)

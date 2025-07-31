@@ -307,6 +307,10 @@ public:
       longPath.push_back(pathSegment);
     }
 
+    
+    // STILL COMMENTED OUT: Keep remaining loops for later testing
+    /*
+    
     // 2. LEFT HORIZONTAL LOOP - Start at origin heading south, turn left (counter-clockwise)
     // Circle center to the west of origin so we turn left around it  
     for (double turn = 0; turn < M_PI * 2; turn += 0.05) {
@@ -354,6 +358,7 @@ public:
       Path pathSegment = { point, Eigen::Vector3d::UnitX(), totalDistance, 0.0 };
       longPath.push_back(pathSegment);
     }
+    */
 
     return longPath;
   }
