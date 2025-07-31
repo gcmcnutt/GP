@@ -394,7 +394,7 @@ void MyGP::evalTask(WorkerContext& context)
     // error accumulators
     double distance_error_sum = 0;
     double angle_error_sum = 0;
-    double control_smoothness_sum = 0;
+    double movement_efficiency_sum = 0;
     int simulation_steps = 0;
 
     // initial states
@@ -420,13 +420,61 @@ void MyGP::evalTask(WorkerContext& context)
       // normalize [100:0]
       angle_rad = angle_rad * 100.0 / M_PI;
 
-      // control smoothness -- internal vector distance
-      double smoothness = pow(roll_prev - stepAircraftState.getRollCommand(), 2.0);
-      smoothness += pow(pitch_prev - stepAircraftState.getPitchCommand(), 2.0);
-      smoothness += pow(throttle_prev - stepAircraftState.getThrottleCommand(), 2.0);
-      smoothness = sqrt(smoothness);
-      // normalize [100:0]
-      smoothness = smoothness * 100.0 / 3.46;
+      // Movement efficiency: compare aircraft movement to optimal path movement
+      double movement_efficiency = 0.0;
+      if (stepIndex > 1 && pathIndex < path.size() - 1) {
+        // Aircraft movement since last step
+        Eigen::Vector3d aircraft_movement = stepAircraftState.getPosition() - aircraftState.at(stepIndex-1).getPosition();
+        double aircraft_distance = aircraft_movement.norm();
+        
+        // Optimal path movement (direction from current waypoint to next)
+        Eigen::Vector3d path_direction = (path.at(pathIndex + 1).start - path.at(pathIndex).start).normalized();
+        double optimal_distance = aircraft_distance; // Same distance, optimal direction
+        
+        if (aircraft_distance > 0.1) { // Avoid division by zero
+          // Compare directions: dot product shows alignment (-1 to +1)
+          double direction_alignment = aircraft_movement.normalized().dot(path_direction);
+          
+          // Movement efficiency penalty: 0 = perfect alignment, 2 = opposite direction
+          movement_efficiency = (1.0 - direction_alignment); // 0 to 2 range
+          
+          // Additional penalty for excessive turning/rolling
+          double current_roll = abs(stepAircraftState.getRollCommand());
+          double current_pitch = abs(stepAircraftState.getPitchCommand());
+          
+          // Control saturation penalty - heavily penalize near ±1.0 commands
+          double saturation_penalty = 0.0;
+          if (current_roll > CONTROL_SATURATION_THRESHOLD) {
+            saturation_penalty += (current_roll - CONTROL_SATURATION_THRESHOLD) * CONTROL_SATURATION_PENALTY;
+          }
+          if (current_pitch > CONTROL_SATURATION_THRESHOLD) {
+            saturation_penalty += (current_pitch - CONTROL_SATURATION_THRESHOLD) * CONTROL_SATURATION_PENALTY;
+          }
+          
+          // Control rate penalty - penalize rapid changes (bang-bang behavior)
+          double roll_change = abs(stepAircraftState.getRollCommand() - roll_prev);
+          double pitch_change = abs(stepAircraftState.getPitchCommand() - pitch_prev);
+          double control_rate_penalty = (roll_change + pitch_change) * CONTROL_RATE_PENALTY;
+          
+          // Estimate "optimal" control needed for this path segment
+          // Simple model: straight segments need minimal control, curves need some roll
+          Eigen::Vector3d prev_path_dir = (pathIndex > 0) ? 
+            (path.at(pathIndex).start - path.at(pathIndex-1).start).normalized() : path_direction;
+          double path_curvature = (1.0 - prev_path_dir.dot(path_direction)); // 0 to 2
+          double optimal_roll = path_curvature * 0.3; // Scale to reasonable roll estimate
+          double optimal_pitch = 0.1; // Assume minimal pitch needed
+          
+          // Penalty for excessive control relative to path requirements
+          double control_excess = (current_roll - optimal_roll) + (current_pitch - optimal_pitch);
+          control_excess = std::max(0.0, control_excess); // Only penalize excess, not deficit
+          
+          movement_efficiency += control_excess * 0.5; // Add control excess penalty
+          movement_efficiency += saturation_penalty; // Add saturation penalty
+          movement_efficiency += control_rate_penalty; // Add rate change penalty
+        }
+      }
+      // Normalize to [100:0] scale - increased max penalty due to saturation/rate penalties  
+      movement_efficiency = movement_efficiency * 100.0 / MOVEMENT_EFFICIENCY_MAX_PENALTY;
 
       // ready for next cycle
       roll_prev = stepAircraftState.getRollCommand();
@@ -436,7 +484,7 @@ void MyGP::evalTask(WorkerContext& context)
       // accumulate the error
       distance_error_sum += pow(distanceFromGoal, FITNESS_DISTANCE_WEIGHT);
       angle_error_sum += pow(angle_rad, FITNESS_ALIGNMENT_WEIGHT);
-      control_smoothness_sum += pow(smoothness, FITNESS_CONTROL_WEIGHT);
+      movement_efficiency_sum += pow(movement_efficiency, MOVEMENT_EFFICIENCY_WEIGHT); // Stronger penalty weight than distance/angle
       simulation_steps++;
 
       // use the ugly global to communicate best of gen
@@ -446,7 +494,7 @@ void MyGP::evalTask(WorkerContext& context)
         bestOfEvalResults = context.evalResults;
 
         if (printHeader) {
-          fout << "Pth:Step:   Time Idx  totDist   pathX    pathY    pathZ        X        Y        Z       dr       dp       dy   relVel     roll    pitch    power    distP   angleP controlP\n";
+          fout << "Pth:Step:   Time Idx  totDist   pathX    pathY    pathZ        X        Y        Z       dr       dp       dy   relVel     roll    pitch    power    distP   angleP  movEffP\n";
           printHeader = false;
         }
 
@@ -499,7 +547,7 @@ void MyGP::evalTask(WorkerContext& context)
           stepAircraftState.getThrottleCommand(),
           distanceFromGoal,
           angle_rad,
-          smoothness
+          movement_efficiency
         );
         fout << outbuf;
       }
@@ -508,8 +556,8 @@ void MyGP::evalTask(WorkerContext& context)
     // tally up the normlized fitness based on steps and progress
     double normalized_distance_error = (distance_error_sum / simulation_steps);
     double normalized_angle_align = (angle_error_sum / simulation_steps);
-    double normalized_control_smoothness = (control_smoothness_sum / simulation_steps);
-    localFitness = normalized_distance_error + normalized_angle_align + normalized_control_smoothness;
+    double normalized_movement_efficiency = (movement_efficiency_sum / simulation_steps);
+    localFitness = normalized_distance_error + normalized_angle_align + normalized_movement_efficiency;
 
     if (isnan(localFitness)) {
       nanDetector++;

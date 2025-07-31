@@ -10,6 +10,13 @@ struct WorkerContext;
 #define FITNESS_ALIGNMENT_WEIGHT 1.3
 #define FITNESS_CONTROL_WEIGHT 1.0
 
+// Movement efficiency penalty constants - reduced for better exploration
+#define CONTROL_SATURATION_THRESHOLD 0.9
+#define CONTROL_SATURATION_PENALTY 5.0
+#define CONTROL_RATE_PENALTY 2.0
+#define MOVEMENT_EFFICIENCY_WEIGHT 1.5
+#define MOVEMENT_EFFICIENCY_MAX_PENALTY 8.0
+
 class ExtraConfig {
 public:
   int simNumPathsPerGen = 1;
