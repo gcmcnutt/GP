@@ -843,8 +843,17 @@ int main()
         newPop = new MyPopulation(ConfigManager::getGPConfig(), adfNs);
       pop->generate(*newPop);
 
-      // TODO fix this pattern to use a dynamic logger
+      // Enable evaluation output for this generation
       printEval = true;
+      
+      // Switch to new population first to get the correct best individual
+      if (!ConfigManager::getGPConfig().SteadyState)
+      {
+        MyPopulation* oldPop = pop;
+        pop = newPop;
+        delete oldPop;
+      }
+      
       MyGP* best = pop->NthMyGP(pop->bestOfPopulation);
       best->evaluate();
 
@@ -853,13 +862,6 @@ int main()
       pop->endOfEvaluation();
 
       printEval = false;
-
-      // Delete the old generation and make the new the old one
-      if (!ConfigManager::getGPConfig().SteadyState)
-      {
-        delete pop;
-        pop = newPop;
-      }
 
       // Create a report of this generation and how well it is doing
       if (nanDetector > 0) {

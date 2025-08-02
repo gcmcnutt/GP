@@ -32,6 +32,8 @@
 #include <vtkRibbonFilter.h>
 #include <vtkDoubleArray.h>
 #include <vtkPointData.h>
+#include <vtkTextActor.h>
+#include <vtkTextProperty.h>
 
 #define FIELD_SIZE 100.0
 #define FIELD_GAP 10.0
@@ -72,8 +74,13 @@ public:
   void initialize();
   bool isRunning();
   bool updateGenerationDisplay(int genNumber);
+  void updateTextDisplay(int generation, double fitness);
 
   int genNumber = 0;
+  
+  // Store current generation and fitness for resize updates
+  int currentGeneration = 0;
+  double currentFitness = 0.0;
 
   vtkSmartPointer<vtkRenderWindow> renderWindow;
   vtkSmartPointer<vtkRenderWindowInteractor> renderWindowInteractor;
@@ -90,6 +97,11 @@ private:
   vtkSmartPointer<vtkActor> actor2;
   vtkSmartPointer<vtkActor> actor3;
   vtkSmartPointer<vtkActor> blackboxActor;
+  
+  vtkSmartPointer<vtkTextActor> generationTextActor;
+  vtkSmartPointer<vtkTextActor> generationValueActor;
+  vtkSmartPointer<vtkTextActor> fitnessTextActor;
+  vtkSmartPointer<vtkTextActor> fitnessValueActor;
 
   Eigen::Vector3d renderingOffset(int i); // locate a coordinate offset for our rendering screen
   vtkSmartPointer<vtkPolyData> createPointSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> points);
@@ -98,6 +110,7 @@ private:
   std::vector<Eigen::Vector3d> pathToVector(const std::vector<Path> path);
   std::vector<Eigen::Vector3d> stateToVector(const std::vector<AircraftState> path);
   std::vector<Eigen::Vector3d> stateToOrientation(const std::vector<AircraftState> state);
+  double extractFitnessFromGP(const std::vector<char>& gpData);
 };
 
 #endif

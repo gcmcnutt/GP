@@ -7,10 +7,16 @@
 #include <vector>
 #include <cstdlib>
 #include <cmath>
+#include <iomanip>
 
 #include "renderer.h"
 #include "config_manager.h"
 #include "autoc.h"
+
+#include <vtkTextActor.h>
+#include <vtkTextProperty.h>
+
+#include <gp.h>
 
 #include <aws/core/Aws.h>
 #include <aws/s3/S3Client.h>
@@ -311,6 +317,10 @@ bool Renderer::updateGenerationDisplay(int newGen) {
   std::string title = keyName + " - " + std::to_string(10000 - newGen);
   renderWindow->SetWindowName(title.c_str());
 
+  // Extract fitness from GP data and update text displays
+  double fitness = extractFitnessFromGP(evalResults.gp);
+  updateTextDisplay(newGen, fitness);
+
   // Render the updated scene
   renderWindow->Render();
   return true;
@@ -380,6 +390,29 @@ public:
   vtkRenderWindowInteractor* Interactor;
 };
 
+class WindowResizeCommand : public vtkCommand {
+public:
+  static WindowResizeCommand* New() {
+    return new WindowResizeCommand();
+  }
+  vtkTypeMacro(WindowResizeCommand, vtkCommand);
+
+  void SetRenderer(Renderer* renderer) { renderer_ = renderer; }
+
+  void Execute(vtkObject* caller, unsigned long eventId, void* callData) override {
+    if (renderer_) {
+      // Update text display with current values when window is resized
+      renderer_->updateTextDisplay(renderer_->currentGeneration, renderer_->currentFitness);
+    }
+  }
+
+protected:
+  WindowResizeCommand() : renderer_(nullptr) {}
+
+private:
+  Renderer* renderer_;
+};
+
 
 void Renderer::initialize() {
   // Create a renderer and render window interactor
@@ -404,6 +437,11 @@ void Renderer::initialize() {
   // Add observers for the custom events
   interactorStyle->AddObserver(NextModelEvent, nextModelCommand);
   interactorStyle->AddObserver(PreviousModelEvent, previousModelCommand);
+
+  // Add window resize observer
+  vtkNew<WindowResizeCommand> resizeCommand;
+  resizeCommand->SetRenderer(this);
+  renderWindow->AddObserver(vtkCommand::WindowResizeEvent, resizeCommand);
 
   // Configure the camera
   vtkNew<vtkCamera> camera;
@@ -565,6 +603,38 @@ void Renderer::initialize() {
     renderer->AddActor(blackboxActor);
   }
 
+  // Create text actors for generation and fitness display
+  generationTextActor = vtkSmartPointer<vtkTextActor>::New();
+  generationTextActor->GetTextProperty()->SetColor(1.0, 1.0, 1.0); // White text
+  generationTextActor->GetTextProperty()->SetVerticalJustificationToBottom();
+  generationTextActor->GetTextProperty()->SetJustificationToRight();
+  generationTextActor->SetInput("Generation:");
+  renderer->AddActor2D(generationTextActor);
+
+  generationValueActor = vtkSmartPointer<vtkTextActor>::New();
+  generationValueActor->GetTextProperty()->SetColor(1.0, 1.0, 1.0); // White text
+  generationValueActor->GetTextProperty()->SetVerticalJustificationToBottom();
+  generationValueActor->GetTextProperty()->SetJustificationToLeft();
+  generationValueActor->SetInput("0");
+  renderer->AddActor2D(generationValueActor);
+
+  fitnessTextActor = vtkSmartPointer<vtkTextActor>::New();
+  fitnessTextActor->GetTextProperty()->SetColor(1.0, 1.0, 1.0); // White text
+  fitnessTextActor->GetTextProperty()->SetVerticalJustificationToBottom();
+  fitnessTextActor->GetTextProperty()->SetJustificationToRight();
+  fitnessTextActor->SetInput("Fitness:");
+  renderer->AddActor2D(fitnessTextActor);
+
+  fitnessValueActor = vtkSmartPointer<vtkTextActor>::New();
+  fitnessValueActor->GetTextProperty()->SetColor(1.0, 1.0, 1.0); // White text
+  fitnessValueActor->GetTextProperty()->SetVerticalJustificationToBottom();
+  fitnessValueActor->GetTextProperty()->SetJustificationToLeft();
+  fitnessValueActor->SetInput("0.000");
+  renderer->AddActor2D(fitnessValueActor);
+
+  // Set initial text display
+  updateTextDisplay(0, 0.0);
+
   // Enable anti-aliasing (multi-sampling)
   renderWindow->SetMultiSamples(4); // Use 4x MSAA
 
@@ -607,6 +677,78 @@ std::vector<Eigen::Vector3d> Renderer::stateToOrientation(std::vector<AircraftSt
     points.push_back(s.getOrientation() * -Eigen::Vector3d::UnitZ());
   }
   return points;
+}
+
+double Renderer::extractFitnessFromGP(const std::vector<char>& gpData) {
+  if (gpData.empty()) {
+    return 0.0;
+  }
+  
+  try {
+    // Create stream from the char vector
+    boost::iostreams::stream<boost::iostreams::array_source> inStream(gpData.data(), gpData.size());
+    
+    // Create and load a base GP object
+    GP gp;
+    gp.load(inStream);
+    
+    return gp.getFitness();
+  }
+  catch (const std::exception& e) {
+    std::cerr << "Error extracting fitness from GP: " << e.what() << std::endl;
+    return 0.0;
+  }
+}
+
+void Renderer::updateTextDisplay(int generation, double fitness) {
+  // Store current values for resize updates
+  currentGeneration = generation;
+  currentFitness = fitness;
+  
+  // Get window size for responsive positioning
+  int* size = renderWindow->GetSize();
+  int windowWidth = size[0];
+  int windowHeight = size[1];
+  
+  // Calculate font size based on window size (min 8, max 20)
+  int fontSize = std::max(8, std::min(20, static_cast<int>(windowHeight * 0.02)));
+  
+  // Position calculations: bottom-right of text at 95% width and 95% height
+  int anchorX = static_cast<int>(windowWidth * 0.95);
+  // In VTK, Y=0 is at bottom, so 95% height means 5% from bottom
+  int anchorY = static_cast<int>(windowHeight * 0.05); // 5% from bottom = lower right
+  
+  // Calculate line spacing
+  int lineSpacing = fontSize + 6;
+  
+  // Position text so bottom-right corner is at anchor point
+  // In VTK coordinates: fitness is lower (smaller Y), generation is higher (larger Y)
+  int fitnessY = anchorY;
+  int generationY = anchorY + lineSpacing;
+  
+  // Labels and values positioned relative to anchor
+  int labelX = anchorX - 80; // Labels positioned left of anchor for right-justification
+  int valueX = anchorX - 75; // Values start slightly right of labels
+  
+  // Update font sizes for all text actors
+  generationTextActor->GetTextProperty()->SetFontSize(fontSize);
+  generationValueActor->GetTextProperty()->SetFontSize(fontSize);
+  fitnessTextActor->GetTextProperty()->SetFontSize(fontSize);
+  fitnessValueActor->GetTextProperty()->SetFontSize(fontSize);
+  
+  // Update positions - labels right-justified, values left-justified
+  generationTextActor->SetPosition(labelX, generationY);
+  generationValueActor->SetPosition(valueX, generationY);
+  fitnessTextActor->SetPosition(labelX, fitnessY);
+  fitnessValueActor->SetPosition(valueX, fitnessY);
+  
+  // Update text content - use same formula as title bar (10000 - generation)
+  int realGeneration = 10000 - generation;
+  generationValueActor->SetInput(std::to_string(realGeneration).c_str());
+  
+  std::ostringstream fitnessStream;
+  fitnessStream << std::fixed << std::setprecision(3) << fitness;
+  fitnessValueActor->SetInput(fitnessStream.str().c_str());
 }
 
 // Extract the generation number from the key
@@ -720,10 +862,11 @@ int main(int argc, char** argv) {
   do {
     auto outcome = s3_client->ListObjectsV2(listItem);
     if (outcome.IsSuccess()) {
-      // Objects are already in reverse lexicographical order
+      // S3 returns objects in lexicographical order (gen9900, gen9901, gen9902...)
+      // Due to reverse numbering (10000-gen), the FIRST object is the LATEST generation
       for (const auto& object : outcome.GetResult().GetContents()) {
         keyName = object.GetKey();
-        break;
+        break; // Take the first (latest) generation
       }
 
       // Check if the response is truncated

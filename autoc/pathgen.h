@@ -299,7 +299,7 @@ public:
     // Start at origin, loop goes down first then up and around
     for (double turn = 0; turn < M_PI * 2; turn += 0.05) {
       Eigen::Vector3d circleCenter = origin + Eigen::Vector3d(0, 0, -loopRadius);
-      // Start at origin (turn=π): point at center + (0, 0, radius), heading south
+      // Start at origin (turn=0): point at center + (0, 0, radius), heading south
       Eigen::Vector3d point = circleCenter + Eigen::Vector3d(-loopRadius * sin(turn), 0, loopRadius * cos(turn));
       double distance = (longPath.empty() ? 0 : (point - longPath.back().start).norm());
       totalDistance += distance;
@@ -307,15 +307,11 @@ public:
       longPath.push_back(pathSegment);
     }
 
-    
-    // STILL COMMENTED OUT: Keep remaining loops for later testing
-    /*
-    
     // 2. LEFT HORIZONTAL LOOP - Start at origin heading south, turn left (counter-clockwise)
     // Circle center to the west of origin so we turn left around it  
     for (double turn = 0; turn < M_PI * 2; turn += 0.05) {
       Eigen::Vector3d circleCenter = origin + Eigen::Vector3d(0, -loopRadius, 0);
-      // Start at origin (turn=π): point at center + (-radius, 0, 0), heading south
+      // Start at origin (turn=0): point at center + (-radius, 0, 0), heading south
       Eigen::Vector3d point = circleCenter + Eigen::Vector3d(-loopRadius * sin(turn), loopRadius * cos(turn), 0);
       double distance = (point - longPath.back().start).norm();
       totalDistance += distance;
@@ -323,6 +319,9 @@ public:
       longPath.push_back(pathSegment);
     }
 
+    // STILL COMMENTED OUT: Keep remaining loops for later testing
+    /*
+    
     // 3. RIGHT HORIZONTAL LOOP - Start at origin heading south, turn right (clockwise)  
     // Circle center to the east of origin so we turn right around it
     for (double turn = 0; turn < M_PI * 2; turn += 0.05) {

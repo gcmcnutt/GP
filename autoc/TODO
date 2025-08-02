@@ -26,7 +26,6 @@
   - selector
   - activate
 - consider PID as basic controller (perhaps some other input/output to allow for slight tuning)
-* odd behavior where header generation value seems offbyon from what is reported in logs and in runtime stdout - maybe related but the gp output generation number seems offbyon from what renderer sees -- e.g. if 25 completed, can't see it schange until 26 is rendered
 * clean shutdown method for terminating sims
   - now that a crrcsim batch runs long, perhaps have polling loop for keepalive as when autoc exits crrcsim will exit
 - develop an offline fitness validator where a recorded path set and GP can be replayed, perhaps on a different path (e.g. old GP on different path set), etc
