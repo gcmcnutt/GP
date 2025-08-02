@@ -9,6 +9,8 @@
 #include <cmath>
 
 #include "renderer.h"
+#include "config_manager.h"
+#include "autoc.h"
 
 #include <aws/core/Aws.h>
 #include <aws/s3/S3Client.h>
@@ -36,25 +38,7 @@ bool loadBlackboxData();
 void printUsage(const char* progName);
 
 std::shared_ptr<Aws::S3::S3Client> getS3Client() {
-  // real S3 or local minio?
-  Aws::Client::ClientConfiguration clientConfig;
-  Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy policy = Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::RequestDependent;
-  if (strcmp("default", "minio" /*extraCfg.s3Profile*/) != 0) {
-    clientConfig.endpointOverride = "http://localhost:9000"; // MinIO server address
-    clientConfig.scheme = Aws::Http::Scheme::HTTP; // Use HTTP instead of HTTPS
-    clientConfig.verifySSL = false; // Disable SSL verification for local testing
-
-    policy = Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never;
-  }
-
-  auto credentialsProvider = Aws::MakeShared<Aws::Auth::ProfileConfigFileAWSCredentialsProvider>("CredentialsProvider", "minio" /*extraCfg.s3Profile*/);
-
-  return Aws::MakeShared<Aws::S3::S3Client>("S3Client",
-    credentialsProvider,
-    clientConfig,
-    Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Always,
-    false
-  );
+  return ConfigManager::getS3Client();
 }
 
 void PrintPolyDataInfo(vtkPolyData* polyData)
@@ -210,7 +194,7 @@ vtkSmartPointer<vtkPolyData> Renderer::createTapeSet(Eigen::Vector3d offset, con
 bool Renderer::updateGenerationDisplay(int newGen) {
   // now do initial fetch
   Aws::S3::Model::GetObjectRequest request;
-  request.SetBucket("autoc-storage"); // TODO extraCfg
+  request.SetBucket(ConfigManager::getExtraConfig().s3Bucket);
   std::string keyName = computedKeyName + "gen" + std::to_string(newGen) + ".dmp";
   request.SetKey(keyName);
   auto outcome = getS3Client()->GetObject(request);
@@ -676,6 +660,9 @@ int main(int argc, char** argv) {
   
   std::string keyName = "";
   
+  // Initialize configuration
+  ConfigManager::initialize("autoc.ini");
+
   // AWS setup
   Aws::SDKOptions options;
   Aws::InitAPI(options);
@@ -696,7 +683,7 @@ int main(int argc, char** argv) {
   // should we look up the latest run?
   if (computedKeyName.empty()) {
     Aws::S3::Model::ListObjectsV2Request listFolders;
-    listFolders.SetBucket("autoc-storage"); // TODO extraCfg
+    listFolders.SetBucket(ConfigManager::getExtraConfig().s3Bucket);
     listFolders.SetPrefix("autoc-");
     listFolders.SetDelimiter("/");
 
@@ -727,7 +714,7 @@ int main(int argc, char** argv) {
 
   // ok for this run, look for the last generation
   Aws::S3::Model::ListObjectsV2Request listItem;
-  listItem.SetBucket("autoc-storage"); // TODO extraCfg
+  listItem.SetBucket(ConfigManager::getExtraConfig().s3Bucket);
   listItem.SetPrefix(computedKeyName + "gen");
   bool isTruncated = false;
   do {

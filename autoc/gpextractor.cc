@@ -21,114 +21,22 @@
 #include "../include/gp.h"
 #include "minisim.h"
 #include "gp_bytecode.h"
+#include "config_manager.h"
+#include "autoc.h"
+#include "threadpool.h"
 
-// Node set definitions (from autoc.h)
-enum Operators {
-  ADD = 0, SUB, MUL, DIV,
-  IF, EQ, GT,
-  SIN, COS,
-  GETDPHI, GETDTHETA, GETDTARGET, GETDHOME, GETVEL,
-  GETPITCH, GETROLL, GETTHROTTLE,
-  SETPITCH, SETROLL, SETTHROTTLE,
-  GETALPHA, GETBETA, GETVELX, GETVELY, GETVELZ,
-  GETROLL_RAD, GETPITCH_RAD,
-  CLAMP, ATAN2, ABS, SQRT, MIN, MAX,
-  PI, ZERO, ONE, TWO, PROGN, _END
-};
-const int OPERATORS_NR_ITEM = _END;
+// Node set definitions and createNodeSet function are now in autoc-eval.cc
 
-// Simple createNodeSet function for GP loading
-void createNodeSet(GPAdfNodeSet& adfNs)
-{
-  // Reserve space for the node sets
-  adfNs.reserveSpace(1);
+// MyGene and MyGP classes are now in autoc.h
 
-  // Now define the function and terminal set for each ADF and place
-  // function/terminal sets into overall ADF container
-  GPNodeSet& ns = *new GPNodeSet(OPERATORS_NR_ITEM);
-
-  adfNs.put(0, ns);
-
-  // Define functions/terminals and place them into the appropriate
-  // sets.  Terminals take two arguments, functions three (the third
-  // parameter is the number of arguments the function has)
-  ns.putNode(*new GPNode(ADD, "ADD", 2));
-  ns.putNode(*new GPNode(SUB, "SUB", 2));
-  ns.putNode(*new GPNode(MUL, "MUL", 2));
-  ns.putNode(*new GPNode(DIV, "DIV", 2));
-  ns.putNode(*new GPNode(IF, "IF", 3));
-  ns.putNode(*new GPNode(EQ, "EQ", 2));
-  ns.putNode(*new GPNode(GT, "GT", 2));
-  ns.putNode(*new GPNode(SETPITCH, "SETPITCH", 1));
-  ns.putNode(*new GPNode(SETROLL, "SETROLL", 1));
-  ns.putNode(*new GPNode(SETTHROTTLE, "SETTHROTTLE", 1));
-  ns.putNode(*new GPNode(GETPITCH, "GETPITCH"));
-  ns.putNode(*new GPNode(GETROLL, "GETROLL"));
-  ns.putNode(*new GPNode(GETTHROTTLE, "GETTHROTTLE"));
-  ns.putNode(*new GPNode(SIN, "SIN", 1));
-  ns.putNode(*new GPNode(COS, "COS", 1));
-  ns.putNode(*new GPNode(PI, "PI"));
-  ns.putNode(*new GPNode(ZERO, "0"));
-  ns.putNode(*new GPNode(ONE, "1"));
-  ns.putNode(*new GPNode(TWO, "2"));
-  ns.putNode(*new GPNode(PROGN, "PROGN", 2));
-  ns.putNode(*new GPNode(GETDPHI, "GETDPHI", 1));
-  ns.putNode(*new GPNode(GETDTHETA, "GETDTHETA", 1));
-  ns.putNode(*new GPNode(GETDTARGET, "GETDTARGET", 1));
-  ns.putNode(*new GPNode(GETVEL, "GETVEL"));
-  ns.putNode(*new GPNode(GETDHOME, "GETDHOME"));
-  ns.putNode(*new GPNode(GETALPHA, "GETALPHA"));
-  ns.putNode(*new GPNode(GETBETA, "GETBETA"));
-  ns.putNode(*new GPNode(GETVELX, "GETVELX"));
-  ns.putNode(*new GPNode(GETVELY, "GETVELY"));
-  ns.putNode(*new GPNode(GETVELZ, "GETVELZ"));
-  ns.putNode(*new GPNode(GETROLL_RAD, "GETROLL_RAD"));
-  ns.putNode(*new GPNode(GETPITCH_RAD, "GETPITCH_RAD"));
-  ns.putNode(*new GPNode(CLAMP, "CLAMP", 3));
-  ns.putNode(*new GPNode(ATAN2, "ATAN2", 2));
-  ns.putNode(*new GPNode(ABS, "ABS", 1));
-  ns.putNode(*new GPNode(SQRT, "SQRT", 1));
-  ns.putNode(*new GPNode(MIN, "MIN", 2));
-  ns.putNode(*new GPNode(MAX, "MAX", 2));
+// Provide dummy implementations for gpextractor (real implementations are in autoc.cc)
+void MyGP::evaluate() {
+  // Dummy implementation for gpextractor - not used for loading/extraction
 }
 
-// Minimal MyGene class for loading (from autoc.h)
-const int MyGeneID = GPUserID;
-const int MyGPID = GPUserID + 1;
-
-class MyGene : public GPGene
-{
-public:
-  MyGene(const MyGene& gpo) : GPGene(gpo) { }
-  virtual GPObject& duplicate() { return *(new MyGene(*this)); }
-  MyGene(GPNode& gpo) : GPGene(gpo) {}
-  MyGene() {}
-  virtual int isA() { return MyGeneID; }
-  virtual GPObject* createObject() { return new MyGene; }
-  virtual GPGene* createChild(GPNode& gpo) {
-    return new MyGene(gpo);
-  }
-  
-  // Helper method for code generation
-  int getNodeValue() const { return node ? node->value() : -1; }
-  MyGene* getNthChild(int n) { return (MyGene*)NthChild(n); }
-};
-
-// Minimal MyGP class for loading (from autoc.h)
-class MyGP : public GP
-{
-public:
-  MyGP(MyGP& gpo) : GP(gpo) { }
-  virtual GPObject& duplicate() { return *(new MyGP(*this)); }
-  MyGP(int genes) : GP(genes) {}
-  MyGP() {}
-  virtual GPGene* createGene(GPNode& gpo) {
-    return new MyGene(gpo);
-  }
-  virtual void evaluate() {} // Dummy implementation
-  virtual int isA() { return MyGPID; }
-  virtual GPObject* createObject() { return new MyGP; }
-};
+void MyGP::evalTask(WorkerContext& context) {
+  // Dummy implementation for gpextractor - not used for loading/extraction
+}
 
 // Utility function from minisim.cc  
 boost::iostreams::stream<boost::iostreams::array_source> charArrayToIstream(const std::vector<char>& charArray) {
@@ -138,25 +46,7 @@ boost::iostreams::stream<boost::iostreams::array_source> charArrayToIstream(cons
 }
 
 std::shared_ptr<Aws::S3::S3Client> getS3Client() {
-  // real S3 or local minio?
-  Aws::Client::ClientConfiguration clientConfig;
-  Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy policy = Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::RequestDependent;
-  if (strcmp("default", "minio" /*extraCfg.s3Profile*/) != 0) {
-    clientConfig.endpointOverride = "http://localhost:9000"; // MinIO server address
-    clientConfig.scheme = Aws::Http::Scheme::HTTP; // Use HTTP instead of HTTPS
-    clientConfig.verifySSL = false; // Disable SSL verification for local testing
-
-    policy = Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never;
-  }
-
-  auto credentialsProvider = Aws::MakeShared<Aws::Auth::ProfileConfigFileAWSCredentialsProvider>("CredentialsProvider", "minio" /*extraCfg.s3Profile*/);
-
-  return Aws::MakeShared<Aws::S3::S3Client>("S3Client",
-    credentialsProvider,
-    clientConfig,
-    Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Always,
-    false
-  );
+  return ConfigManager::getS3Client();
 }
 
 void printUsage(const char* progName) {
@@ -194,7 +84,7 @@ void generateBytecode(MyGene* gene, std::vector<GPBytecode>& program) {
     return;
   }
   
-  int nodeValue = gene->getNodeValue();
+  int nodeValue = gene->geneNode().value();
   if (nodeValue == -1) {
     return;
   }
@@ -210,24 +100,24 @@ void generateBytecode(MyGene* gene, std::vector<GPBytecode>& program) {
     case GT:
       // Generate left child first, then right child, then operation
       if (gene->containerSize() >= 2) {
-        generateBytecode(gene->getNthChild(0), program);
-        generateBytecode(gene->getNthChild(1), program);
+        generateBytecode(gene->NthMyChild(0), program);
+        generateBytecode(gene->NthMyChild(1), program);
       }
       break;
       
     case IF:
       // IF needs condition, then true branch, then false branch
       if (gene->containerSize() >= 3) {
-        generateBytecode(gene->getNthChild(0), program); // condition
-        generateBytecode(gene->getNthChild(1), program); // true branch
-        generateBytecode(gene->getNthChild(2), program); // false branch
+        generateBytecode(gene->NthMyChild(0), program); // condition
+        generateBytecode(gene->NthMyChild(1), program); // true branch
+        generateBytecode(gene->NthMyChild(2), program); // false branch
       }
       break;
       
     case PROGN:
       // PROGN executes children in order, returns last
       for (int i = 0; i < gene->containerSize(); i++) {
-        generateBytecode(gene->getNthChild(i), program);
+        generateBytecode(gene->NthMyChild(i), program);
       }
       break;
       
@@ -241,7 +131,7 @@ void generateBytecode(MyGene* gene, std::vector<GPBytecode>& program) {
     case SQRT:
       // Generate child first
       if (gene->containerSize() >= 1) {
-        generateBytecode(gene->getNthChild(0), program);
+        generateBytecode(gene->NthMyChild(0), program);
       }
       break;
       
@@ -250,17 +140,17 @@ void generateBytecode(MyGene* gene, std::vector<GPBytecode>& program) {
     case MIN:
     case MAX:
       if (gene->containerSize() >= 2) {
-        generateBytecode(gene->getNthChild(0), program);
-        generateBytecode(gene->getNthChild(1), program);
+        generateBytecode(gene->NthMyChild(0), program);
+        generateBytecode(gene->NthMyChild(1), program);
       }
       break;
       
     // Three-argument operations (ternary)
     case CLAMP:
       if (gene->containerSize() >= 3) {
-        generateBytecode(gene->getNthChild(0), program); // value
-        generateBytecode(gene->getNthChild(1), program); // min
-        generateBytecode(gene->getNthChild(2), program); // max
+        generateBytecode(gene->NthMyChild(0), program); // value
+        generateBytecode(gene->NthMyChild(1), program); // min
+        generateBytecode(gene->NthMyChild(2), program); // max
       }
       break;
       
@@ -269,7 +159,7 @@ void generateBytecode(MyGene* gene, std::vector<GPBytecode>& program) {
     case GETDTHETA:
     case GETDTARGET:
       if (gene->containerSize() >= 1) {
-        generateBytecode(gene->getNthChild(0), program);
+        generateBytecode(gene->NthMyChild(0), program);
       }
       break;
       
@@ -296,7 +186,7 @@ void generateBytecode(MyGene* gene, std::vector<GPBytecode>& program) {
     default:
       // For unknown operations, fall back to processing all children
       for (int i = 0; i < gene->containerSize(); i++) {
-        generateBytecode(gene->getNthChild(i), program);
+        generateBytecode(gene->NthMyChild(i), program);
       }
       break;
   }
@@ -429,6 +319,9 @@ int main(int argc, char** argv) {
   
   std::string keyName = "";
   
+  // Initialize configuration
+  ConfigManager::initialize("autoc.ini");
+  
   // AWS setup
   Aws::SDKOptions options;
   Aws::InitAPI(options);
@@ -438,7 +331,7 @@ int main(int argc, char** argv) {
   // should we look up the latest run?
   if (computedKeyName.empty()) {
     Aws::S3::Model::ListObjectsV2Request listFolders;
-    listFolders.SetBucket("autoc-storage"); // TODO extraCfg
+    listFolders.SetBucket(ConfigManager::getExtraConfig().s3Bucket);
     listFolders.SetPrefix("autoc-");
     listFolders.SetDelimiter("/");
 
@@ -474,7 +367,7 @@ int main(int argc, char** argv) {
   } else {
     // Find the latest generation
     Aws::S3::Model::ListObjectsV2Request listItem;
-    listItem.SetBucket("autoc-storage"); // TODO extraCfg
+    listItem.SetBucket(ConfigManager::getExtraConfig().s3Bucket);
     listItem.SetPrefix(computedKeyName + "gen");
     bool isTruncated = false;
     do {
@@ -508,7 +401,7 @@ int main(int argc, char** argv) {
   // Fetch the object from S3
   EvalResults evalResults;
   Aws::S3::Model::GetObjectRequest request;
-  request.SetBucket("autoc-storage"); // TODO extraCfg
+  request.SetBucket(ConfigManager::getExtraConfig().s3Bucket);
   request.SetKey(keyName);
   auto outcome = s3_client->GetObject(request);
   

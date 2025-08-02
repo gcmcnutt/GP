@@ -26,6 +26,7 @@ From skeleton/skeleton.cc
 #include "logger.h"
 #include "pathgen.h"
 #include "gp_evaluator.h"
+#include "config_manager.h"
 
 #include <aws/core/Aws.h>
 #include <aws/s3/S3Client.h>
@@ -211,41 +212,6 @@ std::atomic_ulong nanDetector = 0;
 std::ofstream fout;
 EvalResults bestOfEvalResults;
 
-// Define configuration parameters and the neccessary array to
-// read/write the configuration to a file.  If you need more
-// variables, just add them below and insert an entry in the
-// configArray.
-GPVariables cfg;
-ExtraConfig extraCfg;
-struct GPConfigVarInformation configArray[] =
-{
-  {"PopulationSize", DATAINT, &cfg.PopulationSize},
-  {"NumberOfGenerations", DATAINT, &cfg.NumberOfGenerations},
-  {"CreationType", DATAINT, &cfg.CreationType},
-  {"CrossoverProbability", DATADOUBLE, &cfg.CrossoverProbability},
-  {"CreationProbability", DATADOUBLE, &cfg.CreationProbability},
-  {"MaximumDepthForCreation", DATAINT, &cfg.MaximumDepthForCreation},
-  {"MaximumDepthForCrossover", DATAINT, &cfg.MaximumDepthForCrossover},
-  {"SelectionType", DATAINT, &cfg.SelectionType},
-  {"TournamentSize", DATAINT, &cfg.TournamentSize},
-  {"DemeticGrouping", DATAINT, &cfg.DemeticGrouping},
-  {"DemeSize", DATAINT, &cfg.DemeSize},
-  {"DemeticMigProbability", DATADOUBLE, &cfg.DemeticMigProbability},
-  {"SwapMutationProbability", DATADOUBLE, &cfg.SwapMutationProbability},
-  {"ShrinkMutationProbability", DATADOUBLE, &cfg.ShrinkMutationProbability},
-  {"AddBestToNewPopulation", DATAINT, &cfg.AddBestToNewPopulation},
-  {"SteadyState", DATAINT, &cfg.SteadyState},
-  {"SimNumPathsPerGeneration", DATAINT, &extraCfg.simNumPathsPerGen},
-  {"EvalThreads", DATAINT, &extraCfg.evalThreads},
-  {"PathGeneratorMethod", DATASTRING, &extraCfg.generatorMethod},
-  {"MinisimProgram", DATASTRING, &extraCfg.minisimProgram},
-  {"MinisimPortOverride", DATAINT, &extraCfg.minisimPortOverride},
-  {"S3Bucket", DATASTRING, &extraCfg.s3Bucket},
-  {"S3Profile", DATASTRING, &extraCfg.s3Profile},
-  {"EvaluateMode", DATAINT, &extraCfg.evaluateMode},
-  {"BytecodeFile", DATASTRING, &extraCfg.bytecodeFile},
-  {"", DATAINT, NULL}
-};
 
 
 ThreadPool* threadPool;
@@ -264,26 +230,7 @@ std::string generate_iso8601_timestamp() {
 }
 
 std::shared_ptr<Aws::S3::S3Client> getS3Client() {
-  if (strcmp("default", extraCfg.s3Profile) != 0) {
-
-    Aws::Client::ClientConfiguration clientConfig;
-    clientConfig.endpointOverride = "http://localhost:9000"; // MinIO server address
-    clientConfig.scheme = Aws::Http::Scheme::HTTP; // Use HTTP instead of HTTPS
-    clientConfig.verifySSL = false; // Disable SSL verification for local testing
-
-    auto policy = Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never;
-    auto credentialsProvider = Aws::MakeShared<Aws::Auth::ProfileConfigFileAWSCredentialsProvider>("CredentialsProvider", extraCfg.s3Profile);
-    auto s3_client = Aws::MakeShared<Aws::S3::S3Client>("S3Client",
-      credentialsProvider,
-      clientConfig,
-      Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
-      false
-    );
-    return s3_client;
-  }
-  else {
-    return Aws::MakeShared<Aws::S3::S3Client>("S3Client");
-  }
+  return ConfigManager::getS3Client();
 }
 
 class MyPopulation : public GPPopulation
@@ -325,7 +272,7 @@ public:
     if (printEval) {
       // now put the resulting elements into the S3 object
       Aws::S3::Model::PutObjectRequest request;
-      request.SetBucket(extraCfg.s3Bucket);
+      request.SetBucket(ConfigManager::getExtraConfig().s3Bucket);
 
       // path name is $base/RunDate/gen$gen.dmp
       request.SetKey(computedKeyName);
@@ -611,23 +558,23 @@ int main()
   // Init GP system.
   GPInit(1, -1);
 
-  // Read configuration file.
-  GPConfiguration config(*logger.info(), "autoc.ini", configArray);
+  // Initialize ConfigManager (this replaces the old GPConfiguration call)
+  ConfigManager::initialize("autoc.ini", *logger.info());
 
   // AWS setup
   Aws::SDKOptions options;
   Aws::InitAPI(options);
 
   // initialize workers
-  threadPool = new ThreadPool(extraCfg);
+  threadPool = new ThreadPool(ConfigManager::getExtraConfig());
 
   // Print the configuration
-  *logger.info() << cfg << endl;
-  *logger.info() << "SimNumPathsPerGen: " << extraCfg.simNumPathsPerGen << endl;
-  *logger.info() << "EvalThreads: " << extraCfg.evalThreads << endl;
-  *logger.info() << "MinisimProgram: " << extraCfg.minisimProgram << endl;
-  *logger.info() << "MinisimPortOverride: " << extraCfg.minisimPortOverride << endl;
-  *logger.info() << "EvaluateMode: " << extraCfg.evaluateMode << endl << endl;
+  *logger.info() << ConfigManager::getGPConfig() << endl;
+  *logger.info() << "SimNumPathsPerGen: " << ConfigManager::getExtraConfig().simNumPathsPerGen << endl;
+  *logger.info() << "EvalThreads: " << ConfigManager::getExtraConfig().evalThreads << endl;
+  *logger.info() << "MinisimProgram: " << ConfigManager::getExtraConfig().minisimProgram << endl;
+  *logger.info() << "MinisimPortOverride: " << ConfigManager::getExtraConfig().minisimPortOverride << endl;
+  *logger.info() << "EvaluateMode: " << ConfigManager::getExtraConfig().evaluateMode << endl << endl;
 
   // Create the adf function/terminal set and print it out.
   createNodeSet(adfNs);
@@ -643,17 +590,17 @@ int main()
   ofstream bout(strStatFile.str());
 
   // prime the paths?
-  generationPaths = generateSmoothPaths(extraCfg.generatorMethod, extraCfg.simNumPathsPerGen, SIM_PATH_BOUNDS, SIM_PATH_BOUNDS);
+  generationPaths = generateSmoothPaths(ConfigManager::getExtraConfig().generatorMethod, ConfigManager::getExtraConfig().simNumPathsPerGen, SIM_PATH_BOUNDS, SIM_PATH_BOUNDS);
 
-  if (extraCfg.evaluateMode) {
+  if (ConfigManager::getExtraConfig().evaluateMode) {
     // Evaluation mode: use bytecode interpreter with external simulators
     *logger.info() << "Running in bytecode evaluation mode with external simulators..." << endl;
-    *logger.info() << "Loading bytecode file: " << extraCfg.bytecodeFile << endl;
+    *logger.info() << "Loading bytecode file: " << ConfigManager::getExtraConfig().bytecodeFile << endl;
     
     // Load the bytecode program
     GPBytecodeInterpreter interpreter;
-    if (!interpreter.loadProgram(extraCfg.bytecodeFile)) {
-      *logger.error() << "Failed to load bytecode file: " << extraCfg.bytecodeFile << endl;
+    if (!interpreter.loadProgram(ConfigManager::getExtraConfig().bytecodeFile)) {
+      *logger.error() << "Failed to load bytecode file: " << ConfigManager::getExtraConfig().bytecodeFile << endl;
       exit(1);
     }
     
@@ -837,7 +784,7 @@ int main()
     // Store results to S3
     if (bestOfEvalResults.pathList.size() > 0) {
       Aws::S3::Model::PutObjectRequest request;
-      request.SetBucket(extraCfg.s3Bucket);
+      request.SetBucket(ConfigManager::getExtraConfig().s3Bucket);
       request.SetKey(computedKeyName);
 
       std::ostringstream oss;
@@ -859,7 +806,7 @@ int main()
     // Normal GP evolution mode
     // Create a population with this configuration
     *logger.info() << "Creating initial population ..." << endl;
-    MyPopulation* pop = new MyPopulation(cfg, adfNs);
+    MyPopulation* pop = new MyPopulation(ConfigManager::getGPConfig(), adfNs);
     pop->create();
     *logger.info() << "Ok." << endl;
     pop->createGenerationReport(1, 0, fout, bout, *logger.info());
@@ -869,14 +816,14 @@ int main()
     // through all the generations ...
     MyPopulation* newPop = NULL;
 
-    for (int gen = 1; gen <= cfg.NumberOfGenerations; gen++)
+    for (int gen = 1; gen <= ConfigManager::getGPConfig().NumberOfGenerations; gen++)
     {
       // For this generation, build a smooth path goal
-      generationPaths = generateSmoothPaths(extraCfg.generatorMethod, extraCfg.simNumPathsPerGen, SIM_PATH_BOUNDS, SIM_PATH_BOUNDS);
+      generationPaths = generateSmoothPaths(ConfigManager::getExtraConfig().generatorMethod, ConfigManager::getExtraConfig().simNumPathsPerGen, SIM_PATH_BOUNDS, SIM_PATH_BOUNDS);
 
       // Create a new generation from the old one by applying the genetic operators
-      if (!cfg.SteadyState)
-        newPop = new MyPopulation(cfg, adfNs);
+      if (!ConfigManager::getGPConfig().SteadyState)
+        newPop = new MyPopulation(ConfigManager::getGPConfig(), adfNs);
       pop->generate(*newPop);
 
       // TODO fix this pattern to use a dynamic logger
@@ -891,7 +838,7 @@ int main()
       printEval = false;
 
       // Delete the old generation and make the new the old one
-      if (!cfg.SteadyState)
+      if (!ConfigManager::getGPConfig().SteadyState)
       {
         delete pop;
         pop = newPop;
