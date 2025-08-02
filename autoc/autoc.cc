@@ -205,6 +205,9 @@ public:
     }
     
     stdFitness /= context.evalResults.pathList.size();
+    
+    // Mark fitness as valid for the GP library  
+    fitnessValid = 1;
   }
 };
 std::vector<std::vector<Path>> generationPaths;
@@ -270,6 +273,14 @@ public:
 
     // this argument should only be set if we are dumping best GP of a generation
     if (printEval) {
+      // Re-serialize the best GP with updated fitness for storage
+      MyGP* best = NthMyGP(bestOfPopulation);
+      std::vector<char> updatedBuffer;
+      boost::iostreams::stream<boost::iostreams::back_insert_device<std::vector<char>>> updatedOutStream(updatedBuffer);
+      best->save(updatedOutStream);
+      updatedOutStream.flush();
+      bestOfEvalResults.gp = updatedBuffer;
+      
       // now put the resulting elements into the S3 object
       Aws::S3::Model::PutObjectRequest request;
       request.SetBucket(ConfigManager::getExtraConfig().s3Bucket);
@@ -281,7 +292,6 @@ public:
       boost::archive::text_oarchive oa(oss);
       oa << bestOfEvalResults;
 
-      // TODO: dump out fitness
       std::shared_ptr<Aws::StringStream> ss = Aws::MakeShared<Aws::StringStream>("");
       *ss << oss.str();
       request.SetBody(ss);
@@ -521,6 +531,10 @@ void MyGP::evalTask(WorkerContext& context)
 
   // normalize
   stdFitness /= context.evalResults.pathList.size();
+  
+  // Mark fitness as valid for the GP library
+  fitnessValid = 1;
+  
 }
 
 void newHandler()
@@ -740,6 +754,9 @@ int main()
         }
         
         stdFitness /= context.evalResults.pathList.size();
+        
+        // Mark fitness as valid for the GP library
+        fitnessValid = 1;
       }
       
       double getFinalFitness() const { return stdFitness; }
