@@ -41,7 +41,9 @@
 // Custom event IDs
 enum {
   NextModelEvent = vtkCommand::UserEvent + 1,
-  PreviousModelEvent
+  PreviousModelEvent,
+  NewestModelEvent,
+  OldestModelEvent
 };
 
 class CustomInteractorStyle : public vtkInteractorStyleTrackballCamera
@@ -55,11 +57,17 @@ protected:
     vtkRenderWindowInteractor* rwi = this->Interactor;
     std::string key = rwi->GetKeySym();
 
-    if (key == "n" || key == "N") {
+    if (key == "n") {
       this->InvokeEvent(NextModelEvent, nullptr);
     }
-    else if (key == "p" || key == "P") {
+    else if (key == "N") {
+      this->InvokeEvent(NewestModelEvent, nullptr);
+    }
+    else if (key == "p") {
       this->InvokeEvent(PreviousModelEvent, nullptr);
+    }
+    else if (key == "P") {
+      this->InvokeEvent(OldestModelEvent, nullptr);
     }
     else {
       vtkInteractorStyleTrackballCamera::OnChar();
@@ -75,6 +83,8 @@ public:
   bool isRunning();
   bool updateGenerationDisplay(int genNumber);
   void updateTextDisplay(int generation, double fitness);
+  void jumpToNewestGeneration();
+  void jumpToOldestGeneration();
 
   int genNumber = 0;
   

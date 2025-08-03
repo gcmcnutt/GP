@@ -6,9 +6,7 @@
 * replay functions
   - select board
   - animate path, including tracking behind
-  - add a couple renderer commands (capital N go to newest, capital P go to oldest)
 - consider fitness function for distance, alignment is ramped sensitivity for first couple of seconds (to allow capture from random start)
-- some memory leak is back...
 - walk various classes for copy by reference, copy by pointer, copy by value == a smaller mem leak in autoc
 - we can buffer the best run over a population vs re-running it -- save the final eval steps
 - can not interactively flip to autoc input as it attempts to use the callback port -- soften this dependency for when it is manually run (maybe if port not set, it falls back to Mouse)

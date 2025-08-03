@@ -413,6 +413,54 @@ private:
   Renderer* renderer_;
 };
 
+class NewestModelCommand : public vtkCommand {
+public:
+  static NewestModelCommand* New() {
+    return new NewestModelCommand();
+  }
+  vtkTypeMacro(NewestModelCommand, vtkCommand);
+
+  void SetRenderer(Renderer* renderer) { renderer_ = renderer; }
+
+  void Execute(vtkObject* caller, unsigned long eventId, void* callData) override {
+    if (renderer_) {
+      std::cout << "Jump to newest generation..." << std::endl;
+      // Find the newest generation by getting the lowest generation number (highest actual generation)
+      renderer_->jumpToNewestGeneration();
+    }
+  }
+
+protected:
+  NewestModelCommand() : renderer_(nullptr) {}
+
+private:
+  Renderer* renderer_;
+};
+
+class OldestModelCommand : public vtkCommand {
+public:
+  static OldestModelCommand* New() {
+    return new OldestModelCommand();
+  }
+  vtkTypeMacro(OldestModelCommand, vtkCommand);
+
+  void SetRenderer(Renderer* renderer) { renderer_ = renderer; }
+
+  void Execute(vtkObject* caller, unsigned long eventId, void* callData) override {
+    if (renderer_) {
+      std::cout << "Jump to oldest generation..." << std::endl;
+      // Jump to generation 1 (stored as gen9999.dmp)
+      renderer_->jumpToOldestGeneration();
+    }
+  }
+
+protected:
+  OldestModelCommand() : renderer_(nullptr) {}
+
+private:
+  Renderer* renderer_;
+};
+
 
 void Renderer::initialize() {
   // Create a renderer and render window interactor
@@ -433,10 +481,16 @@ void Renderer::initialize() {
   nextModelCommand->SetRenderer(this);
   vtkNew<PreviousModelCommand> previousModelCommand;
   previousModelCommand->SetRenderer(this);
+  vtkNew<NewestModelCommand> newestModelCommand;
+  newestModelCommand->SetRenderer(this);
+  vtkNew<OldestModelCommand> oldestModelCommand;
+  oldestModelCommand->SetRenderer(this);
 
   // Add observers for the custom events
   interactorStyle->AddObserver(NextModelEvent, nextModelCommand);
   interactorStyle->AddObserver(PreviousModelEvent, previousModelCommand);
+  interactorStyle->AddObserver(NewestModelEvent, newestModelCommand);
+  interactorStyle->AddObserver(OldestModelEvent, oldestModelCommand);
 
   // Add window resize observer
   vtkNew<WindowResizeCommand> resizeCommand;
@@ -888,6 +942,14 @@ int main(int argc, char** argv) {
   // display initial data
   renderer.genNumber = extractGenNumber(keyName);
   renderer.updateGenerationDisplay(renderer.genNumber);
+  
+  // Print keyboard controls
+  std::cout << "\nKeyboard Controls:" << std::endl;
+  std::cout << "  n - Next generation" << std::endl;
+  std::cout << "  p - Previous generation" << std::endl;
+  std::cout << "  N - Jump to newest generation" << std::endl;
+  std::cout << "  P - Jump to oldest generation (generation 1)" << std::endl;
+  std::cout << "  q - Quit" << std::endl;
 
   // kick it off
   renderer.renderWindowInteractor->Start();
@@ -1086,7 +1148,54 @@ bool loadBlackboxData() {
   return parseBlackboxData(csvData);
 }
 
+void Renderer::jumpToNewestGeneration() {
+  // The newest generation has the lowest generation number (because of 10000-gen numbering)
+  // We need to find the lowest numbered generation file in S3
+  
+  extern std::string computedKeyName;
+  auto s3_client = getS3Client();
+  
+  Aws::S3::Model::ListObjectsV2Request listItem;
+  listItem.SetBucket(ConfigManager::getExtraConfig().s3Bucket);
+  listItem.SetPrefix(computedKeyName + "gen");
+  
+  std::string newestKeyName = "";
+  int lowestGenNumber = 10000; // Start with highest possible
+  
+  bool isTruncated = false;
+  do {
+    auto outcome = s3_client->ListObjectsV2(listItem);
+    if (outcome.IsSuccess()) {
+      for (const auto& object : outcome.GetResult().GetContents()) {
+        int genNum = extractGenNumber(object.GetKey());
+        if (genNum != -1 && genNum < lowestGenNumber) {
+          lowestGenNumber = genNum;
+          newestKeyName = object.GetKey();
+        }
+      }
+      
+      isTruncated = outcome.GetResult().GetIsTruncated();
+      if (isTruncated) {
+        listItem.SetContinuationToken(outcome.GetResult().GetNextContinuationToken());
+      }
+    }
+    else {
+      std::cerr << "Error listing objects: " << outcome.GetError().GetMessage() << std::endl;
+      return;
+    }
+  } while (isTruncated);
+  
+  if (!newestKeyName.empty()) {
+    genNumber = lowestGenNumber;
+    updateGenerationDisplay(genNumber);
+  }
+}
 
+void Renderer::jumpToOldestGeneration() {
+  // Generation 1 is stored as gen9999.dmp
+  genNumber = 9999;
+  updateGenerationDisplay(genNumber);
+}
 
 // Print usage information
 void printUsage(const char* progName) {
