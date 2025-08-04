@@ -37,13 +37,17 @@
 
 #define FIELD_SIZE 100.0
 #define FIELD_GAP 10.0
+#define MSPRCOVERRIDE_FLAG "MSPRCOVERRIDE"
 
 // Custom event IDs
 enum {
   NextModelEvent = vtkCommand::UserEvent + 1,
   PreviousModelEvent,
   NewestModelEvent,
-  OldestModelEvent
+  OldestModelEvent,
+  NextTestEvent,
+  PreviousTestEvent,
+  AllFlightEvent
 };
 
 class CustomInteractorStyle : public vtkInteractorStyleTrackballCamera
@@ -69,6 +73,15 @@ protected:
     else if (key == "P") {
       this->InvokeEvent(OldestModelEvent, nullptr);
     }
+    else if (key == "t") {
+      this->InvokeEvent(NextTestEvent, nullptr);
+    }
+    else if (key == "r") {
+      this->InvokeEvent(PreviousTestEvent, nullptr);
+    }
+    else if (key == "a") {
+      this->InvokeEvent(AllFlightEvent, nullptr);
+    }
     else {
       vtkInteractorStyleTrackballCamera::OnChar();
     }
@@ -76,6 +89,14 @@ protected:
 };
 
 vtkStandardNewMacro(CustomInteractorStyle);
+
+// Test span structure for MSPRCOVERRIDE segments
+struct TestSpan {
+  size_t startIndex;
+  size_t endIndex;
+  unsigned long startTime;
+  unsigned long endTime;
+};
 
 class Renderer {
 public:
@@ -85,12 +106,22 @@ public:
   void updateTextDisplay(int generation, double fitness);
   void jumpToNewestGeneration();
   void jumpToOldestGeneration();
+  void nextTest();
+  void previousTest();
+  void showAllFlight();
+  void extractTestSpans();
 
   int genNumber = 0;
   
   // Store current generation and fitness for resize updates
   int currentGeneration = 0;
   double currentFitness = 0.0;
+  
+  // Test span navigation state
+  std::vector<TestSpan> testSpans;
+  int currentTestIndex = 0;
+  bool showingFullFlight = false;
+  bool inDecodeMode = false;
 
   vtkSmartPointer<vtkRenderWindow> renderWindow;
   vtkSmartPointer<vtkRenderWindowInteractor> renderWindowInteractor;
@@ -102,16 +133,20 @@ private:
   vtkSmartPointer<vtkAppendPolyData> segmentGaps;
   vtkSmartPointer<vtkAppendPolyData> planeData;
   vtkSmartPointer<vtkAppendPolyData> blackboxTapes;
+  vtkSmartPointer<vtkAppendPolyData> blackboxHighlightTapes;  // For highlighted test spans
 
   vtkSmartPointer<vtkActor> actor1;
   vtkSmartPointer<vtkActor> actor2;
   vtkSmartPointer<vtkActor> actor3;
   vtkSmartPointer<vtkActor> blackboxActor;
+  vtkSmartPointer<vtkActor> blackboxHighlightActor;  // For highlighted test spans
   
   vtkSmartPointer<vtkTextActor> generationTextActor;
   vtkSmartPointer<vtkTextActor> generationValueActor;
   vtkSmartPointer<vtkTextActor> fitnessTextActor;
   vtkSmartPointer<vtkTextActor> fitnessValueActor;
+  vtkSmartPointer<vtkTextActor> testTextActor;
+  vtkSmartPointer<vtkTextActor> testValueActor;
 
   Eigen::Vector3d renderingOffset(int i); // locate a coordinate offset for our rendering screen
   vtkSmartPointer<vtkPolyData> createPointSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> points);
@@ -121,6 +156,7 @@ private:
   std::vector<Eigen::Vector3d> stateToVector(const std::vector<AircraftState> path);
   std::vector<Eigen::Vector3d> stateToOrientation(const std::vector<AircraftState> state);
   double extractFitnessFromGP(const std::vector<char>& gpData);
+  void createHighlightedFlightTapes(Eigen::Vector3d offset);
 };
 
 #endif

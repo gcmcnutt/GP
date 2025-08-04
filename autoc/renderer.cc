@@ -35,12 +35,15 @@ vtkSmartPointer<vtkAppendPolyData> blackboxTape;
 std::vector<Eigen::Vector3d> blackboxPoints;
 std::vector<Eigen::Vector3d> blackboxNormals;
 std::vector<AircraftState> blackboxAircraftStates;
+std::vector<AircraftState> fullBlackboxAircraftStates;  // Store full flight for span extraction
 Eigen::Vector3d blackboxOrigin(0.0, 0.0, 0.0);
 double blackboxTimeOffset = 0.0;
+std::vector<std::string> csvLines;  // Store CSV lines for span analysis
 
 // Forward declarations
 bool parseBlackboxData(const std::string& csvData);
 bool loadBlackboxData();
+void updateBlackboxForCurrentTest();
 void printUsage(const char* progName);
 
 std::shared_ptr<Aws::S3::S3Client> getS3Client() {
@@ -232,6 +235,13 @@ bool Renderer::updateGenerationDisplay(int newGen) {
   this->segmentGaps->RemoveAllInputs();
   this->planeData->RemoveAllInputs();
   this->blackboxTapes->RemoveAllInputs();
+  this->blackboxHighlightTapes->RemoveAllInputs();
+  
+  // Always ensure highlight tapes has at least empty data to prevent VTK pipeline errors
+  vtkNew<vtkPolyData> emptyHighlightData;
+  vtkNew<vtkPoints> emptyHighlightPoints;
+  emptyHighlightData->SetPoints(emptyHighlightPoints);
+  this->blackboxHighlightTapes->AddInputData(emptyHighlightData);
 
   int maxArenas = (!blackboxAircraftStates.empty()) ? 1 : evalResults.pathList.size();
   for (int i = 0; i < maxArenas; i++) {
@@ -288,18 +298,29 @@ bool Renderer::updateGenerationDisplay(int newGen) {
       // Center blackbox data in the arena by adding the arena offset
       // The blackbox data is already origin-centered, so we add the arena offset to position it properly
       Eigen::Vector3d blackboxOffset = offset;
-      std::cout << "Arena offset: (" << offset[0] << "," << offset[1] << "," << offset[2] << ")" << std::endl;
-      std::cout << "Blackbox states: " << blackboxAircraftStates.size() << std::endl;
-      if (blackboxAircraftStates.size() > 0) {
-        auto firstPos = blackboxAircraftStates[0].getPosition();
-        auto lastPos = blackboxAircraftStates.back().getPosition();
-        std::cout << "First blackbox point: (" << firstPos[0] << "," << firstPos[1] << "," << firstPos[2] << ")" << std::endl;
-        std::cout << "Last blackbox point: (" << lastPos[0] << "," << lastPos[1] << "," << lastPos[2] << ")" << std::endl;
-      }
       
       // Use the same rendering pipeline as the blue/yellow tape
       std::vector<Eigen::Vector3d> a = stateToVector(blackboxAircraftStates);
-      this->blackboxTapes->AddInputData(createTapeSet(blackboxOffset, a, stateToOrientation(blackboxAircraftStates)));
+      
+      // Only create tape if we have enough points
+      if (a.size() >= 2) {
+        if (inDecodeMode && !testSpans.empty() && !showingFullFlight) {
+          // Create regular tape for current test span only
+          this->blackboxTapes->AddInputData(createTapeSet(blackboxOffset, a, stateToOrientation(blackboxAircraftStates)));
+          // Reset opacity to full brightness for single span display
+          blackboxActor->GetProperty()->SetOpacity(1.0);
+          blackboxActor->GetBackfaceProperty()->SetOpacity(1.0);
+        } else if (inDecodeMode && showingFullFlight && !testSpans.empty()) {
+          // Show full flight with highlighted test spans
+          createHighlightedFlightTapes(blackboxOffset);
+        } else {
+          // Regular blackbox rendering (no test spans or not in decode mode)
+          this->blackboxTapes->AddInputData(createTapeSet(blackboxOffset, a, stateToOrientation(blackboxAircraftStates)));
+          // Reset opacity to full brightness for regular display
+          blackboxActor->GetProperty()->SetOpacity(1.0);
+          blackboxActor->GetBackfaceProperty()->SetOpacity(1.0);
+        }
+      }
     }
   }
 
@@ -311,6 +332,7 @@ bool Renderer::updateGenerationDisplay(int newGen) {
   // Only update blackbox tapes if there's blackbox data
   if (!blackboxAircraftStates.empty()) {
     this->blackboxTapes->Update();
+    this->blackboxHighlightTapes->Update();
   }
 
   // Update the window title
@@ -461,6 +483,75 @@ private:
   Renderer* renderer_;
 };
 
+class NextTestCommand : public vtkCommand {
+public:
+  static NextTestCommand* New() {
+    return new NextTestCommand();
+  }
+  vtkTypeMacro(NextTestCommand, vtkCommand);
+
+  void SetRenderer(Renderer* renderer) { renderer_ = renderer; }
+
+  void Execute(vtkObject* caller, unsigned long eventId, void* callData) override {
+    if (renderer_) {
+      std::cout << "Next test..." << std::endl;
+      renderer_->nextTest();
+    }
+  }
+
+protected:
+  NextTestCommand() : renderer_(nullptr) {}
+
+private:
+  Renderer* renderer_;
+};
+
+class PreviousTestCommand : public vtkCommand {
+public:
+  static PreviousTestCommand* New() {
+    return new PreviousTestCommand();
+  }
+  vtkTypeMacro(PreviousTestCommand, vtkCommand);
+
+  void SetRenderer(Renderer* renderer) { renderer_ = renderer; }
+
+  void Execute(vtkObject* caller, unsigned long eventId, void* callData) override {
+    if (renderer_) {
+      std::cout << "Previous test..." << std::endl;
+      renderer_->previousTest();
+    }
+  }
+
+protected:
+  PreviousTestCommand() : renderer_(nullptr) {}
+
+private:
+  Renderer* renderer_;
+};
+
+class AllFlightCommand : public vtkCommand {
+public:
+  static AllFlightCommand* New() {
+    return new AllFlightCommand();
+  }
+  vtkTypeMacro(AllFlightCommand, vtkCommand);
+
+  void SetRenderer(Renderer* renderer) { renderer_ = renderer; }
+
+  void Execute(vtkObject* caller, unsigned long eventId, void* callData) override {
+    if (renderer_) {
+      std::cout << "Show all flight..." << std::endl;
+      renderer_->showAllFlight();
+    }
+  }
+
+protected:
+  AllFlightCommand() : renderer_(nullptr) {}
+
+private:
+  Renderer* renderer_;
+};
+
 
 void Renderer::initialize() {
   // Create a renderer and render window interactor
@@ -485,12 +576,21 @@ void Renderer::initialize() {
   newestModelCommand->SetRenderer(this);
   vtkNew<OldestModelCommand> oldestModelCommand;
   oldestModelCommand->SetRenderer(this);
+  vtkNew<NextTestCommand> nextTestCommand;
+  nextTestCommand->SetRenderer(this);
+  vtkNew<PreviousTestCommand> previousTestCommand;
+  previousTestCommand->SetRenderer(this);
+  vtkNew<AllFlightCommand> allFlightCommand;
+  allFlightCommand->SetRenderer(this);
 
   // Add observers for the custom events
   interactorStyle->AddObserver(NextModelEvent, nextModelCommand);
   interactorStyle->AddObserver(PreviousModelEvent, previousModelCommand);
   interactorStyle->AddObserver(NewestModelEvent, newestModelCommand);
   interactorStyle->AddObserver(OldestModelEvent, oldestModelCommand);
+  interactorStyle->AddObserver(NextTestEvent, nextTestCommand);
+  interactorStyle->AddObserver(PreviousTestEvent, previousTestCommand);
+  interactorStyle->AddObserver(AllFlightEvent, allFlightCommand);
 
   // Add window resize observer
   vtkNew<WindowResizeCommand> resizeCommand;
@@ -540,6 +640,7 @@ void Renderer::initialize() {
   segmentGaps = vtkSmartPointer<vtkAppendPolyData>::New();
   planeData = vtkSmartPointer<vtkAppendPolyData>::New();
   blackboxTapes = vtkSmartPointer<vtkAppendPolyData>::New();
+  blackboxHighlightTapes = vtkSmartPointer<vtkAppendPolyData>::New();
 
   // Temporary until first update
   vtkNew<vtkPolyData> emptyPolyData;
@@ -552,6 +653,7 @@ void Renderer::initialize() {
   segmentGaps->AddInputData(emptyPolyData);
   planeData->AddInputData(emptyPolyData);
   blackboxTapes->AddInputData(emptyPolyData);
+  blackboxHighlightTapes->AddInputData(emptyPolyData);
 
   // Update planeData to ensure it has an input port
   planeData->Update();
@@ -580,7 +682,7 @@ void Renderer::initialize() {
   tubeFilter3->SetNumberOfSides(10);
   mapper3->SetInputConnection(tubeFilter3->GetOutputPort());
 
-  // Create blackbox actor
+  // Create blackbox actor (dimmed for full flight display)
   blackboxActor = vtkSmartPointer<vtkActor>::New();
   vtkNew<vtkPolyDataMapper> blackboxMapper;
   blackboxMapper->SetInputConnection(blackboxTapes->GetOutputPort());
@@ -610,6 +712,37 @@ void Renderer::initialize() {
   
   // Set the back face property
   blackboxActor->SetBackfaceProperty(blackboxBackProperty);
+  
+  // Create blackbox highlight actor (bright for test spans)
+  blackboxHighlightActor = vtkSmartPointer<vtkActor>::New();
+  vtkNew<vtkPolyDataMapper> blackboxHighlightMapper;
+  blackboxHighlightMapper->SetInputConnection(blackboxHighlightTapes->GetOutputPort());
+  blackboxHighlightActor->SetMapper(blackboxHighlightMapper);
+  
+  // Set properties for highlighted test spans (brighter)
+  vtkProperty* highlightProperty = blackboxHighlightActor->GetProperty();
+  highlightProperty->SetColor(0.0, 1.0, 0.0);  // Bright green for top face
+  highlightProperty->SetLighting(true);
+  highlightProperty->SetInterpolation(VTK_FLAT);
+  highlightProperty->SetBackfaceCulling(false);
+  highlightProperty->SetFrontfaceCulling(false);
+  highlightProperty->SetAmbient(0.2);
+  highlightProperty->SetDiffuse(1.0);
+  highlightProperty->SetSpecular(0.2);
+  highlightProperty->SetSpecularPower(20);
+  highlightProperty->SetOpacity(1.0);
+  
+  // Create a new property for the back face (bottom) of highlights
+  vtkNew<vtkProperty> highlightBackProperty;
+  highlightBackProperty->SetColor(1.0, 0.6, 0.0);  // Bright orange for bottom face
+  highlightBackProperty->SetAmbient(0.2);
+  highlightBackProperty->SetDiffuse(1.0);
+  highlightBackProperty->SetSpecular(0.2);
+  highlightBackProperty->SetSpecularPower(20);
+  highlightBackProperty->SetOpacity(1.0);
+  
+  // Set the back face property for highlights
+  blackboxHighlightActor->SetBackfaceProperty(highlightBackProperty);
 
   // Update actors
   actor1->SetMapper(mapper1);
@@ -652,9 +785,10 @@ void Renderer::initialize() {
   renderer->AddActor(actor2);
   renderer->AddActor(actor3);
   
-  // Only add blackbox actor if there's blackbox data
+  // Only add blackbox actors if there's blackbox data
   if (!blackboxAircraftStates.empty()) {
     renderer->AddActor(blackboxActor);
+    renderer->AddActor(blackboxHighlightActor);
   }
 
   // Create text actors for generation and fitness display
@@ -685,6 +819,20 @@ void Renderer::initialize() {
   fitnessValueActor->GetTextProperty()->SetJustificationToLeft();
   fitnessValueActor->SetInput("0.000");
   renderer->AddActor2D(fitnessValueActor);
+
+  testTextActor = vtkSmartPointer<vtkTextActor>::New();
+  testTextActor->GetTextProperty()->SetColor(1.0, 1.0, 1.0); // White text
+  testTextActor->GetTextProperty()->SetVerticalJustificationToBottom();
+  testTextActor->GetTextProperty()->SetJustificationToRight();
+  testTextActor->SetInput("Test:");
+  renderer->AddActor2D(testTextActor);
+
+  testValueActor = vtkSmartPointer<vtkTextActor>::New();
+  testValueActor->GetTextProperty()->SetColor(1.0, 1.0, 1.0); // White text
+  testValueActor->GetTextProperty()->SetVerticalJustificationToBottom();
+  testValueActor->GetTextProperty()->SetJustificationToLeft();
+  testValueActor->SetInput("-");
+  renderer->AddActor2D(testValueActor);
 
   // Set initial text display
   updateTextDisplay(0, 0.0);
@@ -776,9 +924,10 @@ void Renderer::updateTextDisplay(int generation, double fitness) {
   int lineSpacing = fontSize + 6;
   
   // Position text so bottom-right corner is at anchor point
-  // In VTK coordinates: fitness is lower (smaller Y), generation is higher (larger Y)
-  int fitnessY = anchorY;
-  int generationY = anchorY + lineSpacing;
+  // In VTK coordinates: test is lowest, fitness is middle, generation is highest
+  int testY = anchorY;
+  int fitnessY = anchorY + lineSpacing;
+  int generationY = anchorY + (2 * lineSpacing);
   
   // Labels and values positioned relative to anchor
   int labelX = anchorX - 80; // Labels positioned left of anchor for right-justification
@@ -789,12 +938,16 @@ void Renderer::updateTextDisplay(int generation, double fitness) {
   generationValueActor->GetTextProperty()->SetFontSize(fontSize);
   fitnessTextActor->GetTextProperty()->SetFontSize(fontSize);
   fitnessValueActor->GetTextProperty()->SetFontSize(fontSize);
+  testTextActor->GetTextProperty()->SetFontSize(fontSize);
+  testValueActor->GetTextProperty()->SetFontSize(fontSize);
   
   // Update positions - labels right-justified, values left-justified
   generationTextActor->SetPosition(labelX, generationY);
   generationValueActor->SetPosition(valueX, generationY);
   fitnessTextActor->SetPosition(labelX, fitnessY);
   fitnessValueActor->SetPosition(valueX, fitnessY);
+  testTextActor->SetPosition(labelX, testY);
+  testValueActor->SetPosition(valueX, testY);
   
   // Update text content - use same formula as title bar (10000 - generation)
   int realGeneration = 10000 - generation;
@@ -803,6 +956,25 @@ void Renderer::updateTextDisplay(int generation, double fitness) {
   std::ostringstream fitnessStream;
   fitnessStream << std::fixed << std::setprecision(3) << fitness;
   fitnessValueActor->SetInput(fitnessStream.str().c_str());
+  
+  // Update test display based on decode mode and current state
+  if (inDecodeMode && !testSpans.empty()) {
+    // Make test actors visible
+    testTextActor->SetVisibility(1);
+    testValueActor->SetVisibility(1);
+    
+    if (showingFullFlight) {
+      testValueActor->SetInput("All");
+    } else if (currentTestIndex >= 0 && currentTestIndex < testSpans.size()) {
+      testValueActor->SetInput(std::to_string(currentTestIndex + 1).c_str());
+    } else {
+      testValueActor->SetInput("-");
+    }
+  } else {
+    // Hide test actors when not in decode mode or no test spans
+    testTextActor->SetVisibility(0);
+    testValueActor->SetVisibility(0);
+  }
 }
 
 // Extract the generation number from the key
@@ -873,6 +1045,20 @@ int main(int argc, char** argv) {
     }
     if (!blackboxAircraftStates.empty()) {
       std::cout << "Blackbox data loaded: " << blackboxAircraftStates.size() << " states" << std::endl;
+      renderer.inDecodeMode = true;
+      renderer.extractTestSpans();
+      
+      if (!renderer.testSpans.empty()) {
+        std::cout << "Found " << renderer.testSpans.size() << " test spans" << std::endl;
+        renderer.currentTestIndex = 0;
+        renderer.showingFullFlight = false;
+        // Filter blackbox data to show first test span immediately
+        updateBlackboxForCurrentTest();
+        std::cout << "Showing test 1: " << blackboxAircraftStates.size() << " states" << std::endl;
+      } else {
+        std::cout << "No MSPRCOVERRIDE test spans found, showing full flight" << std::endl;
+        renderer.showingFullFlight = true;
+      }
     }
   }
 
@@ -949,6 +1135,11 @@ int main(int argc, char** argv) {
   std::cout << "  p - Previous generation" << std::endl;
   std::cout << "  N - Jump to newest generation" << std::endl;
   std::cout << "  P - Jump to oldest generation (generation 1)" << std::endl;
+  if (!decoderCommand.empty() && !renderer.testSpans.empty()) {
+    std::cout << "  t - Next test segment" << std::endl;
+    std::cout << "  r - Previous test segment" << std::endl;
+    std::cout << "  a - Show all flight (with test highlights)" << std::endl;
+  }
   std::cout << "  q - Quit" << std::endl;
 
   // kick it off
@@ -967,12 +1158,16 @@ bool parseBlackboxData(const std::string& csvData) {
   blackboxPoints.clear();
   blackboxNormals.clear();
   blackboxAircraftStates.clear();
+  fullBlackboxAircraftStates.clear();
+  csvLines.clear();
   
   // Find column indices
   int latIndex = -1, lonIndex = -1, altIndex = -1, timeIndex = -1;
   int quatWIndex = -1, quatXIndex = -1, quatYIndex = -1, quatZIndex = -1;
   
   while (std::getline(stream, line)) {
+    csvLines.push_back(line);  // Store all lines for span analysis
+    
     if (line.empty() || line.find("End of log") != std::string::npos) {
       continue;
     }
@@ -1057,11 +1252,6 @@ bool parseBlackboxData(const std::string& csvData) {
       
       // Filter out coincident points to avoid VTK ribbon filter issues
       if (blackboxPoints.empty() || (newPoint - blackboxPoints.back()).norm() > 0.01) {
-        // Debug output for first few points
-        if (blackboxPoints.size() < 5) {
-          std::cout << "Point " << blackboxPoints.size() << ": navPos=(" << navX << "," << navY << "," << navZ 
-                    << ") -> local=(" << x << "," << y << "," << z << ")" << std::endl;
-        }
         
         blackboxPoints.push_back(newPoint);
         
@@ -1088,14 +1278,8 @@ bool parseBlackboxData(const std::string& csvData) {
           // Create AircraftState with blackbox data
           AircraftState state(blackboxAircraftStates.size(), 20.0, velocity_vector, q, newPoint, 0.0, 0.0, 0.0, timeMs);
           blackboxAircraftStates.push_back(state);
+          fullBlackboxAircraftStates.push_back(state);  // Store full flight data
           
-          // Debug: print first few states
-          if (blackboxAircraftStates.size() <= 5) {
-            Eigen::Vector3d testNormal = q * (-Eigen::Vector3d::UnitZ());
-            std::cout << "AircraftState " << blackboxAircraftStates.size()-1 << ": quaternion=(" 
-                      << qw << "," << qx << "," << qy << "," << qz 
-                      << ") -> normal=(" << testNormal[0] << "," << testNormal[1] << "," << testNormal[2] << ")" << std::endl;
-          }
         } else {
           // Error: quaternion information is required for proper tape orientation
           std::cerr << "Error: Blackbox data missing quaternion information (quaternion[0], quaternion[1], quaternion[2], quaternion[3])" << std::endl;
@@ -1107,6 +1291,51 @@ bool parseBlackboxData(const std::string& csvData) {
   }
   
   return !blackboxAircraftStates.empty();
+}
+
+// Method to update blackbox rendering based on current test selection
+void updateBlackboxForCurrentTest() {
+  extern Renderer renderer;
+  
+  if (!renderer.inDecodeMode || fullBlackboxAircraftStates.empty()) {
+    return;
+  }
+  
+  // Always update the blackbox data, even if renderer isn't fully initialized yet
+  // The safety check for renderWindow is only needed for text display updates
+  
+  if (renderer.showingFullFlight || renderer.testSpans.empty()) {
+    // Show full flight
+    blackboxAircraftStates = fullBlackboxAircraftStates;
+  } else if (renderer.currentTestIndex >= 0 && renderer.currentTestIndex < renderer.testSpans.size()) {
+    // Show only the selected test span
+    const TestSpan& span = renderer.testSpans[renderer.currentTestIndex];
+    blackboxAircraftStates.clear();
+    
+    size_t startIdx = std::min(span.startIndex, fullBlackboxAircraftStates.size());
+    size_t endIdx = std::min(span.endIndex + 1, fullBlackboxAircraftStates.size());
+    
+    // Ensure we have valid indices
+    if (startIdx < endIdx && startIdx < fullBlackboxAircraftStates.size()) {
+      for (size_t i = startIdx; i < endIdx; i++) {
+        blackboxAircraftStates.push_back(fullBlackboxAircraftStates[i]);
+      }
+      
+      std::cout << "Showing test " << (renderer.currentTestIndex + 1) << ": " 
+                << blackboxAircraftStates.size() << " states (indices " 
+                << startIdx << "-" << (endIdx-1) << ")" << std::endl;
+    } else {
+      std::cerr << "Invalid test span indices: " << startIdx << "-" << endIdx << std::endl;
+      // Fallback to full flight
+      blackboxAircraftStates = fullBlackboxAircraftStates;
+      renderer.showingFullFlight = true;
+    }
+  }
+  
+  // Update text display (only if renderer is initialized)
+  if (renderer.renderWindow) {
+    renderer.updateTextDisplay(renderer.currentGeneration, renderer.currentFitness);
+  }
 }
 
 
@@ -1198,6 +1427,233 @@ void Renderer::jumpToOldestGeneration() {
 }
 
 // Print usage information
+void Renderer::extractTestSpans() {
+  testSpans.clear();
+  
+  if (csvLines.empty() || fullBlackboxAircraftStates.empty()) {
+    std::cerr << "No CSV data or aircraft states available for test span extraction" << std::endl;
+    return;
+  }
+  
+  // Find the flightModeFlags column index
+  int flightModeFlagsIndex = -1;
+  int timeIndex = -1;
+  
+  // Parse header to find column indices
+  if (!csvLines.empty()) {
+    std::istringstream headerStream(csvLines[0]);
+    std::string header;
+    int index = 0;
+    
+    while (std::getline(headerStream, header, ',')) {
+      // Trim whitespace from header
+      header.erase(0, header.find_first_not_of(" \t"));
+      header.erase(header.find_last_not_of(" \t") + 1);
+      
+      if (header == "flightModeFlags (flags)") {
+        flightModeFlagsIndex = index;
+      } else if (header == "time (us)" || header == "time (us) ") {
+        timeIndex = index;
+      }
+      index++;
+    }
+  }
+  
+  if (flightModeFlagsIndex == -1) {
+    std::cerr << "flightModeFlags column not found in CSV" << std::endl;
+    return;
+  }
+  
+  // Scan through data rows to find MSPRCOVERRIDE spans
+  // We need to correlate CSV rows with aircraft state indices based on sampling
+  bool inSpan = false;
+  TestSpan currentSpan;
+  size_t aircraftStateIndex = 0;
+  
+  for (size_t lineIndex = 1; lineIndex < csvLines.size(); lineIndex++) {
+    const std::string& line = csvLines[lineIndex];
+    if (line.empty() || line.find("End of log") != std::string::npos) {
+      continue;
+    }
+    
+    // Parse data row
+    std::istringstream dataStream(line);
+    std::string cell;
+    std::vector<std::string> row;
+    
+    while (std::getline(dataStream, cell, ',')) {
+      // Trim whitespace from cell
+      cell.erase(0, cell.find_first_not_of(" \t"));
+      cell.erase(cell.find_last_not_of(" \t") + 1);
+      row.push_back(cell);
+    }
+    
+    if (row.size() <= flightModeFlagsIndex) continue;
+    
+    // Check if this row would have been sampled (same logic as parseBlackboxData)
+    static unsigned long int lastSampleTime = 0;
+    const unsigned long int SAMPLE_INTERVAL_US = 50000; // 50ms in microseconds
+    
+    bool wouldBeSampled = false;
+    if (timeIndex >= 0 && timeIndex < row.size()) {
+      unsigned long int currentTime = std::stoul(row[timeIndex]);
+      if (lastSampleTime == 0 || (currentTime - lastSampleTime) >= SAMPLE_INTERVAL_US) {
+        wouldBeSampled = true;
+        lastSampleTime = currentTime;
+      }
+    } else {
+      wouldBeSampled = true; // If no time column, assume all rows are sampled
+    }
+    
+    if (!wouldBeSampled) continue;
+    
+    // This row corresponds to an aircraft state
+    if (aircraftStateIndex >= fullBlackboxAircraftStates.size()) break;
+    
+    bool hasMSPRCOVERRIDE = row[flightModeFlagsIndex].find(MSPRCOVERRIDE_FLAG) != std::string::npos;
+    unsigned long currentTime = (timeIndex >= 0 && timeIndex < row.size()) ? std::stoul(row[timeIndex]) : 0;
+    
+    if (hasMSPRCOVERRIDE && !inSpan) {
+      // Start of new span
+      currentSpan.startIndex = aircraftStateIndex;
+      currentSpan.startTime = currentTime;
+      inSpan = true;
+    } else if (!hasMSPRCOVERRIDE && inSpan) {
+      // End of current span
+      currentSpan.endIndex = aircraftStateIndex - 1;
+      currentSpan.endTime = currentTime;
+      testSpans.push_back(currentSpan);
+      inSpan = false;
+    }
+    
+    aircraftStateIndex++;
+  }
+  
+  // Handle case where span continues to end of file
+  if (inSpan) {
+    currentSpan.endIndex = aircraftStateIndex - 1;
+    currentSpan.endTime = 0; // Use 0 if no time available
+    testSpans.push_back(currentSpan);
+  }
+  
+  // Validate all spans have valid indices
+  std::vector<TestSpan> validSpans;
+  for (const TestSpan& span : testSpans) {
+    if (span.startIndex < fullBlackboxAircraftStates.size() && 
+        span.endIndex < fullBlackboxAircraftStates.size() && 
+        span.startIndex <= span.endIndex) {
+      validSpans.push_back(span);
+    } else {
+      std::cerr << "Invalid span removed: indices " << span.startIndex << "-" << span.endIndex 
+                << " (max: " << fullBlackboxAircraftStates.size() - 1 << ")" << std::endl;
+    }
+  }
+  testSpans = validSpans;
+  
+  std::cout << "Extracted " << testSpans.size() << " valid test spans from " << aircraftStateIndex << " aircraft states" << std::endl;
+  for (size_t i = 0; i < testSpans.size(); i++) {
+    std::cout << "  Test " << (i+1) << ": indices " << testSpans[i].startIndex << "-" << testSpans[i].endIndex 
+              << " (" << (testSpans[i].endIndex - testSpans[i].startIndex + 1) << " states)" << std::endl;
+  }
+}
+
+void Renderer::nextTest() {
+  if (testSpans.empty()) {
+    std::cout << "No test spans available" << std::endl;
+    return;
+  }
+  
+  if (showingFullFlight) {
+    // Switch from full flight to first test
+    currentTestIndex = 0;
+    showingFullFlight = false;
+  } else {
+    // Move to next test
+    currentTestIndex = (currentTestIndex + 1) % testSpans.size();
+  }
+  
+  // Update the blackbox rendering to show only the selected test span
+  updateBlackboxForCurrentTest();
+  
+  // Re-render the entire display
+  updateGenerationDisplay(genNumber);
+}
+
+void Renderer::previousTest() {
+  if (testSpans.empty()) {
+    std::cout << "No test spans available" << std::endl;
+    return;
+  }
+  
+  if (showingFullFlight) {
+    // Switch from full flight to last test
+    currentTestIndex = testSpans.size() - 1;
+    showingFullFlight = false;
+  } else {
+    // Move to previous test
+    currentTestIndex = (currentTestIndex - 1 + testSpans.size()) % testSpans.size();
+  }
+  
+  // Update the blackbox rendering to show only the selected test span
+  updateBlackboxForCurrentTest();
+  
+  // Re-render the entire display
+  updateGenerationDisplay(genNumber);
+}
+
+void Renderer::showAllFlight() {
+  showingFullFlight = true;
+  
+  // Restore full blackbox data
+  blackboxAircraftStates = fullBlackboxAircraftStates;
+  
+  // Update the blackbox rendering
+  updateBlackboxForCurrentTest();
+  
+  // Re-render the entire display
+  updateGenerationDisplay(genNumber);
+}
+
+void Renderer::createHighlightedFlightTapes(Eigen::Vector3d offset) {
+  if (fullBlackboxAircraftStates.empty() || testSpans.empty()) {
+    return;
+  }
+  
+  // Remove the empty data we added earlier
+  this->blackboxHighlightTapes->RemoveAllInputs();
+  
+  // Create dimmed version of full flight (25% brightness)
+  std::vector<Eigen::Vector3d> fullPoints = stateToVector(fullBlackboxAircraftStates);
+  if (fullPoints.size() >= 2) {
+    this->blackboxTapes->AddInputData(createTapeSet(offset, fullPoints, stateToOrientation(fullBlackboxAircraftStates)));
+    // Adjust opacity to 25% for dimmed effect
+    blackboxActor->GetProperty()->SetOpacity(0.25);
+    blackboxActor->GetBackfaceProperty()->SetOpacity(0.25);
+  }
+  
+  // Create bright highlighted segments for each test span
+  for (const TestSpan& span : testSpans) {
+    size_t startIdx = std::min(span.startIndex, fullBlackboxAircraftStates.size());
+    size_t endIdx = std::min(span.endIndex + 1, fullBlackboxAircraftStates.size());
+    
+    if (startIdx < endIdx && startIdx < fullBlackboxAircraftStates.size()) {
+      std::vector<AircraftState> spanStates;
+      for (size_t i = startIdx; i < endIdx; i++) {
+        spanStates.push_back(fullBlackboxAircraftStates[i]);
+      }
+      
+      if (spanStates.size() >= 2) {
+        std::vector<Eigen::Vector3d> spanPoints = stateToVector(spanStates);
+        this->blackboxHighlightTapes->AddInputData(createTapeSet(offset, spanPoints, stateToOrientation(spanStates)));
+      }
+    }
+  }
+  
+  // Ensure highlight actor is at full brightness
+  blackboxHighlightActor->GetProperty()->SetOpacity(1.0);
+  blackboxHighlightActor->GetBackfaceProperty()->SetOpacity(1.0);
+}
+
 void printUsage(const char* progName) {
   std::cout << "Usage: " << progName << " [OPTIONS]\n";
   std::cout << "Options:\n";
