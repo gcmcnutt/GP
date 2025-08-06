@@ -23,7 +23,6 @@
 - GP to autoc in inav via controls
   - selector
   - activate
-- consider PID as basic controller (perhaps some other input/output to allow for slight tuning)
 * clean shutdown method for terminating sims
   - now that a crrcsim batch runs long, perhaps have polling loop for keepalive as when autoc exits crrcsim will exit
 - develop an offline fitness validator where a recorded path set and GP can be replayed, perhaps on a different path (e.g. old GP on different path set), etc
@@ -38,6 +37,7 @@
   - blackbox logs are 1/32 which is still a lot of data, can we do subselect, perhaps 5 hz?
   - probably need to export quaternion data to blackbox so that we don't get tumble effects
 - also seems crrcsim is dependent on a valid DISPLAY even when in headless
+- enable it so that a run of a tool that looks for autoc.ini can have a command line override to an alternate file
 
 Good Runs
 - autoc-9223370305983481960-2024-11-06T05:34:53.847Z -- this is minisim large run on 25 paths

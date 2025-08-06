@@ -2,6 +2,8 @@
 #ifndef AIRCRAFT_STATE_H
 #define AIRCRAFT_STATE_H
 
+#include <cmath>
+
 #ifdef GP_BUILD
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
@@ -76,6 +78,88 @@ public:
 #ifdef GP_BUILD
 BOOST_CLASS_VERSION(Path, 1)
 #endif
+
+// Portable path provider interface for unified GP evaluation
+// Abstracts path access for both vector and single-path environments
+class PathProvider {
+public:
+    virtual ~PathProvider() = default;
+    virtual const Path& getPath(int index) const = 0;
+    virtual int getCurrentIndex() const = 0;
+    virtual int getPathSize() const = 0;
+};
+
+#ifdef GP_BUILD  
+// Full GP build: Vector-based path provider
+class VectorPathProvider : public PathProvider {
+private:
+    const std::vector<Path>& paths;
+    int currentIndex;
+    
+public:
+    VectorPathProvider(const std::vector<Path>& p, int current = 0) 
+        : paths(p), currentIndex(current) {}
+    
+    const Path& getPath(int index) const override {
+        if (index < 0) index = 0;
+        if (index >= (int)paths.size()) index = (int)paths.size() - 1;
+        return paths[index];
+    }
+    
+    int getCurrentIndex() const override { return currentIndex; }
+    int getPathSize() const override { return (int)paths.size(); }
+    void setCurrentIndex(int index) { currentIndex = index; }
+};
+#endif
+
+// Embedded build: Single path provider
+class SinglePathProvider : public PathProvider {
+private:
+    const Path& singlePath;
+    int currentIndex;
+    
+public:
+    SinglePathProvider(const Path& p, int current = 0) 
+        : singlePath(p), currentIndex(current) {}
+    
+    const Path& getPath(int index) const override {
+        // For single path, always return the same path regardless of index
+        return singlePath;
+    }
+    
+    int getCurrentIndex() const override { return currentIndex; }
+    int getPathSize() const override { return 1; }
+    void setCurrentIndex(int index) { currentIndex = index; }
+};
+
+// Forward declaration for AircraftState
+struct AircraftState;
+
+// Portable helper function for GP path indexing
+// Extracted from generated GP code to remove boost dependencies
+inline int getPathIndex(PathProvider& pathProvider, AircraftState& aircraftState, double arg) {
+    if (std::isnan(arg)) {
+        return pathProvider.getCurrentIndex();
+    }
+    
+    int steps = CLAMP_DEF((int)arg, -5, 5);
+    double distanceSoFar = pathProvider.getPath(pathProvider.getCurrentIndex()).distanceFromStart;
+    double distanceGoal = distanceSoFar + steps * SIM_RABBIT_VELOCITY * (SIM_TIME_STEP_MSEC / 1000.0);
+    int currentStep = pathProvider.getCurrentIndex();
+    
+    if (steps > 0) {
+        while (pathProvider.getPath(currentStep).distanceFromStart < distanceGoal && 
+               currentStep < pathProvider.getPathSize() - 1) {
+            currentStep++;
+        }
+    } else {
+        while (pathProvider.getPath(currentStep).distanceFromStart > distanceGoal && 
+               currentStep > 0) {
+            currentStep--;
+        }
+    }
+    return currentStep;
+}
 
 /*
 * portable aircraft state

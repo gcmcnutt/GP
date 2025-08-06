@@ -25,7 +25,6 @@ From skeleton/skeleton.cc
 #include "autoc.h"
 #include "logger.h"
 #include "pathgen.h"
-#include "gp_evaluator.h"
 #include "config_manager.h"
 
 #include <aws/core/Aws.h>
@@ -61,155 +60,6 @@ extern EvalResults bestOfEvalResults;
 extern std::ofstream fout;
 extern std::atomic_ulong nanDetector;
 
-// Special GP class for evaluation mode that uses generated code
-class EvaluationGP : public MyGP
-{
-public:
-  EvaluationGP() : MyGP(1) {}
-  
-  virtual void evaluate() override {
-    // Use the generated evaluateGP function instead of tree evaluation
-    tasks.push_back(this);
-  }
-  
-  virtual void evalTask(WorkerContext& context) override {
-    stdFitness = 0;
-    
-    // Send evaluation request to simulator using generated code
-    std::vector<char> buffer;
-    boost::iostreams::stream<boost::iostreams::back_insert_device<std::vector<char>>> outStream(buffer);
-    save(outStream);
-    outStream.flush();
-    EvalData evalData = { buffer, generationPaths };
-    sendRPC(*context.socket, evalData);
-    
-    // Get simulation results
-    context.evalResults = receiveRPC<EvalResults>(*context.socket);
-    
-    // Instead of normal GP evaluation, use the generated evaluateGP function
-    // to compute control commands and measure fitness
-    for (int i = 0; i < context.evalResults.pathList.size(); i++) {
-      auto& path = context.evalResults.pathList.at(i);
-      auto& aircraftState = context.evalResults.aircraftStateList.at(i);
-      auto& crashReason = context.evalResults.crashReasonList.at(i);
-      
-      double localFitness = 0;
-      int stepIndex = 0;
-      
-      double distance_error_sum = 0;
-      double angle_error_sum = 0;
-      double control_smoothness_sum = 0;
-      int simulation_steps = 0;
-      
-      double roll_prev = aircraftState.at(stepIndex).getRollCommand();
-      double pitch_prev = aircraftState.at(stepIndex).getPitchCommand();
-      double throttle_prev = aircraftState.at(stepIndex).getThrottleCommand();
-      
-      while (++stepIndex < aircraftState.size()) {
-        auto& stepAircraftState = aircraftState.at(stepIndex);
-        int pathIndex = stepAircraftState.getThisPathIndex();
-        
-        // Apply generated GP control logic
-        double gpResult = evaluateGP(const_cast<AircraftState&>(stepAircraftState), path, 0.0);
-        
-        double distanceFromGoal = (path.at(pathIndex).start - stepAircraftState.getPosition()).norm();
-        distanceFromGoal = distanceFromGoal * 100.0 / (2 * SIM_PATH_RADIUS_LIMIT);
-        
-        Eigen::Vector3d target_direction = (path.at(pathIndex + 1).start - path.at(pathIndex).start);
-        Eigen::Vector3d aircraft_to_target = (path.at(pathIndex).start - stepAircraftState.getPosition());
-        double dot_product = target_direction.dot(aircraft_to_target);
-        double angle_rad = std::acos(std::clamp(dot_product / (target_direction.norm() * aircraft_to_target.norm()), -1.0, 1.0));
-        angle_rad = angle_rad * 100.0 / M_PI;
-        
-        double smoothness = pow(roll_prev - stepAircraftState.getRollCommand(), 2.0);
-        smoothness += pow(pitch_prev - stepAircraftState.getPitchCommand(), 2.0);
-        smoothness += pow(throttle_prev - stepAircraftState.getThrottleCommand(), 2.0);
-        smoothness = sqrt(smoothness);
-        smoothness = smoothness * 100.0 / 3.46;
-        
-        roll_prev = stepAircraftState.getRollCommand();
-        pitch_prev = stepAircraftState.getPitchCommand();
-        throttle_prev = stepAircraftState.getThrottleCommand();
-        
-        distance_error_sum += pow(distanceFromGoal, FITNESS_DISTANCE_WEIGHT);
-        angle_error_sum += pow(angle_rad, FITNESS_ALIGNMENT_WEIGHT);
-        control_smoothness_sum += pow(smoothness, FITNESS_CONTROL_WEIGHT);
-        simulation_steps++;
-        
-        if (printEval) {
-          bestOfEvalResults = context.evalResults;
-          
-          if (stepIndex == 1) {
-            fout << "Pth:Step:   Time Idx  totDist   pathX    pathY    pathZ        X        Y        Z       dr       dp       dy   relVel     roll    pitch    power    distP   angleP controlP\n";
-          }
-          
-          Eigen::Matrix3d rotMatrix = stepAircraftState.getOrientation().toRotationMatrix();
-          Eigen::Vector3d euler;
-          
-          if (std::abs(rotMatrix(2, 0)) > 0.99999) {
-            euler[0] = 0;
-            if (rotMatrix(2, 0) > 0) {
-              euler[1] = -M_PI / 2;
-              euler[2] = -atan2(rotMatrix(1, 2), rotMatrix(0, 2));
-            } else {
-              euler[1] = M_PI / 2;
-              euler[2] = atan2(rotMatrix(1, 2), rotMatrix(0, 2));
-            }
-          } else {
-            euler[0] = atan2(rotMatrix(2, 1), rotMatrix(2, 2));
-            euler[1] = -asin(rotMatrix(2, 0));
-            euler[2] = atan2(rotMatrix(1, 0), rotMatrix(0, 0));
-          }
-          
-          char outbuf[1000];
-          sprintf(outbuf, "%03d:%04d: %06ld %3d % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f\n",
-            i, simulation_steps,
-            stepAircraftState.getSimTimeMsec(), pathIndex,
-            path.at(pathIndex).distanceFromStart,
-            path.at(pathIndex).start[0],
-            path.at(pathIndex).start[1],
-            path.at(pathIndex).start[2],
-            stepAircraftState.getPosition()[0],
-            stepAircraftState.getPosition()[1],
-            stepAircraftState.getPosition()[2],
-            euler[2],
-            euler[1],
-            euler[0],
-            stepAircraftState.getRelVel(),
-            stepAircraftState.getRollCommand(),
-            stepAircraftState.getPitchCommand(),
-            stepAircraftState.getThrottleCommand(),
-            distanceFromGoal,
-            angle_rad,
-            smoothness
-          );
-          fout << outbuf;
-        }
-      }
-      
-      double normalized_distance_error = (distance_error_sum / simulation_steps);
-      double normalized_angle_align = (angle_error_sum / simulation_steps);
-      double normalized_control_smoothness = (control_smoothness_sum / simulation_steps);
-      localFitness = normalized_distance_error + normalized_angle_align + normalized_control_smoothness;
-      
-      if (isnan(localFitness)) {
-        nanDetector++;
-      }
-      
-      if (crashReason != CrashReason::None) {
-        double fractional_distance_remaining = 1.0 - path.at(aircraftState.back().getThisPathIndex()).distanceFromStart / path.back().distanceFromStart;
-        localFitness += SIM_CRASH_PENALTY * fractional_distance_remaining;
-      }
-      
-      stdFitness += localFitness;
-    }
-    
-    stdFitness /= context.evalResults.pathList.size();
-    
-    // Mark fitness as valid for the GP library  
-    fitnessValid = 1;
-  }
-};
 std::vector<std::vector<Path>> generationPaths;
 std::atomic_ulong nanDetector = 0;
 std::ofstream fout;
@@ -650,7 +500,7 @@ int main()
           
           double distance_error_sum = 0;
           double angle_error_sum = 0;
-          double control_smoothness_sum = 0;
+          double movement_efficiency_sum = 0;
           int simulation_steps = 0;
           
           double roll_prev = aircraftState.at(stepIndex).getRollCommand();
@@ -670,11 +520,61 @@ int main()
             double angle_rad = std::acos(std::clamp(dot_product / (target_direction.norm() * aircraft_to_target.norm()), -1.0, 1.0));
             angle_rad = angle_rad * 100.0 / M_PI;
             
-            double smoothness = pow(roll_prev - stepAircraftState.getRollCommand(), 2.0);
-            smoothness += pow(pitch_prev - stepAircraftState.getPitchCommand(), 2.0);
-            smoothness += pow(throttle_prev - stepAircraftState.getThrottleCommand(), 2.0);
-            smoothness = sqrt(smoothness);
-            smoothness = smoothness * 100.0 / 3.46;
+            // Movement efficiency: compare aircraft movement to optimal path movement
+            double movement_efficiency = 0.0;
+            if (stepIndex > 1 && pathIndex < path.size() - 1) {
+              // Aircraft movement since last step
+              Eigen::Vector3d aircraft_movement = stepAircraftState.getPosition() - aircraftState.at(stepIndex-1).getPosition();
+              double aircraft_distance = aircraft_movement.norm();
+              
+              // Optimal path movement (direction from current waypoint to next)
+              Eigen::Vector3d path_direction = (path.at(pathIndex + 1).start - path.at(pathIndex).start).normalized();
+              double optimal_distance = aircraft_distance; // Same distance, optimal direction
+              
+              if (aircraft_distance > 0.1) { // Avoid division by zero
+                // Compare directions: dot product shows alignment (-1 to +1)
+                double direction_alignment = aircraft_movement.normalized().dot(path_direction);
+                
+                // Movement efficiency penalty: 0 = perfect alignment, 2 = opposite direction
+                movement_efficiency = (1.0 - direction_alignment); // 0 to 2 range
+                
+                // Additional penalty for excessive turning/rolling
+                double current_roll = abs(stepAircraftState.getRollCommand());
+                double current_pitch = abs(stepAircraftState.getPitchCommand());
+                
+                // Control saturation penalty - heavily penalize near ±1.0 commands
+                double saturation_penalty = 0.0;
+                if (current_roll > CONTROL_SATURATION_THRESHOLD) {
+                  saturation_penalty += (current_roll - CONTROL_SATURATION_THRESHOLD) * CONTROL_SATURATION_PENALTY;
+                }
+                if (current_pitch > CONTROL_SATURATION_THRESHOLD) {
+                  saturation_penalty += (current_pitch - CONTROL_SATURATION_THRESHOLD) * CONTROL_SATURATION_PENALTY;
+                }
+                
+                // Control rate penalty - penalize rapid changes (bang-bang behavior)
+                double roll_change = abs(stepAircraftState.getRollCommand() - roll_prev);
+                double pitch_change = abs(stepAircraftState.getPitchCommand() - pitch_prev);
+                double control_rate_penalty = (roll_change + pitch_change) * CONTROL_RATE_PENALTY;
+                
+                // Estimate "optimal" control needed for this path segment
+                // Simple model: straight segments need minimal control, curves need some roll
+                Eigen::Vector3d prev_path_dir = (pathIndex > 0) ? 
+                  (path.at(pathIndex).start - path.at(pathIndex-1).start).normalized() : path_direction;
+                double path_curvature = (1.0 - prev_path_dir.dot(path_direction)); // 0 to 2
+                double optimal_roll = path_curvature * 0.3; // Scale to reasonable roll estimate
+                double optimal_pitch = 0.1; // Assume minimal pitch needed
+                
+                // Penalty for excessive control relative to path requirements
+                double control_excess = (current_roll - optimal_roll) + (current_pitch - optimal_pitch);
+                control_excess = std::max(0.0, control_excess); // Only penalize excess, not deficit
+                
+                movement_efficiency += control_excess * 0.5; // Add control excess penalty
+                movement_efficiency += saturation_penalty; // Add saturation penalty
+                movement_efficiency += control_rate_penalty; // Add rate change penalty
+              }
+            }
+            // Normalize to [100:0] scale - increased max penalty due to saturation/rate penalties  
+            movement_efficiency = movement_efficiency * 100.0 / MOVEMENT_EFFICIENCY_MAX_PENALTY;
             
             roll_prev = stepAircraftState.getRollCommand();
             pitch_prev = stepAircraftState.getPitchCommand();
@@ -682,14 +582,14 @@ int main()
             
             distance_error_sum += pow(distanceFromGoal, FITNESS_DISTANCE_WEIGHT);
             angle_error_sum += pow(angle_rad, FITNESS_ALIGNMENT_WEIGHT);
-            control_smoothness_sum += pow(smoothness, FITNESS_CONTROL_WEIGHT);
+            movement_efficiency_sum += pow(movement_efficiency, MOVEMENT_EFFICIENCY_WEIGHT);
             simulation_steps++;
             
             if (printEval) {
               bestOfEvalResults = context.evalResults;
               
               if (stepIndex == 1) {
-                fout << "Pth:Step:   Time Idx  totDist   pathX    pathY    pathZ        X        Y        Z       dr       dp       dy   relVel     roll    pitch    power    distP   angleP controlP\n";
+                fout << "Pth:Step:   Time Idx  totDist   pathX    pathY    pathZ        X        Y        Z       dr       dp       dy   relVel     roll    pitch    power    distP   angleP  movEffP\n";
               }
               
               Eigen::Matrix3d rotMatrix = stepAircraftState.getOrientation().toRotationMatrix();
@@ -730,7 +630,7 @@ int main()
                 stepAircraftState.getThrottleCommand(),
                 distanceFromGoal,
                 angle_rad,
-                smoothness
+                movement_efficiency
               );
               fout << outbuf;
             }
@@ -738,8 +638,8 @@ int main()
           
           double normalized_distance_error = (distance_error_sum / simulation_steps);
           double normalized_angle_align = (angle_error_sum / simulation_steps);
-          double normalized_control_smoothness = (control_smoothness_sum / simulation_steps);
-          localFitness = normalized_distance_error + normalized_angle_align + normalized_control_smoothness;
+          double normalized_movement_efficiency = (movement_efficiency_sum / simulation_steps);
+          localFitness = normalized_distance_error + normalized_angle_align + normalized_movement_efficiency;
           
           if (isnan(localFitness)) {
             nanDetector++;

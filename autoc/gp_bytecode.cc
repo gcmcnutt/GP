@@ -72,7 +72,7 @@ int GPBytecodeInterpreter::getIndex(const std::vector<Path>& path, double arg, A
     }
     int steps = std::max(-5, std::min(5, (int)arg));
     double distanceSoFar = path.at(aircraftState.getThisPathIndex()).distanceFromStart;
-    double distanceGoal = distanceSoFar + steps * 22.0 * (200.0 / 1000.0);
+    double distanceGoal = distanceSoFar + steps * SIM_RABBIT_VELOCITY * (SIM_TIME_STEP_MSEC / 1000.0);
     int currentStep = aircraftState.getThisPathIndex();
     
     if (steps > 0) {
@@ -114,7 +114,7 @@ double GPBytecodeInterpreter::executeGetDTarget(const std::vector<Path>& path, d
 }
 
 double GPBytecodeInterpreter::executeGetDHome(AircraftState& aircraftState) {
-    return (Eigen::Vector3d(0, 0, -10.0) - aircraftState.getPosition()).norm();
+    return (Eigen::Vector3d(0, 0, SIM_INITIAL_ALTITUDE) - aircraftState.getPosition()).norm();
 }
 
 double GPBytecodeInterpreter::evaluate(AircraftState& aircraftState, std::vector<Path>& path, double arg) {
@@ -123,7 +123,7 @@ double GPBytecodeInterpreter::evaluate(AircraftState& aircraftState, std::vector
         return 0.0;
     }
     
-    float stack[MAX_STACK_SIZE];
+    double stack[MAX_STACK_SIZE];
     int stack_ptr = 0;
     
     // Execute bytecode instructions
@@ -131,52 +131,52 @@ double GPBytecodeInterpreter::evaluate(AircraftState& aircraftState, std::vector
         switch (instruction.opcode) {
             case ADD: {
                 if (stack_ptr < 2) return 0.0;
-                float b = stack[--stack_ptr];
-                float a = stack[--stack_ptr];
+                double b = stack[--stack_ptr];
+                double a = stack[--stack_ptr];
                 stack[stack_ptr++] = a + b;
                 break;
             }
             case SUB: {
                 if (stack_ptr < 2) return 0.0;
-                float b = stack[--stack_ptr];
-                float a = stack[--stack_ptr];
+                double b = stack[--stack_ptr];
+                double a = stack[--stack_ptr];
                 stack[stack_ptr++] = -a - b;  // Note: autoc uses -a - b
                 break;
             }
             case MUL: {
                 if (stack_ptr < 2) return 0.0;
-                float b = stack[--stack_ptr];
-                float a = stack[--stack_ptr];
+                double b = stack[--stack_ptr];
+                double a = stack[--stack_ptr];
                 stack[stack_ptr++] = a * b;
                 break;
             }
             case DIV: {
                 if (stack_ptr < 2) return 0.0;
-                float b = stack[--stack_ptr];
-                float a = stack[--stack_ptr];
-                stack[stack_ptr++] = (b == 0.0f) ? 0.0f : (a / b);
+                double b = stack[--stack_ptr];
+                double a = stack[--stack_ptr];
+                stack[stack_ptr++] = (b == 0.0) ? 0.0 : (a / b);
                 break;
             }
             case IF: {
                 if (stack_ptr < 3) return 0.0;
-                float falseVal = stack[--stack_ptr];
-                float trueVal = stack[--stack_ptr];
-                float condition = stack[--stack_ptr];
-                stack[stack_ptr++] = (condition != 0.0f) ? trueVal : falseVal;
+                double falseVal = stack[--stack_ptr];
+                double trueVal = stack[--stack_ptr];
+                double condition = stack[--stack_ptr];
+                stack[stack_ptr++] = (condition != 0.0) ? trueVal : falseVal;
                 break;
             }
             case EQ: {
                 if (stack_ptr < 2) return 0.0;
-                float b = stack[--stack_ptr];
-                float a = stack[--stack_ptr];
-                stack[stack_ptr++] = (a == b) ? 1.0f : 0.0f;
+                double b = stack[--stack_ptr];
+                double a = stack[--stack_ptr];
+                stack[stack_ptr++] = (a == b) ? 1.0 : 0.0;
                 break;
             }
             case GT: {
                 if (stack_ptr < 2) return 0.0;
-                float b = stack[--stack_ptr];
-                float a = stack[--stack_ptr];
-                stack[stack_ptr++] = (a > b) ? 1.0f : 0.0f;
+                double b = stack[--stack_ptr];
+                double a = stack[--stack_ptr];
+                stack[stack_ptr++] = (a > b) ? 1.0 : 0.0;
                 break;
             }
             case SIN: {
@@ -191,19 +191,19 @@ double GPBytecodeInterpreter::evaluate(AircraftState& aircraftState, std::vector
             }
             case SETPITCH: {
                 if (stack_ptr < 1) return 0.0;
-                float value = stack[--stack_ptr];
+                double value = stack[--stack_ptr];
                 stack[stack_ptr++] = aircraftState.setPitchCommand(value);
                 break;
             }
             case SETROLL: {
                 if (stack_ptr < 1) return 0.0;
-                float value = stack[--stack_ptr];
+                double value = stack[--stack_ptr];
                 stack[stack_ptr++] = aircraftState.setRollCommand(value);
                 break;
             }
             case SETTHROTTLE: {
                 if (stack_ptr < 1) return 0.0;
-                float value = stack[--stack_ptr];
+                double value = stack[--stack_ptr];
                 stack[stack_ptr++] = aircraftState.setThrottleCommand(value);
                 break;
             }
@@ -225,19 +225,19 @@ double GPBytecodeInterpreter::evaluate(AircraftState& aircraftState, std::vector
             }
             case GETDPHI: {
                 if (stack_ptr < 1) return 0.0;
-                float argVal = stack[--stack_ptr];
+                double argVal = stack[--stack_ptr];
                 stack[stack_ptr++] = executeGetDPhi(path, argVal, aircraftState);
                 break;
             }
             case GETDTHETA: {
                 if (stack_ptr < 1) return 0.0;
-                float argVal = stack[--stack_ptr];
+                double argVal = stack[--stack_ptr];
                 stack[stack_ptr++] = executeGetDTheta(path, argVal, aircraftState);
                 break;
             }
             case GETDTARGET: {
                 if (stack_ptr < 1) return 0.0;
-                float argVal = stack[--stack_ptr];
+                double argVal = stack[--stack_ptr];
                 stack[stack_ptr++] = executeGetDTarget(path, argVal, aircraftState);
                 break;
             }
@@ -292,16 +292,16 @@ double GPBytecodeInterpreter::evaluate(AircraftState& aircraftState, std::vector
             }
             case CLAMP: {
                 if (stack_ptr < 3) return 0.0;
-                float maxVal = stack[--stack_ptr];
-                float minVal = stack[--stack_ptr];
-                float value = stack[--stack_ptr];
+                double maxVal = stack[--stack_ptr];
+                double minVal = stack[--stack_ptr];
+                double value = stack[--stack_ptr];
                 stack[stack_ptr++] = CLAMP_DEF(value, minVal, maxVal);
                 break;
             }
             case ATAN2: {
                 if (stack_ptr < 2) return 0.0;
-                float x = stack[--stack_ptr];
-                float y = stack[--stack_ptr];
+                double x = stack[--stack_ptr];
+                double y = stack[--stack_ptr];
                 stack[stack_ptr++] = ATAN2_DEF(y, x);
                 break;
             }
@@ -312,21 +312,21 @@ double GPBytecodeInterpreter::evaluate(AircraftState& aircraftState, std::vector
             }
             case SQRT: {
                 if (stack_ptr < 1) return 0.0;
-                float value = stack[stack_ptr-1];
-                stack[stack_ptr-1] = (value >= 0.0f) ? SQRT_DEF(value) : 0.0f;
+                double value = stack[stack_ptr-1];
+                stack[stack_ptr-1] = (value >= 0.0) ? SQRT_DEF(value) : 0.0;
                 break;
             }
             case MIN: {
                 if (stack_ptr < 2) return 0.0;
-                float b = stack[--stack_ptr];
-                float a = stack[--stack_ptr];
+                double b = stack[--stack_ptr];
+                double a = stack[--stack_ptr];
                 stack[stack_ptr++] = MIN_DEF(a, b);
                 break;
             }
             case MAX: {
                 if (stack_ptr < 2) return 0.0;
-                float b = stack[--stack_ptr];
-                float a = stack[--stack_ptr];
+                double b = stack[--stack_ptr];
+                double a = stack[--stack_ptr];
                 stack[stack_ptr++] = MAX_DEF(a, b);
                 break;
             }
@@ -335,21 +335,21 @@ double GPBytecodeInterpreter::evaluate(AircraftState& aircraftState, std::vector
                 break;
             }
             case ZERO: {
-                stack[stack_ptr++] = 0.0f;
+                stack[stack_ptr++] = 0.0;
                 break;
             }
             case ONE: {
-                stack[stack_ptr++] = 1.0f;
+                stack[stack_ptr++] = 1.0;
                 break;
             }
             case TWO: {
-                stack[stack_ptr++] = 2.0f;
+                stack[stack_ptr++] = 2.0;
                 break;
             }
             case PROGN: {
                 if (stack_ptr < 2) return 0.0;
                 // Stack has [first_value, second_value] with second_value on top
-                float second_value = stack[--stack_ptr];  // Pop second value (keep it)
+                double second_value = stack[--stack_ptr];  // Pop second value (keep it)
                 stack[--stack_ptr];  // Discard first value
                 stack[stack_ptr++] = second_value;  // Push second value back as result
                 break;
