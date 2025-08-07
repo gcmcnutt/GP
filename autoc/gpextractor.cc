@@ -164,7 +164,7 @@ void generateBytecode(MyGene* gene, std::vector<GPBytecode>& program) {
       break;
       
     // Terminals and constants - no children to process
-    case PI:
+    case OP_PI:
     case ZERO:
     case ONE:
     case TWO:
@@ -199,7 +199,7 @@ void generateBytecode(MyGene* gene, std::vector<GPBytecode>& program) {
   
   // For constants, store the value
   switch (nodeValue) {
-    case PI:
+    case OP_PI:
       instruction.constant = M_PI;
       break;
     case ZERO:

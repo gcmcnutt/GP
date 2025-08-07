@@ -38,6 +38,13 @@
   - probably need to export quaternion data to blackbox so that we don't get tumble effects
 - also seems crrcsim is dependent on a valid DISPLAY even when in headless
 - enable it so that a run of a tool that looks for autoc.ini can have a command line override to an alternate file
+- generator isn't generating correctly -- also the header should be checked in as the stable interface
+- move evaluator embedded to xiao-gp
+- merge evaluator crrcsim and desktop into one -- in the GP dirs
+- check for dangling or vestiage files
+- the generated code should be not in src dir in xiao -- should be in 'generated' dir and built from there 
+- the portable part of the evaluator should be autoc-eval.cc -- e.g. that is the file that should be portable, not a sub-piece
+
 
 Good Runs
 - autoc-9223370305983481960-2024-11-06T05:34:53.847Z -- this is minisim large run on 25 paths

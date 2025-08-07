@@ -73,13 +73,6 @@ private:
     GPBytecodeHeader header;
     static const int MAX_STACK_SIZE = 256;
     
-    // Helper functions for complex operations
-    int getIndex(const std::vector<Path>& path, double arg, AircraftState& aircraftState);
-    double executeGetDPhi(const std::vector<Path>& path, double arg, AircraftState& aircraftState);
-    double executeGetDTheta(const std::vector<Path>& path, double arg, AircraftState& aircraftState);
-    double executeGetDTarget(const std::vector<Path>& path, double arg, AircraftState& aircraftState);
-    double executeGetDHome(AircraftState& aircraftState);
-    
 public:
     GPBytecodeInterpreter();
     ~GPBytecodeInterpreter();

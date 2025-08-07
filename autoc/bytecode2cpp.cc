@@ -1,0 +1,377 @@
+#include <iostream>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <vector>
+#include <getopt.h>
+#include <cmath>
+
+#include "gp_bytecode.h"
+#include "gp_evaluator_portable.h"
+#include "gp_evaluator_desktop.h"
+#include "autoc.h"
+
+class BytecodeToSourceGenerator {
+private:
+    const struct GPBytecode* program;  // Use GP build GPBytecode
+    int program_size;
+    
+    int analyzeStackDepth(const struct GPBytecode* program, int size) {
+        int maxStack = 0;
+        int currentStack = 0;
+        
+        for (int i = 0; i < size; i++) {
+            int opcode = program[i].opcode;
+            int argc = program[i].argc;
+            
+            // Determine stack effect for each operation
+            switch (opcode) {
+                // Zero-arg operations (terminals) - push 1
+                case OP_PI: case ZERO: case ONE: case TWO:
+                case GETPITCH: case GETROLL: case GETTHROTTLE: case GETVEL:
+                case GETDHOME: case GETALPHA: case GETBETA:
+                case GETVELX: case GETVELY: case GETVELZ:
+                case GETROLL_RAD: case GETPITCH_RAD:
+                    currentStack += 1;
+                    break;
+                    
+                // Unary operations - pop 1, push 1 (net 0)
+                case SIN: case COS: case ABS: case SQRT:
+                case SETPITCH: case SETROLL: case SETTHROTTLE:
+                case GETDPHI: case GETDTHETA: case GETDTARGET:
+                    // net 0
+                    break;
+                    
+                // Binary operations - pop 2, push 1 (net -1)
+                case ADD: case SUB: case MUL: case DIV:
+                case EQ: case GT: case ATAN2: case MIN: case MAX:
+                    currentStack -= 1;
+                    break;
+                    
+                // Ternary operations - pop 3, push 1 (net -2)
+                case IF: case CLAMP:
+                    currentStack -= 2;
+                    break;
+                    
+                // PROGN - pop 2, push 1 (net -1)
+                case PROGN:
+                    currentStack -= 1;
+                    break;
+                    
+                default:
+                    // Unknown operation, assume no net effect
+                    break;
+            }
+            
+            if (currentStack > maxStack) {
+                maxStack = currentStack;
+            }
+        }
+        
+        // Add some safety margin
+        return maxStack + 8;
+    }
+    
+    std::string getOperatorName(int opcode) {
+        switch (opcode) {
+            case ADD: return "ADD";
+            case SUB: return "SUB";
+            case MUL: return "MUL";
+            case DIV: return "DIV";
+            case IF: return "IF";
+            case EQ: return "EQ";
+            case GT: return "GT";
+            case SIN: return "SIN";
+            case COS: return "COS";
+            case SETPITCH: return "SETPITCH";
+            case SETROLL: return "SETROLL";
+            case SETTHROTTLE: return "SETTHROTTLE";
+            case GETPITCH: return "GETPITCH";
+            case GETROLL: return "GETROLL";
+            case GETTHROTTLE: return "GETTHROTTLE";
+            case GETVEL: return "GETVEL";
+            case GETDPHI: return "GETDPHI";
+            case GETDTHETA: return "GETDTHETA";
+            case GETDTARGET: return "GETDTARGET";
+            case GETDHOME: return "GETDHOME";
+            case GETALPHA: return "GETALPHA";
+            case GETBETA: return "GETBETA";
+            case GETVELX: return "GETVELX";
+            case GETVELY: return "GETVELY";
+            case GETVELZ: return "GETVELZ";
+            case GETROLL_RAD: return "GETROLL_RAD";
+            case GETPITCH_RAD: return "GETPITCH_RAD";
+            case CLAMP: return "CLAMP";
+            case ATAN2: return "ATAN2";
+            case ABS: return "ABS";
+            case SQRT: return "SQRT";
+            case MIN: return "MIN";
+            case MAX: return "MAX";
+            case OP_PI: return "OP_PI";
+            case ZERO: return "ZERO";
+            case ONE: return "ONE";
+            case TWO: return "TWO";
+            case PROGN: return "PROGN";
+            default: return "UNKNOWN";
+        }
+    }
+    
+    void generateInstruction(std::stringstream& code, const struct GPBytecode& inst, int pc) {
+        std::string opName = getOperatorName(inst.opcode);
+        
+        switch (inst.opcode) {
+            // Binary operations
+            case ADD: case SUB: case MUL: case DIV:
+            case EQ: case GT: case ATAN2: case MIN: case MAX:
+                code << "    // " << opName << "\n";
+                code << "    {\n";
+                code << "        double args[2] = {stack[sp-2], stack[sp-1]};\n";
+                code << "        sp -= 2;\n";
+                code << "        stack[sp++] = evaluateGPOperator(" << inst.opcode << ", pathProvider, aircraftState, args, 2);\n";
+                code << "    }\n";
+                break;
+                
+            // Unary operations
+            case SIN: case COS: case ABS: case SQRT:
+            case SETPITCH: case SETROLL: case SETTHROTTLE:
+            case GETDPHI: case GETDTHETA: case GETDTARGET:
+                code << "    // " << opName << "\n";
+                code << "    {\n";
+                code << "        double args[1] = {stack[sp-1]};\n";
+                code << "        sp -= 1;\n";
+                code << "        stack[sp++] = evaluateGPOperator(" << inst.opcode << ", pathProvider, aircraftState, args, 1);\n";
+                code << "    }\n";
+                break;
+                
+            // Ternary operations
+            case IF: case CLAMP:
+                code << "    // " << opName << "\n";
+                code << "    {\n";
+                code << "        double args[3] = {stack[sp-3], stack[sp-2], stack[sp-1]};\n";
+                code << "        sp -= 3;\n";
+                code << "        stack[sp++] = evaluateGPOperator(" << inst.opcode << ", pathProvider, aircraftState, args, 3);\n";
+                code << "    }\n";
+                break;
+                
+            // PROGN - special case
+            case PROGN:
+                code << "    // PROGN\n";
+                code << "    {\n";
+                code << "        double args[2] = {stack[sp-2], stack[sp-1]};\n";
+                code << "        sp -= 2;\n";
+                code << "        stack[sp++] = evaluateGPOperator(" << inst.opcode << ", pathProvider, aircraftState, args, 2);\n";
+                code << "    }\n";
+                break;
+                
+            // Zero-argument operations (terminals/sensors)
+            default:
+                code << "    stack[sp++] = evaluateGPOperator(" << inst.opcode << ", pathProvider, aircraftState, nullptr, 0); // " << opName << "\n";
+                break;
+        }
+    }
+    
+public:
+    BytecodeToSourceGenerator(const struct GPBytecode* prog, int size) 
+        : program(prog), program_size(size) {}
+    
+    std::string generateEvaluatorFunction(const std::string& functionName) {
+        std::stringstream code;
+        
+        code << "// Auto-generated GP evaluator function\n";
+        code << "// Generated from bytecode with " << program_size << " instructions\n";
+        code << "#include \"autoc/gp_evaluator_portable.h\"\n\n";
+        
+        code << "double " << functionName << "(PathProvider& pathProvider, AircraftState& aircraftState, double arg) {\n";
+        
+        // Analyze bytecode to determine max stack depth
+        int maxStack = analyzeStackDepth(program, program_size);
+        code << "    double stack[" << maxStack << "];\n";
+        code << "    int sp = 0;\n\n";
+        
+        // Generate unrolled execution
+        for (int i = 0; i < program_size; i++) {
+            generateInstruction(code, program[i], i);
+        }
+        
+        code << "\n    return applyRangeLimit(stack[0]);\n";
+        code << "}\n";
+        
+        return code.str();
+    }
+    
+    std::string generateHeaderFile(const std::string& functionName) {
+        std::stringstream code;
+        
+        code << "#ifndef GP_PROGRAM_GENERATED_H\n";
+        code << "#define GP_PROGRAM_GENERATED_H\n\n";
+        code << "#include \"autoc/gp_evaluator_portable.h\"\n\n";
+        code << "// Auto-generated GP evaluator function\n";
+        code << "double " << functionName << "(PathProvider& pathProvider, AircraftState& aircraftState, double arg);\n\n";
+        code << "#endif\n";
+        
+        return code.str();
+    }
+    
+    std::string generateArduinoWrapper(const std::string& functionName) {
+        std::stringstream code;
+        
+        code << "// Arduino wrapper for generated GP evaluator\n";
+        code << "#include \"gp_program_generated.h\"\n";
+        code << "#include \"autoc/aircraft_state.h\"\n\n";
+        
+        code << "// Simple evaluation function for Arduino use\n";
+        code << "double evaluateGPSimple(AircraftState& aircraftState, const Path& currentPath, double arg) {\n";
+        code << "    // Create single-path provider for embedded use\n";
+        code << "    SinglePathProvider pathProvider(currentPath, aircraftState.getThisPathIndex());\n";
+        code << "    \n";
+        code << "    // Call generated GP program\n";
+        code << "    return " << functionName << "(pathProvider, aircraftState, arg);\n";
+        code << "}\n";
+        
+        return code.str();
+    }
+};
+
+void printUsage(const char* progName) {
+    std::cout << "Usage: " << progName << " [OPTIONS]\n";
+    std::cout << "Options:\n";
+    std::cout << "  -i, --input FILE     Input bytecode file (required)\n";
+    std::cout << "  -o, --output FILE    Output C++ source file (default: gp_program_generated.cpp)\n";
+    std::cout << "  -h, --header FILE    Output header file (default: gp_program_generated.h)\n";
+    std::cout << "  -f, --function NAME  Generated function name (default: generatedGPProgram)\n";
+    std::cout << "  -a, --arduino        Generate Arduino wrapper file\n";
+    std::cout << "  --help               Show this help message\n";
+    std::cout << "\n";
+    std::cout << "Examples:\n";
+    std::cout << "  " << progName << " -i gp_program.dat\n";
+    std::cout << "  " << progName << " -i gp_program.dat -o my_gp.cpp -f myGPFunction\n";
+    std::cout << "  " << progName << " -i gp_program.dat -a\n";
+}
+
+int main(int argc, char** argv) {
+    static struct option long_options[] = {
+        {"input", required_argument, 0, 'i'},
+        {"output", required_argument, 0, 'o'},
+        {"header", required_argument, 0, 'h'},
+        {"function", required_argument, 0, 'f'},
+        {"arduino", no_argument, 0, 'a'},
+        {"help", no_argument, 0, 0},
+        {0, 0, 0, 0}
+    };
+    
+    std::string inputFile = "";
+    std::string outputFile = "gp_program_generated.cpp";
+    std::string headerFile = "gp_program_generated.h";
+    std::string functionName = "generatedGPProgram";
+    bool generateArduino = false;
+    
+    int option_index = 0;
+    int c;
+    
+    while ((c = getopt_long(argc, argv, "i:o:h:f:a", long_options, &option_index)) != -1) {
+        switch (c) {
+            case 'i':
+                inputFile = optarg;
+                break;
+            case 'o':
+                outputFile = optarg;
+                break;
+            case 'h':
+                headerFile = optarg;
+                break;
+            case 'f':
+                functionName = optarg;
+                break;
+            case 'a':
+                generateArduino = true;
+                break;
+            case 0:
+                if (long_options[option_index].name == std::string("help")) {
+                    printUsage(argv[0]);
+                    return 0;
+                }
+                break;
+            case '?':
+                printUsage(argv[0]);
+                return 1;
+            default:
+                break;
+        }
+    }
+    
+    if (inputFile.empty()) {
+        std::cerr << "Error: Input bytecode file is required\n";
+        printUsage(argv[0]);
+        return 1;
+    }
+    
+    // Load bytecode program
+    GPBytecodeInterpreter interpreter;
+    if (!interpreter.loadProgram(inputFile)) {
+        std::cerr << "Error: Failed to load bytecode from " << inputFile << std::endl;
+        return 1;
+    }
+    
+    // Access the program data (we need to expose this in the interpreter)
+    // For now, we'll create a simple loader
+    std::ifstream file(inputFile, std::ios::binary);
+    if (!file.is_open()) {
+        std::cerr << "Error: Cannot open bytecode file: " << inputFile << std::endl;
+        return 1;
+    }
+    
+    // Read header
+    GPBytecodeHeader header;
+    file.read(reinterpret_cast<char*>(&header), sizeof(header));
+    
+    // Read instructions (GP format)
+    std::vector<struct GPBytecode> gpProgram(header.instruction_count);
+    for (uint32_t i = 0; i < header.instruction_count; i++) {
+        file.read(reinterpret_cast<char*>(&gpProgram[i]), sizeof(struct GPBytecode));
+    }
+    file.close();
+    
+    // In GP build, no conversion needed - use directly as program
+    std::vector<struct GPBytecode>& program = gpProgram;
+    
+    // Generate source code
+    BytecodeToSourceGenerator generator(program.data(), program.size());
+    
+    // Write C++ source file
+    std::ofstream cppFile(outputFile);
+    if (!cppFile.is_open()) {
+        std::cerr << "Error: Cannot create output file: " << outputFile << std::endl;
+        return 1;
+    }
+    cppFile << generator.generateEvaluatorFunction(functionName);
+    cppFile.close();
+    
+    // Write header file
+    std::ofstream hFile(headerFile);
+    if (!hFile.is_open()) {
+        std::cerr << "Error: Cannot create header file: " << headerFile << std::endl;
+        return 1;
+    }
+    hFile << generator.generateHeaderFile(functionName);
+    hFile.close();
+    
+    // Write Arduino wrapper if requested
+    if (generateArduino) {
+        std::string arduinoFile = "gp_arduino_wrapper.cpp";
+        std::ofstream aFile(arduinoFile);
+        if (!aFile.is_open()) {
+            std::cerr << "Error: Cannot create Arduino wrapper file: " << arduinoFile << std::endl;
+            return 1;
+        }
+        aFile << generator.generateArduinoWrapper(functionName);
+        aFile.close();
+        std::cout << "Generated Arduino wrapper: " << arduinoFile << std::endl;
+    }
+    
+    std::cout << "Generated C++ source: " << outputFile << std::endl;
+    std::cout << "Generated header: " << headerFile << std::endl;
+    std::cout << "Function name: " << functionName << std::endl;
+    std::cout << "Instructions: " << program.size() << std::endl;
+    
+    return 0;
+}
