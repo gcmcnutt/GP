@@ -42,7 +42,6 @@
 - move evaluator embedded to xiao-gp
 - merge evaluator crrcsim and desktop into one -- in the GP dirs
 - check for dangling or vestiage files
-- the generated code should be not in src dir in xiao -- should be in 'generated' dir and built from there 
 - the portable part of the evaluator should be autoc-eval.cc -- e.g. that is the file that should be portable, not a sub-piece
 
 
