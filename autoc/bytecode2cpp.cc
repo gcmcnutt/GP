@@ -15,6 +15,7 @@ class BytecodeToSourceGenerator {
 private:
     const struct GPBytecode* program;  // Use GP build GPBytecode
     int program_size;
+    GPBytecodeHeader header;  // Store header information for comments
     
     int analyzeStackDepth(const struct GPBytecode* program, int size) {
         int maxStack = 0;
@@ -118,6 +119,7 @@ private:
     
     void generateInstruction(std::stringstream& code, const struct GPBytecode& inst, int pc) {
         std::string opName = getOperatorName(inst.opcode);
+        int opcodeInt = (int)inst.opcode;  // Cast to int for safe printing
         
         switch (inst.opcode) {
             // Binary operations
@@ -127,7 +129,7 @@ private:
                 code << "    {\n";
                 code << "        double args[2] = {stack[sp-2], stack[sp-1]};\n";
                 code << "        sp -= 2;\n";
-                code << "        stack[sp++] = evaluateGPOperator(" << inst.opcode << ", pathProvider, aircraftState, args, 2);\n";
+                code << "        stack[sp++] = evaluateGPOperator(" << opcodeInt << ", pathProvider, aircraftState, args, 2);\n";
                 code << "    }\n";
                 break;
                 
@@ -139,7 +141,7 @@ private:
                 code << "    {\n";
                 code << "        double args[1] = {stack[sp-1]};\n";
                 code << "        sp -= 1;\n";
-                code << "        stack[sp++] = evaluateGPOperator(" << inst.opcode << ", pathProvider, aircraftState, args, 1);\n";
+                code << "        stack[sp++] = evaluateGPOperator(" << opcodeInt << ", pathProvider, aircraftState, args, 1);\n";
                 code << "    }\n";
                 break;
                 
@@ -149,7 +151,7 @@ private:
                 code << "    {\n";
                 code << "        double args[3] = {stack[sp-3], stack[sp-2], stack[sp-1]};\n";
                 code << "        sp -= 3;\n";
-                code << "        stack[sp++] = evaluateGPOperator(" << inst.opcode << ", pathProvider, aircraftState, args, 3);\n";
+                code << "        stack[sp++] = evaluateGPOperator(" << opcodeInt << ", pathProvider, aircraftState, args, 3);\n";
                 code << "    }\n";
                 break;
                 
@@ -159,27 +161,35 @@ private:
                 code << "    {\n";
                 code << "        double args[2] = {stack[sp-2], stack[sp-1]};\n";
                 code << "        sp -= 2;\n";
-                code << "        stack[sp++] = evaluateGPOperator(" << inst.opcode << ", pathProvider, aircraftState, args, 2);\n";
+                code << "        stack[sp++] = evaluateGPOperator(" << opcodeInt << ", pathProvider, aircraftState, args, 2);\n";
                 code << "    }\n";
                 break;
                 
             // Zero-argument operations (terminals/sensors)
             default:
-                code << "    stack[sp++] = evaluateGPOperator(" << inst.opcode << ", pathProvider, aircraftState, nullptr, 0); // " << opName << "\n";
+                code << "    stack[sp++] = evaluateGPOperator(" << opcodeInt << ", pathProvider, aircraftState, nullptr, 0); // " << opName << "\n";
                 break;
         }
     }
     
 public:
-    BytecodeToSourceGenerator(const struct GPBytecode* prog, int size) 
-        : program(prog), program_size(size) {}
+    BytecodeToSourceGenerator(const struct GPBytecode* prog, int size, const GPBytecodeHeader& hdr) 
+        : program(prog), program_size(size), header(hdr) {}
     
     std::string generateEvaluatorFunction(const std::string& functionName) {
         std::stringstream code;
         
         code << "// Auto-generated GP evaluator function\n";
-        code << "// Generated from bytecode with " << program_size << " instructions\n";
-        code << "#include \"autoc/gp_evaluator_portable.h\"\n\n";
+        code << "//\n";
+        code << "// Source GP Information:\n";
+        code << "//   S3 Key: " << std::string(header.s3_key) << "\n";
+        code << "//   Generation: " << header.generation << "\n";
+        code << "//   Original Length: " << header.length << "\n";
+        code << "//   Original Depth: " << header.depth << "\n";
+        code << "//   Fitness: " << (header.fitness_int / 1000000.0) << "\n";
+        code << "//   Bytecode Instructions: " << program_size << "\n";
+        code << "//\n";
+        code << "#include \"gp_program.h\"\n\n";
         
         code << "double " << functionName << "(PathProvider& pathProvider, AircraftState& aircraftState, double arg) {\n";
         
@@ -199,18 +209,7 @@ public:
         return code.str();
     }
     
-    std::string generateHeaderFile(const std::string& functionName) {
-        std::stringstream code;
-        
-        code << "#ifndef GP_PROGRAM_GENERATED_H\n";
-        code << "#define GP_PROGRAM_GENERATED_H\n\n";
-        code << "#include \"autoc/gp_evaluator_portable.h\"\n\n";
-        code << "// Auto-generated GP evaluator function\n";
-        code << "double " << functionName << "(PathProvider& pathProvider, AircraftState& aircraftState, double arg);\n\n";
-        code << "#endif\n";
-        
-        return code.str();
-    }
+    // Header generation removed - use stable gp_program.h instead
     
     std::string generateArduinoWrapper(const std::string& functionName) {
         std::stringstream code;
@@ -237,10 +236,11 @@ void printUsage(const char* progName) {
     std::cout << "Options:\n";
     std::cout << "  -i, --input FILE     Input bytecode file (required)\n";
     std::cout << "  -o, --output FILE    Output C++ source file (default: gp_program_generated.cpp)\n";
-    std::cout << "  -h, --header FILE    Output header file (default: gp_program_generated.h)\n";
     std::cout << "  -f, --function NAME  Generated function name (default: generatedGPProgram)\n";
     std::cout << "  -a, --arduino        Generate Arduino wrapper file\n";
     std::cout << "  --help               Show this help message\n";
+    std::cout << "\n";
+    std::cout << "Note: Function declaration is provided by stable gp_program.h header\n";
     std::cout << "\n";
     std::cout << "Examples:\n";
     std::cout << "  " << progName << " -i gp_program.dat\n";
@@ -252,7 +252,6 @@ int main(int argc, char** argv) {
     static struct option long_options[] = {
         {"input", required_argument, 0, 'i'},
         {"output", required_argument, 0, 'o'},
-        {"header", required_argument, 0, 'h'},
         {"function", required_argument, 0, 'f'},
         {"arduino", no_argument, 0, 'a'},
         {"help", no_argument, 0, 0},
@@ -261,23 +260,19 @@ int main(int argc, char** argv) {
     
     std::string inputFile = "";
     std::string outputFile = "gp_program_generated.cpp";
-    std::string headerFile = "gp_program_generated.h";
     std::string functionName = "generatedGPProgram";
     bool generateArduino = false;
     
     int option_index = 0;
     int c;
     
-    while ((c = getopt_long(argc, argv, "i:o:h:f:a", long_options, &option_index)) != -1) {
+    while ((c = getopt_long(argc, argv, "i:o:f:a", long_options, &option_index)) != -1) {
         switch (c) {
             case 'i':
                 inputFile = optarg;
                 break;
             case 'o':
                 outputFile = optarg;
-                break;
-            case 'h':
-                headerFile = optarg;
                 break;
             case 'f':
                 functionName = optarg;
@@ -335,7 +330,7 @@ int main(int argc, char** argv) {
     std::vector<struct GPBytecode>& program = gpProgram;
     
     // Generate source code
-    BytecodeToSourceGenerator generator(program.data(), program.size());
+    BytecodeToSourceGenerator generator(program.data(), program.size(), header);
     
     // Write C++ source file
     std::ofstream cppFile(outputFile);
@@ -345,15 +340,6 @@ int main(int argc, char** argv) {
     }
     cppFile << generator.generateEvaluatorFunction(functionName);
     cppFile.close();
-    
-    // Write header file
-    std::ofstream hFile(headerFile);
-    if (!hFile.is_open()) {
-        std::cerr << "Error: Cannot create header file: " << headerFile << std::endl;
-        return 1;
-    }
-    hFile << generator.generateHeaderFile(functionName);
-    hFile.close();
     
     // Write Arduino wrapper if requested
     if (generateArduino) {
@@ -369,9 +355,9 @@ int main(int argc, char** argv) {
     }
     
     std::cout << "Generated C++ source: " << outputFile << std::endl;
-    std::cout << "Generated header: " << headerFile << std::endl;
     std::cout << "Function name: " << functionName << std::endl;
     std::cout << "Instructions: " << program.size() << std::endl;
+    std::cout << "Note: Function declaration available in gp_program.h" << std::endl;
     
     return 0;
 }

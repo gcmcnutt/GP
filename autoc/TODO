@@ -38,7 +38,7 @@
   - probably need to export quaternion data to blackbox so that we don't get tumble effects
 - also seems crrcsim is dependent on a valid DISPLAY even when in headless
 - enable it so that a run of a tool that looks for autoc.ini can have a command line override to an alternate file
-- generator isn't generating correctly -- also the header should be checked in as the stable interface
+
 - move evaluator embedded to xiao-gp
 - merge evaluator crrcsim and desktop into one -- in the GP dirs
 - check for dangling or vestiage files

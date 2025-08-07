@@ -22,11 +22,6 @@ enum Operators {
   OP_PI, ZERO, ONE, TWO, PROGN, _END  // Renamed PI to OP_PI to avoid Arduino macro conflict
 };
 
-// Create compatibility alias for PI
-#ifndef GP_BUILD
-#define PI OP_PI
-#endif
-
 // Simple bytecode structure for embedded
 struct GPBytecode {
     uint8_t opcode;     // Operation code (maps to Operators enum)
