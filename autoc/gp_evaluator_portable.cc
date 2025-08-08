@@ -52,13 +52,13 @@ double evaluateGPOperator(int opcode, PathProvider& pathProvider,
         
         // Navigation - use PathProvider abstraction
         case GETDPHI: 
-            result = executeGetDPhi(pathProvider, aircraftState, args[0]); 
+            result = executeGetDPhi(pathProvider, aircraftState, args ? args[0] : contextArg); 
             break;
         case GETDTHETA: 
-            result = executeGetDTheta(pathProvider, aircraftState, args[0]); 
+            result = executeGetDTheta(pathProvider, aircraftState, args ? args[0] : contextArg); 
             break;
         case GETDTARGET: 
-            result = executeGetDTarget(pathProvider, aircraftState, args[0]); 
+            result = executeGetDTarget(pathProvider, aircraftState, args ? args[0] : contextArg); 
             break;
         case GETDHOME: 
             result = executeGetDHome(aircraftState); 

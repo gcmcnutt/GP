@@ -133,46 +133,9 @@ public:
 
         while (crashReason == CrashReason::None) {
 
-          // approximate pitch/roll/throttle to achieve goal (BASELINE ESTIMATES - CRITICAL FOR BOTH MODES)
-
-          // *** ROLL: Calculate the vector from craft to target in world frame
-          Eigen::Vector3d craftToTarget = path.at(aircraftState.getThisPathIndex()).start - aircraftState.getPosition();
-
-          // Transform the craft-to-target vector to body frame
-          Eigen::Vector3d target_local = aircraftState.getOrientation().inverse() * craftToTarget;
-
-          // Project the craft-to-target vector onto the body YZ plane
-          Eigen::Vector3d projectedVector(0, target_local.y(), target_local.z());
-
-          // Calculate the angle between the projected vector and the body Z-axis
-          double rollEstimate = std::atan2(projectedVector.y(), -projectedVector.z());
-
-          // *** PITCH: Calculate the vector from craft to target in world frame if it did rotate
-          Eigen::Quaterniond rollRotation(Eigen::AngleAxisd(rollEstimate, Eigen::Vector3d::UnitX()));
-          Eigen::Quaterniond virtualOrientation = aircraftState.getOrientation() * rollRotation;
-
-          // Transform target vector to new virtual orientation
-          Eigen::Vector3d newLocalTargetVector = virtualOrientation.inverse() * craftToTarget;
-
-          // Calculate pitch angle
-          double pitchEstimate = std::atan2(-newLocalTargetVector.z(), newLocalTargetVector.x());
-
-          // // now try to determine if pitch up or pitch down makes more sense
-          // if (std::abs(pitchEstimate) > M_PI / 2) {
-          //   pitchEstimate = (pitchEstimate > 0) ? pitchEstimate - M_PI : pitchEstimate + M_PI;
-          //   rollEstimate = -rollEstimate;
-          // }
-
-          // range is -1:1 - SET BASELINE ESTIMATES FOR BOTH GP AND BYTECODE MODES
-          aircraftState.setRollCommand(rollEstimate / M_PI);
-          aircraftState.setPitchCommand(pitchEstimate / M_PI);
-
-          // Throttle estimate range is -1:1
-          {
-            double distance = (path.at(aircraftState.getThisPathIndex()).start - aircraftState.getPosition()).norm();
-            double throttleEstimate = std::clamp((distance - 10) / aircraftState.getRelVel(), -1.0, 1.0);
-            aircraftState.setThrottleCommand(throttleEstimate);
-          }
+          // BASELINE CONTROLLER DISABLED FOR GP-ONLY LEARNING (consistent with crrcsim)
+          // Control commands start at 0 for each path (consistent with crrcsim reset behavior)
+          // Within each path evaluation, commands persist between timesteps for incremental GP adjustments
 
 #if 0
           {

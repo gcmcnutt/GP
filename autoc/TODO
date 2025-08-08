@@ -2,6 +2,9 @@
 - top level build script that builds debug/release
 - benchmark the impact of debug mode code
 - llm fitness function evolution
+  - this could be progressively raise the bar on complexity - staged evolution
+  - co-evolution
+  
 - try to simplify the eval tree by passing a class reference instead of N args
 * replay functions
   - select board

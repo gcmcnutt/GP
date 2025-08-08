@@ -41,7 +41,7 @@ double evaluateBytecodePortable(const struct GPBytecode* program, int program_si
                 if (stack_ptr < 2) return 0.0;
                 double args[2] = {stack[stack_ptr-2], stack[stack_ptr-1]};
                 stack_ptr -= 2;
-                stack[stack_ptr++] = evaluateGPOperator(instruction.opcode, pathProvider, aircraftState, args, 2);
+                stack[stack_ptr++] = evaluateGPOperator(instruction.opcode, pathProvider, aircraftState, args, 2, contextArg);
                 break;
             }
             
@@ -59,7 +59,7 @@ double evaluateBytecodePortable(const struct GPBytecode* program, int program_si
                 if (stack_ptr < 1) return 0.0;
                 double args[1] = {stack[stack_ptr-1]};
                 stack_ptr -= 1;
-                stack[stack_ptr++] = evaluateGPOperator(instruction.opcode, pathProvider, aircraftState, args, 1);
+                stack[stack_ptr++] = evaluateGPOperator(instruction.opcode, pathProvider, aircraftState, args, 1, contextArg);
                 break;
             }
             
@@ -69,7 +69,7 @@ double evaluateBytecodePortable(const struct GPBytecode* program, int program_si
                 if (stack_ptr < 3) return 0.0;
                 double args[3] = {stack[stack_ptr-3], stack[stack_ptr-2], stack[stack_ptr-1]};
                 stack_ptr -= 3;
-                stack[stack_ptr++] = evaluateGPOperator(instruction.opcode, pathProvider, aircraftState, args, 3);
+                stack[stack_ptr++] = evaluateGPOperator(instruction.opcode, pathProvider, aircraftState, args, 3, contextArg);
                 break;
             }
             
@@ -78,13 +78,13 @@ double evaluateBytecodePortable(const struct GPBytecode* program, int program_si
                 if (stack_ptr < 2) return 0.0;
                 double args[2] = {stack[stack_ptr-2], stack[stack_ptr-1]};
                 stack_ptr -= 2;
-                stack[stack_ptr++] = evaluateGPOperator(instruction.opcode, pathProvider, aircraftState, args, 2);
+                stack[stack_ptr++] = evaluateGPOperator(instruction.opcode, pathProvider, aircraftState, args, 2, contextArg);
                 break;
             }
             
             // Zero-argument operations (terminals and sensors)
             default: {
-                stack[stack_ptr++] = evaluateGPOperator(instruction.opcode, pathProvider, aircraftState, nullptr, 0);
+                stack[stack_ptr++] = evaluateGPOperator(instruction.opcode, pathProvider, aircraftState, nullptr, 0, contextArg);
                 break;
             }
         }
