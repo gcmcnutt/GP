@@ -5,6 +5,7 @@
 #include <vector>
 #include <getopt.h>
 #include <cmath>
+#include <algorithm>
 
 #include "gp_bytecode.h"
 #include "gp_evaluator_portable.h"
@@ -69,8 +70,10 @@ private:
             }
         }
         
-        // Add some safety margin
-        return maxStack + 8;
+        // Use same max stack size as desktop evaluator for consistency
+        // Add safety margin but cap at reasonable maximum
+        int calculatedMax = maxStack + 8;
+        return std::min(calculatedMax, 256);  // Same as desktop evaluator
     }
     
     std::string getOperatorName(int opcode) {
@@ -129,7 +132,7 @@ private:
                 code << "    {\n";
                 code << "        double args[2] = {stack[sp-2], stack[sp-1]};\n";
                 code << "        sp -= 2;\n";
-                code << "        stack[sp++] = evaluateGPOperator(" << opcodeInt << ", pathProvider, aircraftState, args, 2);\n";
+                code << "        stack[sp++] = evaluateGPOperator(" << opcodeInt << ", pathProvider, aircraftState, args, 2, arg);\n";
                 code << "    }\n";
                 break;
                 
@@ -141,7 +144,7 @@ private:
                 code << "    {\n";
                 code << "        double args[1] = {stack[sp-1]};\n";
                 code << "        sp -= 1;\n";
-                code << "        stack[sp++] = evaluateGPOperator(" << opcodeInt << ", pathProvider, aircraftState, args, 1);\n";
+                code << "        stack[sp++] = evaluateGPOperator(" << opcodeInt << ", pathProvider, aircraftState, args, 1, arg);\n";
                 code << "    }\n";
                 break;
                 
@@ -151,7 +154,7 @@ private:
                 code << "    {\n";
                 code << "        double args[3] = {stack[sp-3], stack[sp-2], stack[sp-1]};\n";
                 code << "        sp -= 3;\n";
-                code << "        stack[sp++] = evaluateGPOperator(" << opcodeInt << ", pathProvider, aircraftState, args, 3);\n";
+                code << "        stack[sp++] = evaluateGPOperator(" << opcodeInt << ", pathProvider, aircraftState, args, 3, arg);\n";
                 code << "    }\n";
                 break;
                 
@@ -161,13 +164,13 @@ private:
                 code << "    {\n";
                 code << "        double args[2] = {stack[sp-2], stack[sp-1]};\n";
                 code << "        sp -= 2;\n";
-                code << "        stack[sp++] = evaluateGPOperator(" << opcodeInt << ", pathProvider, aircraftState, args, 2);\n";
+                code << "        stack[sp++] = evaluateGPOperator(" << opcodeInt << ", pathProvider, aircraftState, args, 2, arg);\n";
                 code << "    }\n";
                 break;
                 
             // Zero-argument operations (terminals/sensors)
             default:
-                code << "    stack[sp++] = evaluateGPOperator(" << opcodeInt << ", pathProvider, aircraftState, nullptr, 0); // " << opName << "\n";
+                code << "    stack[sp++] = evaluateGPOperator(" << opcodeInt << ", pathProvider, aircraftState, nullptr, 0, arg); // " << opName << "\n";
                 break;
         }
     }

@@ -4,7 +4,7 @@
 - llm fitness function evolution
   - this could be progressively raise the bar on complexity - staged evolution
   - co-evolution
-  
+
 - try to simplify the eval tree by passing a class reference instead of N args
 * replay functions
   - select board
@@ -43,9 +43,11 @@
 - enable it so that a run of a tool that looks for autoc.ini can have a command line override to an alternate file
 
 - move evaluator embedded to xiao-gp
-- merge evaluator crrcsim and desktop into one -- in the GP dirs
 - check for dangling or vestiage files
 - the portable part of the evaluator should be autoc-eval.cc -- e.g. that is the file that should be portable, not a sub-piece
+- get the run/eval to have two autoc.ini file so we can write to different buckets
+- let's correct the math for sub (is -a -b) right now
+
 
 
 Good Runs
