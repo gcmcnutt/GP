@@ -104,38 +104,66 @@ Eigen::Vector3d Renderer::renderingOffset(int i) {
 
 
 vtkSmartPointer<vtkPolyData> Renderer::createPointSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> points) {
+  return createPointSet(offset, points, 1.0);
+}
+
+vtkSmartPointer<vtkPolyData> Renderer::createPointSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> points, double timeProgress) {
+  vtkSmartPointer<vtkPolyData> polyData = vtkSmartPointer<vtkPolyData>::New();
+  
+  // Calculate how many points to include based on time progress
+  size_t numPointsToShow = static_cast<size_t>(points.size() * timeProgress);
+  if (numPointsToShow == 0 && timeProgress > 0.0) numPointsToShow = 1; // Show at least one point if progress > 0
+  if (numPointsToShow > points.size()) numPointsToShow = points.size();
+  
+  // Return empty polydata if no points to show
+  if (numPointsToShow == 0 || points.empty()) {
+    vtkSmartPointer<vtkPoints> emptyPoints = vtkSmartPointer<vtkPoints>::New();
+    polyData->SetPoints(emptyPoints);
+    return polyData;
+  }
+  
   vtkSmartPointer<vtkPoints> vtp = vtkSmartPointer<vtkPoints>::New();
-  for (const auto& point : points) {
-    Eigen::Vector3d rPoint = point + offset;
+  for (size_t i = 0; i < numPointsToShow; ++i) {
+    Eigen::Vector3d rPoint = points[i] + offset;
     vtp->InsertNextPoint(rPoint[0], rPoint[1], rPoint[2]);
   }
 
   vtkSmartPointer<vtkPolyLine> lines = vtkSmartPointer<vtkPolyLine>::New();
-  lines->GetPointIds()->SetNumberOfIds(points.size());
-  for (int i = 0; i < points.size(); ++i) {
+  lines->GetPointIds()->SetNumberOfIds(numPointsToShow);
+  for (size_t i = 0; i < numPointsToShow; ++i) {
     lines->GetPointIds()->SetId(i, i);
   }
 
   vtkSmartPointer<vtkCellArray> cells = vtkSmartPointer<vtkCellArray>::New();
   cells->InsertNextCell(lines);
 
-  vtkSmartPointer<vtkPolyData> polyData = vtkSmartPointer<vtkPolyData>::New();
   polyData->SetPoints(vtp);
   polyData->SetLines(cells);
-
-  // vtkSmartPointer<vtkVertexGlyphFilter> glyphFilter = vtkSmartPointer<vtkVertexGlyphFilter>::New();
-  // glyphFilter->SetInputData(polyData);
-  // glyphFilter->Update();
-
-  // vtkSmartPointer<vtkPolyData> pointPolyData = vtkSmartPointer<vtkPolyData>::New();
-  // pointPolyData->ShallowCopy(glyphFilter->GetOutput());
 
   return polyData;
 }
 
 vtkSmartPointer<vtkPolyData> Renderer::createSegmentSet(Eigen::Vector3d offset, const std::vector<AircraftState> state, const std::vector<Eigen::Vector3d> end) {
+  return createSegmentSet(offset, state, end, 1.0);
+}
+
+vtkSmartPointer<vtkPolyData> Renderer::createSegmentSet(Eigen::Vector3d offset, const std::vector<AircraftState> state, const std::vector<Eigen::Vector3d> end, double timeProgress) {
+  vtkSmartPointer<vtkPolyData> polyData = vtkSmartPointer<vtkPolyData>::New();
+  
+  // Calculate how many segments to show based on time progress
+  size_t numStatesToShow = static_cast<size_t>(state.size() * timeProgress);
+  if (numStatesToShow == 0 && timeProgress > 0.0) numStatesToShow = 1;
+  if (numStatesToShow > state.size()) numStatesToShow = state.size();
+  
+  // Return empty polydata if no states to show
+  if (numStatesToShow == 0 || state.empty()) {
+    vtkSmartPointer<vtkPoints> emptyPoints = vtkSmartPointer<vtkPoints>::New();
+    polyData->SetPoints(emptyPoints);
+    return polyData;
+  }
+  
   vtkSmartPointer<vtkPoints> points = vtkSmartPointer<vtkPoints>::New();
-  for (int i = 0; i < state.size(); i++) {
+  for (size_t i = 0; i < numStatesToShow; i++) {
     auto& s = state.at(i);
     Eigen::Vector3d rStart = Eigen::Vector3d{ s.getPosition()[0], s.getPosition()[1], s.getPosition()[2] } + offset;
     Eigen::Vector3d rEnd = end[s.getThisPathIndex()] + offset;
@@ -151,7 +179,6 @@ vtkSmartPointer<vtkPolyData> Renderer::createSegmentSet(Eigen::Vector3d offset, 
     lines->InsertNextCell(line);
   }
 
-  vtkSmartPointer<vtkPolyData> polyData = vtkSmartPointer<vtkPolyData>::New();
   polyData->SetPoints(points);
   polyData->SetLines(lines);
 
@@ -163,16 +190,38 @@ vtkSmartPointer<vtkPolyData> Renderer::createSegmentSet(Eigen::Vector3d offset, 
  */
 vtkSmartPointer<vtkPolyData> Renderer::createTapeSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> points,
   const std::vector<Eigen::Vector3d> normals) {
+  return createTapeSet(offset, points, normals, 1.0);
+}
+
+vtkSmartPointer<vtkPolyData> Renderer::createTapeSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> points,
+  const std::vector<Eigen::Vector3d> normals, double timeProgress) {
   vtkSmartPointer<vtkPoints> vtp = vtkSmartPointer<vtkPoints>::New();
   vtkSmartPointer<vtkCellArray> lines = vtkSmartPointer<vtkCellArray>::New();
   vtkSmartPointer<vtkDoubleArray> orientations = vtkSmartPointer<vtkDoubleArray>::New();
   orientations->SetNumberOfComponents(3);
   orientations->SetName("Orientations");
 
-  vtkSmartPointer<vtkPolyLine> polyLine = vtkSmartPointer<vtkPolyLine>::New();
-  polyLine->GetPointIds()->SetNumberOfIds(points.size());
+  // Calculate how many points to show based on time progress
+  size_t numPointsToShow = static_cast<size_t>(points.size() * timeProgress);
+  if (numPointsToShow == 0 && timeProgress > 0.0) numPointsToShow = 1;
+  if (numPointsToShow > points.size()) numPointsToShow = points.size();
+  
+  // Need at least 2 points for ribbon filter to work properly
+  if (numPointsToShow < 2 && points.size() >= 2) {
+    if (timeProgress > 0.5) numPointsToShow = 2;
+    else if (numPointsToShow < 1) numPointsToShow = 0;
+  }
 
-  for (size_t i = 0; i < points.size(); ++i) {
+  if (numPointsToShow == 0) {
+    // Return empty polydata
+    vtkSmartPointer<vtkPolyData> emptyPolyData = vtkSmartPointer<vtkPolyData>::New();
+    return emptyPolyData;
+  }
+
+  vtkSmartPointer<vtkPolyLine> polyLine = vtkSmartPointer<vtkPolyLine>::New();
+  polyLine->GetPointIds()->SetNumberOfIds(numPointsToShow);
+
+  for (size_t i = 0; i < numPointsToShow; ++i) {
     Eigen::Vector3d point = points[i] + offset;
     vtp->InsertNextPoint(point[0], point[1], point[2]);
     polyLine->GetPointIds()->SetId(i, i);
@@ -188,13 +237,16 @@ vtkSmartPointer<vtkPolyData> Renderer::createTapeSet(Eigen::Vector3d offset, con
   polyData->SetLines(lines);
   polyData->GetPointData()->SetNormals(orientations);
 
-  // Create a ribbon filter
-  vtkSmartPointer<vtkRibbonFilter> ribbonFilter = vtkSmartPointer<vtkRibbonFilter>::New();
-  ribbonFilter->SetInputData(polyData);
-  ribbonFilter->SetWidth(0.5);
-  ribbonFilter->Update();
-
-  return ribbonFilter->GetOutput();
+  // Create a ribbon filter only if we have enough points
+  if (numPointsToShow >= 2) {
+    vtkSmartPointer<vtkRibbonFilter> ribbonFilter = vtkSmartPointer<vtkRibbonFilter>::New();
+    ribbonFilter->SetInputData(polyData);
+    ribbonFilter->SetWidth(0.5);
+    ribbonFilter->Update();
+    return ribbonFilter->GetOutput();
+  } else {
+    return polyData;
+  }
 }
 
 /*
@@ -552,6 +604,29 @@ private:
   Renderer* renderer_;
 };
 
+class PlaybackCommand : public vtkCommand {
+public:
+  static PlaybackCommand* New() {
+    return new PlaybackCommand();
+  }
+  vtkTypeMacro(PlaybackCommand, vtkCommand);
+
+  void SetRenderer(Renderer* renderer) { renderer_ = renderer; }
+
+  void Execute(vtkObject* caller, unsigned long eventId, void* callData) override {
+    if (renderer_) {
+      std::cout << "Toggle playback animation..." << std::endl;
+      renderer_->togglePlaybackAnimation();
+    }
+  }
+
+protected:
+  PlaybackCommand() : renderer_(nullptr) {}
+
+private:
+  Renderer* renderer_;
+};
+
 
 void Renderer::initialize() {
   // Create a renderer and render window interactor
@@ -564,6 +639,7 @@ void Renderer::initialize() {
 
   // Set the interactor style to extended trackball camera
   vtkNew<CustomInteractorStyle> interactorStyle;
+  interactorStyle->SetRenderer(this);
   renderWindowInteractor->SetInteractorStyle(interactorStyle);
   renderWindowInteractor->SetRenderWindow(renderWindow);
 
@@ -582,6 +658,8 @@ void Renderer::initialize() {
   previousTestCommand->SetRenderer(this);
   vtkNew<AllFlightCommand> allFlightCommand;
   allFlightCommand->SetRenderer(this);
+  vtkNew<PlaybackCommand> playbackCommand;
+  playbackCommand->SetRenderer(this);
 
   // Add observers for the custom events
   interactorStyle->AddObserver(NextModelEvent, nextModelCommand);
@@ -591,6 +669,7 @@ void Renderer::initialize() {
   interactorStyle->AddObserver(NextTestEvent, nextTestCommand);
   interactorStyle->AddObserver(PreviousTestEvent, previousTestCommand);
   interactorStyle->AddObserver(AllFlightEvent, allFlightCommand);
+  interactorStyle->AddObserver(PlaybackEvent, playbackCommand);
 
   // Add window resize observer
   vtkNew<WindowResizeCommand> resizeCommand;
@@ -854,6 +933,21 @@ void Renderer::initialize() {
   vtkNew<ExitCommand> exitCommand;
   exitCommand->Interactor = renderWindowInteractor;
   renderWindowInteractor->AddObserver(vtkCommand::ExitEvent, exitCommand);
+  
+  // Timer callback for animation
+  vtkNew<vtkCallbackCommand> timerCallback;
+  timerCallback->SetCallback([](vtkObject* caller, unsigned long eid, void* clientdata, void* calldata) {
+    Renderer* renderer = static_cast<Renderer*>(clientdata);
+    // Double-check that animation is still active and timer ID is valid
+    if (renderer && renderer->isPlaybackActive && renderer->animationTimerId != 0) {
+      // Additional safety check - only proceed if we have a valid renderWindowInteractor
+      if (renderer->renderWindowInteractor) {
+        renderer->updatePlaybackAnimation();
+      }
+    }
+  });
+  timerCallback->SetClientData(this);
+  renderWindowInteractor->AddObserver(vtkCommand::TimerEvent, timerCallback);
 }
 
 std::vector<Eigen::Vector3d> Renderer::pathToVector(std::vector<Path> path) {
@@ -1135,6 +1229,7 @@ int main(int argc, char** argv) {
   std::cout << "  p - Previous generation" << std::endl;
   std::cout << "  N - Jump to newest generation" << std::endl;
   std::cout << "  P - Jump to oldest generation (generation 1)" << std::endl;
+  std::cout << "  SPACE - Toggle playback animation" << std::endl;
   if (!decoderCommand.empty() && !renderer.testSpans.empty()) {
     std::cout << "  t - Next test segment" << std::endl;
     std::cout << "  r - Previous test segment" << std::endl;
@@ -1652,6 +1747,233 @@ void Renderer::createHighlightedFlightTapes(Eigen::Vector3d offset) {
   // Ensure highlight actor is at full brightness
   blackboxHighlightActor->GetProperty()->SetOpacity(1.0);
   blackboxHighlightActor->GetBackfaceProperty()->SetOpacity(1.0);
+}
+
+void Renderer::togglePlaybackAnimation() {
+  if (isPlaybackActive) {
+    // Stop animation
+    isPlaybackActive = false;
+    isPlaybackPaused = false;
+    totalPausedTime = std::chrono::duration<double>::zero();
+    if (animationTimerId != 0) {
+      renderWindowInteractor->DestroyTimer(animationTimerId);
+      animationTimerId = 0;
+    }
+    std::cout << "Playback animation stopped" << std::endl;
+    // Re-render full scene using existing data (no S3 fetch)
+    renderFullScene();
+  } else {
+    // Start animation
+    isPlaybackActive = true;
+    isPlaybackPaused = false;
+    totalPausedTime = std::chrono::duration<double>::zero();
+    animationStartTime = std::chrono::steady_clock::now();
+    std::cout << "Playback animation started (" << totalAnimationDuration << "s duration)" << std::endl;
+    // Start with first animation frame
+    updatePlaybackAnimation();
+  }
+}
+
+void Renderer::pausePlaybackAnimation() {
+  if (isPlaybackActive && !isPlaybackPaused) {
+    isPlaybackPaused = true;
+    pauseStartTime = std::chrono::steady_clock::now();
+    std::cout << "Animation paused for camera interaction" << std::endl;
+  }
+}
+
+void Renderer::resumePlaybackAnimation() {
+  if (isPlaybackActive && isPlaybackPaused) {
+    auto pauseDuration = std::chrono::steady_clock::now() - pauseStartTime;
+    totalPausedTime += pauseDuration;
+    isPlaybackPaused = false;
+    std::cout << "Animation resumed after camera interaction" << std::endl;
+    // Restart the animation timer
+    updatePlaybackAnimation();
+  }
+}
+
+void Renderer::updatePlaybackAnimation() {
+  if (!isPlaybackActive) return;
+  
+  // Skip updates while paused
+  if (isPlaybackPaused) return;
+  
+  auto currentTime = std::chrono::steady_clock::now();
+  auto totalElapsed = currentTime - animationStartTime;
+  auto effectiveElapsed = totalElapsed - totalPausedTime;
+  auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(effectiveElapsed).count() / 1000.0;
+  
+  // Calculate progress (0.0 to 1.0)
+  double progress = elapsed / totalAnimationDuration;
+  
+  if (progress >= 1.0) {
+    // Animation complete - just set final progress and disable
+    progress = 1.0;
+    isPlaybackActive = false;
+    animationTimerId = 0; // Clear timer ID since animation is done
+    std::cout << "Playback animation completed" << std::endl;
+    // Continue with final frame rendering (progress = 1.0)
+  }
+  
+  // Clear existing data
+  this->paths->RemoveAllInputs();
+  this->actuals->RemoveAllInputs();
+  this->segmentGaps->RemoveAllInputs();
+  this->blackboxTapes->RemoveAllInputs();
+  this->blackboxHighlightTapes->RemoveAllInputs();
+  
+  // Always ensure highlight tapes has at least empty data
+  vtkNew<vtkPolyData> emptyHighlightData;
+  vtkNew<vtkPoints> emptyHighlightPoints;
+  emptyHighlightData->SetPoints(emptyHighlightPoints);
+  this->blackboxHighlightTapes->AddInputData(emptyHighlightData);
+  
+  // Render with time progress
+  int maxArenas = (!blackboxAircraftStates.empty()) ? 1 : evalResults.pathList.size();
+  for (int i = 0; i < maxArenas; i++) {
+    Eigen::Vector3d offset = renderingOffset(i);
+    
+    std::vector<Eigen::Vector3d> p = pathToVector(evalResults.pathList[i]);
+    std::vector<Eigen::Vector3d> a = stateToVector(evalResults.aircraftStateList[i]);
+    
+    if (!p.empty()) {
+      this->paths->AddInputData(createPointSet(offset, p, progress));
+    }
+    if (!a.empty()) {
+      this->actuals->AddInputData(createTapeSet(offset, a, stateToOrientation(evalResults.aircraftStateList[i]), progress));
+    }
+    if (!a.empty() && !p.empty()) {
+      this->segmentGaps->AddInputData(createSegmentSet(offset, evalResults.aircraftStateList[i], p, progress));
+    }
+    
+    // Add blackbox data to first arena only (with animation)
+    if (i == 0 && !blackboxAircraftStates.empty()) {
+      Eigen::Vector3d blackboxOffset = offset;
+      std::vector<Eigen::Vector3d> a_bb = stateToVector(blackboxAircraftStates);
+      
+      if (a_bb.size() >= 2) {
+        if (inDecodeMode && !testSpans.empty() && !showingFullFlight) {
+          this->blackboxTapes->AddInputData(createTapeSet(blackboxOffset, a_bb, stateToOrientation(blackboxAircraftStates), progress));
+          blackboxActor->GetProperty()->SetOpacity(1.0);
+          blackboxActor->GetBackfaceProperty()->SetOpacity(1.0);
+        } else if (inDecodeMode && showingFullFlight && !testSpans.empty()) {
+          // For full flight mode, still animate the dimmed background tape
+          std::vector<Eigen::Vector3d> fullPoints = stateToVector(fullBlackboxAircraftStates);
+          if (fullPoints.size() >= 2) {
+            this->blackboxTapes->AddInputData(createTapeSet(blackboxOffset, fullPoints, stateToOrientation(fullBlackboxAircraftStates), progress));
+            blackboxActor->GetProperty()->SetOpacity(0.25);
+            blackboxActor->GetBackfaceProperty()->SetOpacity(0.25);
+            
+            // Animate highlighted test spans
+            for (const TestSpan& span : testSpans) {
+              size_t startIdx = std::min(span.startIndex, fullBlackboxAircraftStates.size());
+              size_t endIdx = std::min(span.endIndex + 1, fullBlackboxAircraftStates.size());
+              
+              if (startIdx < endIdx && startIdx < fullBlackboxAircraftStates.size()) {
+                std::vector<AircraftState> spanStates;
+                for (size_t j = startIdx; j < endIdx; j++) {
+                  spanStates.push_back(fullBlackboxAircraftStates[j]);
+                }
+                
+                if (spanStates.size() >= 2) {
+                  std::vector<Eigen::Vector3d> spanPoints = stateToVector(spanStates);
+                  this->blackboxHighlightTapes->AddInputData(createTapeSet(blackboxOffset, spanPoints, stateToOrientation(spanStates), progress));
+                }
+              }
+            }
+          }
+        } else {
+          this->blackboxTapes->AddInputData(createTapeSet(blackboxOffset, a_bb, stateToOrientation(blackboxAircraftStates), progress));
+          blackboxActor->GetProperty()->SetOpacity(1.0);
+          blackboxActor->GetBackfaceProperty()->SetOpacity(1.0);
+        }
+      }
+    }
+  }
+  
+  // Update all pipelines
+  this->paths->Update();
+  this->actuals->Update();
+  this->segmentGaps->Update();
+  if (!blackboxAircraftStates.empty()) {
+    this->blackboxTapes->Update();
+    this->blackboxHighlightTapes->Update();
+  }
+  
+  // Render the scene
+  renderWindow->Render();
+  
+  // Continue animation if still active (use one-shot timers like original)
+  if (isPlaybackActive) {
+    animationTimerId = renderWindowInteractor->CreateOneShotTimer(33); // 33ms = ~30fps
+  }
+}
+
+void Renderer::renderFullScene() {
+  // Clear existing data
+  this->paths->RemoveAllInputs();
+  this->actuals->RemoveAllInputs();
+  this->segmentGaps->RemoveAllInputs();
+  this->blackboxTapes->RemoveAllInputs();
+  this->blackboxHighlightTapes->RemoveAllInputs();
+  
+  // Always ensure highlight tapes has at least empty data
+  vtkNew<vtkPolyData> emptyHighlightData;
+  vtkNew<vtkPoints> emptyHighlightPoints;
+  emptyHighlightData->SetPoints(emptyHighlightPoints);
+  this->blackboxHighlightTapes->AddInputData(emptyHighlightData);
+  
+  // Render with full progress (1.0) using existing data
+  int maxArenas = (!blackboxAircraftStates.empty()) ? 1 : evalResults.pathList.size();
+  for (int i = 0; i < maxArenas; i++) {
+    Eigen::Vector3d offset = renderingOffset(i);
+    
+    std::vector<Eigen::Vector3d> p = pathToVector(evalResults.pathList[i]);
+    std::vector<Eigen::Vector3d> a = stateToVector(evalResults.aircraftStateList[i]);
+    
+    if (!p.empty()) {
+      this->paths->AddInputData(createPointSet(offset, p)); // Full progress (no timeProgress param)
+    }
+    if (!a.empty()) {
+      this->actuals->AddInputData(createTapeSet(offset, a, stateToOrientation(evalResults.aircraftStateList[i]))); // Full progress
+    }
+    if (!a.empty() && !p.empty()) {
+      this->segmentGaps->AddInputData(createSegmentSet(offset, evalResults.aircraftStateList[i], p)); // Full progress
+    }
+    
+    // Add blackbox data to first arena only (full progress)
+    if (i == 0 && !blackboxAircraftStates.empty()) {
+      Eigen::Vector3d blackboxOffset = offset;
+      std::vector<Eigen::Vector3d> a_bb = stateToVector(blackboxAircraftStates);
+      
+      if (a_bb.size() >= 2) {
+        if (inDecodeMode && !testSpans.empty() && !showingFullFlight) {
+          this->blackboxTapes->AddInputData(createTapeSet(blackboxOffset, a_bb, stateToOrientation(blackboxAircraftStates)));
+          blackboxActor->GetProperty()->SetOpacity(1.0);
+          blackboxActor->GetBackfaceProperty()->SetOpacity(1.0);
+        } else if (inDecodeMode && showingFullFlight && !testSpans.empty()) {
+          createHighlightedFlightTapes(blackboxOffset);
+        } else {
+          this->blackboxTapes->AddInputData(createTapeSet(blackboxOffset, a_bb, stateToOrientation(blackboxAircraftStates)));
+          blackboxActor->GetProperty()->SetOpacity(1.0);
+          blackboxActor->GetBackfaceProperty()->SetOpacity(1.0);
+        }
+      }
+    }
+  }
+  
+  // Update all pipelines
+  this->paths->Update();
+  this->actuals->Update();
+  this->segmentGaps->Update();
+  if (!blackboxAircraftStates.empty()) {
+    this->blackboxTapes->Update();
+    this->blackboxHighlightTapes->Update();
+  }
+  
+  // Render the scene
+  renderWindow->Render();
 }
 
 void printUsage(const char* progName) {
