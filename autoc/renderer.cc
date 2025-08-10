@@ -1670,8 +1670,8 @@ void Renderer::nextTest() {
   // Update the blackbox rendering to show only the selected test span
   updateBlackboxForCurrentTest();
   
-  // Re-render the entire display
-  updateGenerationDisplay(genNumber);
+  // Re-render using in-memory data (no S3 fetch)
+  renderFullScene();
 }
 
 void Renderer::previousTest() {
@@ -1692,8 +1692,8 @@ void Renderer::previousTest() {
   // Update the blackbox rendering to show only the selected test span
   updateBlackboxForCurrentTest();
   
-  // Re-render the entire display
-  updateGenerationDisplay(genNumber);
+  // Re-render using in-memory data (no S3 fetch)
+  renderFullScene();
 }
 
 void Renderer::showAllFlight() {
@@ -1705,8 +1705,8 @@ void Renderer::showAllFlight() {
   // Update the blackbox rendering
   updateBlackboxForCurrentTest();
   
-  // Re-render the entire display
-  updateGenerationDisplay(genNumber);
+  // Re-render using in-memory data (no S3 fetch)
+  renderFullScene();
 }
 
 void Renderer::createHighlightedFlightTapes(Eigen::Vector3d offset) {
@@ -1768,7 +1768,7 @@ void Renderer::togglePlaybackAnimation() {
     isPlaybackPaused = false;
     totalPausedTime = std::chrono::duration<double>::zero();
     animationStartTime = std::chrono::steady_clock::now();
-    std::cout << "Playback animation started (" << totalAnimationDuration << "s duration)" << std::endl;
+    std::cout << "Real-time playback animation started" << std::endl;
     // Start with first animation frame
     updatePlaybackAnimation();
   }
@@ -1804,16 +1804,25 @@ void Renderer::updatePlaybackAnimation() {
   auto effectiveElapsed = totalElapsed - totalPausedTime;
   auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(effectiveElapsed).count() / 1000.0;
   
-  // Calculate progress (0.0 to 1.0)
-  double progress = elapsed / totalAnimationDuration;
+  // Path always drives the timing - find longest simulation duration across all paths
+  double primaryDuration = 0.0;
+  int maxArenas = evalResults.pathList.size();
+  for (int i = 0; i < maxArenas; i++) {
+    if (!evalResults.aircraftStateList[i].empty()) {
+      double pathMaxTime = evalResults.aircraftStateList[i].back().getSimTimeMsec() / 1000.0;
+      primaryDuration = std::max(primaryDuration, pathMaxTime);
+    }
+  }
   
-  if (progress >= 1.0) {
-    // Animation complete - just set final progress and disable
-    progress = 1.0;
+  // Use real-time playback - elapsed seconds = simulation seconds
+  double currentSimTime = elapsed;
+  
+  // Check if animation is complete
+  if (primaryDuration > 0.0 && currentSimTime >= primaryDuration) {
+    currentSimTime = primaryDuration;
     isPlaybackActive = false;
-    animationTimerId = 0; // Clear timer ID since animation is done
-    std::cout << "Playback animation completed" << std::endl;
-    // Continue with final frame rendering (progress = 1.0)
+    animationTimerId = 0;
+    std::cout << "Playback animation completed (duration: " << primaryDuration << "s)" << std::endl;
   }
   
   // Clear existing data
@@ -1829,22 +1838,31 @@ void Renderer::updatePlaybackAnimation() {
   emptyHighlightData->SetPoints(emptyHighlightPoints);
   this->blackboxHighlightTapes->AddInputData(emptyHighlightData);
   
-  // Render with time progress
-  int maxArenas = (!blackboxAircraftStates.empty()) ? 1 : evalResults.pathList.size();
-  for (int i = 0; i < maxArenas; i++) {
+  // Render with synchronized time progress
+  int renderArenas = (!blackboxAircraftStates.empty()) ? 1 : evalResults.pathList.size();
+  for (int i = 0; i < renderArenas; i++) {
     Eigen::Vector3d offset = renderingOffset(i);
     
     std::vector<Eigen::Vector3d> p = pathToVector(evalResults.pathList[i]);
     std::vector<Eigen::Vector3d> a = stateToVector(evalResults.aircraftStateList[i]);
     
+    // Calculate progress for this path based on real simulation time
+    double simProgress = 1.0; // Default to show all
+    if (!evalResults.aircraftStateList[i].empty()) {
+      double simDuration = evalResults.aircraftStateList[i].back().getSimTimeMsec() / 1000.0;
+      if (simDuration > 0.0) {
+        simProgress = std::min(1.0, currentSimTime / simDuration);
+      }
+    }
+    
     if (!p.empty()) {
-      this->paths->AddInputData(createPointSet(offset, p, progress));
+      this->paths->AddInputData(createPointSet(offset, p, simProgress));
     }
     if (!a.empty()) {
-      this->actuals->AddInputData(createTapeSet(offset, a, stateToOrientation(evalResults.aircraftStateList[i]), progress));
+      this->actuals->AddInputData(createTapeSet(offset, a, stateToOrientation(evalResults.aircraftStateList[i]), simProgress));
     }
     if (!a.empty() && !p.empty()) {
-      this->segmentGaps->AddInputData(createSegmentSet(offset, evalResults.aircraftStateList[i], p, progress));
+      this->segmentGaps->AddInputData(createSegmentSet(offset, evalResults.aircraftStateList[i], p, simProgress));
     }
     
     // Add blackbox data to first arena only (with animation)
@@ -1853,15 +1871,43 @@ void Renderer::updatePlaybackAnimation() {
       std::vector<Eigen::Vector3d> a_bb = stateToVector(blackboxAircraftStates);
       
       if (a_bb.size() >= 2) {
+        // Calculate blackbox progress to sync with path timing
+        double blackboxProgress = 1.0; // Default to show all
+        if (!blackboxAircraftStates.empty()) {
+          // The blackbox test data starts at some offset but should sync with path time 0
+          // Simply use the blackbox duration and sync with currentSimTime
+          double blackboxStartTime = blackboxAircraftStates.front().getSimTimeMsec();
+          double blackboxEndTime = blackboxAircraftStates.back().getSimTimeMsec();
+          double blackboxDuration = (blackboxEndTime - blackboxStartTime) / 1000000.0; // Convert microseconds to seconds
+          
+          if (blackboxDuration > 0.0) {
+            // Blackbox animates synchronized with path: both start at currentSimTime=0
+            blackboxProgress = std::min(1.0, currentSimTime / blackboxDuration);
+          }
+          
+        }
+        
         if (inDecodeMode && !testSpans.empty() && !showingFullFlight) {
-          this->blackboxTapes->AddInputData(createTapeSet(blackboxOffset, a_bb, stateToOrientation(blackboxAircraftStates), progress));
+          this->blackboxTapes->AddInputData(createTapeSet(blackboxOffset, a_bb, stateToOrientation(blackboxAircraftStates), blackboxProgress));
           blackboxActor->GetProperty()->SetOpacity(1.0);
           blackboxActor->GetBackfaceProperty()->SetOpacity(1.0);
         } else if (inDecodeMode && showingFullFlight && !testSpans.empty()) {
           // For full flight mode, still animate the dimmed background tape
           std::vector<Eigen::Vector3d> fullPoints = stateToVector(fullBlackboxAircraftStates);
           if (fullPoints.size() >= 2) {
-            this->blackboxTapes->AddInputData(createTapeSet(blackboxOffset, fullPoints, stateToOrientation(fullBlackboxAircraftStates), progress));
+            double fullFlightProgress = 1.0;
+            if (!fullBlackboxAircraftStates.empty()) {
+              double fullStartTime = fullBlackboxAircraftStates.front().getSimTimeMsec() / 1000.0;
+              double fullEndTime = fullBlackboxAircraftStates.back().getSimTimeMsec() / 1000.0;
+              double fullDuration = fullEndTime - fullStartTime;
+              
+              if (fullDuration > 0.0) {
+                // Simple progress for full flight too
+                fullFlightProgress = std::min(1.0, currentSimTime / fullDuration);
+              }
+            }
+            
+            this->blackboxTapes->AddInputData(createTapeSet(blackboxOffset, fullPoints, stateToOrientation(fullBlackboxAircraftStates), fullFlightProgress));
             blackboxActor->GetProperty()->SetOpacity(0.25);
             blackboxActor->GetBackfaceProperty()->SetOpacity(0.25);
             
@@ -1878,13 +1924,13 @@ void Renderer::updatePlaybackAnimation() {
                 
                 if (spanStates.size() >= 2) {
                   std::vector<Eigen::Vector3d> spanPoints = stateToVector(spanStates);
-                  this->blackboxHighlightTapes->AddInputData(createTapeSet(blackboxOffset, spanPoints, stateToOrientation(spanStates), progress));
+                  this->blackboxHighlightTapes->AddInputData(createTapeSet(blackboxOffset, spanPoints, stateToOrientation(spanStates), fullFlightProgress));
                 }
               }
             }
           }
         } else {
-          this->blackboxTapes->AddInputData(createTapeSet(blackboxOffset, a_bb, stateToOrientation(blackboxAircraftStates), progress));
+          this->blackboxTapes->AddInputData(createTapeSet(blackboxOffset, a_bb, stateToOrientation(blackboxAircraftStates), blackboxProgress));
           blackboxActor->GetProperty()->SetOpacity(1.0);
           blackboxActor->GetBackfaceProperty()->SetOpacity(1.0);
         }
