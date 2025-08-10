@@ -413,6 +413,7 @@ public:
   void Execute(vtkObject* caller, unsigned long eventId, void* callData) override {
     if (renderer_) {
       std::cout << "Load next results..." << std::endl;
+      renderer_->hideStopwatch();
       if (renderer_->updateGenerationDisplay(renderer_->genNumber - 1)) {
         renderer_->genNumber--;
       }
@@ -438,6 +439,7 @@ public:
   void Execute(vtkObject* caller, unsigned long eventId, void* callData) override {
     if (renderer_) {
       std::cout << "Load previous results..." << std::endl;
+      renderer_->hideStopwatch();
       if (renderer_->updateGenerationDisplay(renderer_->genNumber + 1)) {
         renderer_->genNumber++;
       }
@@ -925,6 +927,9 @@ void Renderer::initialize() {
   renderer->SetUseDepthPeeling(1);
   renderer->SetMaximumNumberOfPeels(100);  // Maximum number of depth peels
   renderer->SetOcclusionRatio(0.1);        // Occlusion ratio
+
+  // Create stopwatch (initially hidden)
+  createStopwatch();
 
   // render
   renderWindow->Render();
@@ -1473,6 +1478,8 @@ bool loadBlackboxData() {
 }
 
 void Renderer::jumpToNewestGeneration() {
+  hideStopwatch();
+  
   // The newest generation has the lowest generation number (because of 10000-gen numbering)
   // We need to find the lowest numbered generation file in S3
   
@@ -1516,6 +1523,8 @@ void Renderer::jumpToNewestGeneration() {
 }
 
 void Renderer::jumpToOldestGeneration() {
+  hideStopwatch();
+  
   // Generation 1 is stored as gen9999.dmp
   genNumber = 9999;
   updateGenerationDisplay(genNumber);
@@ -1667,6 +1676,9 @@ void Renderer::nextTest() {
     currentTestIndex = (currentTestIndex + 1) % testSpans.size();
   }
   
+  // Hide stopwatch when changing test data
+  hideStopwatch();
+  
   // Update the blackbox rendering to show only the selected test span
   updateBlackboxForCurrentTest();
   
@@ -1689,6 +1701,9 @@ void Renderer::previousTest() {
     currentTestIndex = (currentTestIndex - 1 + testSpans.size()) % testSpans.size();
   }
   
+  // Hide stopwatch when changing test data
+  hideStopwatch();
+  
   // Update the blackbox rendering to show only the selected test span
   updateBlackboxForCurrentTest();
   
@@ -1698,6 +1713,9 @@ void Renderer::previousTest() {
 
 void Renderer::showAllFlight() {
   showingFullFlight = true;
+  
+  // Hide stopwatch when switching to full flight mode
+  hideStopwatch();
   
   // Restore full blackbox data
   blackboxAircraftStates = fullBlackboxAircraftStates;
@@ -1749,6 +1767,178 @@ void Renderer::createHighlightedFlightTapes(Eigen::Vector3d offset) {
   blackboxHighlightActor->GetBackfaceProperty()->SetOpacity(1.0);
 }
 
+void Renderer::createStopwatch() {
+  // Create stopwatch geometry (circle with tick marks and hands)
+  vtkNew<vtkPoints> points;
+  vtkNew<vtkCellArray> lines;
+  
+  // Clock face circle (100px diameter)
+  const double radius = 50.0;
+  const int numPoints = 60;
+  for (int i = 0; i < numPoints; i++) {
+    double angle = 2.0 * M_PI * i / numPoints;
+    points->InsertNextPoint(radius * cos(angle), radius * sin(angle), 0);
+  }
+  
+  // Add tick marks (10 ticks)
+  for (int i = 0; i < 10; i++) {
+    double angle = 2.0 * M_PI * i / 10;
+    double innerRadius = radius * 0.85;
+    double outerRadius = radius * 0.95;
+    
+    // Inner point
+    points->InsertNextPoint(innerRadius * cos(angle), innerRadius * sin(angle), 0);
+    // Outer point
+    points->InsertNextPoint(outerRadius * cos(angle), outerRadius * sin(angle), 0);
+  }
+  
+  // Circle lines
+  vtkNew<vtkPolyLine> circle;
+  circle->GetPointIds()->SetNumberOfIds(numPoints + 1);
+  for (int i = 0; i < numPoints; i++) {
+    circle->GetPointIds()->SetId(i, i);
+  }
+  circle->GetPointIds()->SetId(numPoints, 0); // Close the circle
+  lines->InsertNextCell(circle);
+  
+  // Tick mark lines
+  for (int i = 0; i < 10; i++) {
+    vtkNew<vtkLine> tick;
+    tick->GetPointIds()->SetId(0, numPoints + i * 2);
+    tick->GetPointIds()->SetId(1, numPoints + i * 2 + 1);
+    lines->InsertNextCell(tick);
+  }
+  
+  // Create polydata
+  vtkNew<vtkPolyData> stopwatchData;
+  stopwatchData->SetPoints(points);
+  stopwatchData->SetLines(lines);
+  
+  // Create mapper and actor
+  vtkNew<vtkPolyDataMapper2D> mapper;
+  mapper->SetInputData(stopwatchData);
+  
+  stopwatchActor = vtkSmartPointer<vtkActor2D>::New();
+  stopwatchActor->SetMapper(mapper);
+  stopwatchActor->GetProperty()->SetColor(1.0, 1.0, 1.0); // White
+  stopwatchActor->GetProperty()->SetOpacity(0.8);
+  
+  // Position will be set in updateStopwatch using screen coordinates
+  stopwatchActor->SetPosition(0, 0);
+  
+  // Create time text actor
+  stopwatchTimeActor = vtkSmartPointer<vtkTextActor>::New();
+  stopwatchTimeActor->GetTextProperty()->SetFontSize(12);
+  stopwatchTimeActor->GetTextProperty()->SetColor(1.0, 1.0, 1.0);
+  stopwatchTimeActor->GetTextProperty()->SetJustificationToCentered();
+}
+
+void Renderer::updateStopwatch(double currentTime) {
+  if (!stopwatchActor || !stopwatchTimeActor) return;
+  
+  stopwatchTime = currentTime;
+  
+  // Position stopwatch in upper right corner (2D screen coordinates)
+  int* windowSize = renderWindow->GetSize();
+  double centerX = windowSize[0] - 70; // 70px from right edge
+  double centerY = windowSize[1] - 70; // 70px from top
+  
+  // Create updated stopwatch geometry with hands
+  vtkNew<vtkPoints> points;
+  vtkNew<vtkCellArray> lines;
+  
+  // Clock face circle
+  const double radius = 45.0;
+  const int numPoints = 60;
+  for (int i = 0; i < numPoints; i++) {
+    double angle = 2.0 * M_PI * i / numPoints;
+    points->InsertNextPoint(centerX + radius * cos(angle), centerY + radius * sin(angle), 0);
+  }
+  
+  // Add tick marks (10 ticks)
+  for (int i = 0; i < 10; i++) {
+    double angle = 2.0 * M_PI * i / 10 - M_PI/2; // Start from top
+    double innerRadius = radius * 0.85;
+    double outerRadius = radius * 0.95;
+    
+    points->InsertNextPoint(centerX + innerRadius * cos(angle), centerY + innerRadius * sin(angle), 0);
+    points->InsertNextPoint(centerX + outerRadius * cos(angle), centerY + outerRadius * sin(angle), 0);
+  }
+  
+  // Add hand center point
+  points->InsertNextPoint(centerX, centerY, 0);
+  int centerPointId = numPoints + 20;
+  
+  // Calculate hand angles (clockwise rotation)
+  double secondAngle = -fmod(currentTime, 1.0) * 2.0 * M_PI + M_PI/2; // 1 rev/sec, clockwise from top
+  double tenSecAngle = -fmod(currentTime, 10.0) * 2.0 * M_PI / 10.0 + M_PI/2; // 1 rev/10sec, clockwise
+  
+  // 1-second hand (longer, thinner)
+  double secondRadius = radius * 0.8;
+  points->InsertNextPoint(centerX + secondRadius * cos(secondAngle), centerY + secondRadius * sin(secondAngle), 0);
+  int secondHandId = centerPointId + 1;
+  
+  // 10-second hand (shorter, thicker conceptually)
+  double tenSecRadius = radius * 0.6;
+  points->InsertNextPoint(centerX + tenSecRadius * cos(tenSecAngle), centerY + tenSecRadius * sin(tenSecAngle), 0);
+  int tenSecHandId = centerPointId + 2;
+  
+  // Create circle lines
+  vtkNew<vtkPolyLine> circle;
+  circle->GetPointIds()->SetNumberOfIds(numPoints + 1);
+  for (int i = 0; i < numPoints; i++) {
+    circle->GetPointIds()->SetId(i, i);
+  }
+  circle->GetPointIds()->SetId(numPoints, 0);
+  lines->InsertNextCell(circle);
+  
+  // Create tick mark lines
+  for (int i = 0; i < 10; i++) {
+    vtkNew<vtkLine> tick;
+    tick->GetPointIds()->SetId(0, numPoints + i * 2);
+    tick->GetPointIds()->SetId(1, numPoints + i * 2 + 1);
+    lines->InsertNextCell(tick);
+  }
+  
+  // Create hand lines
+  vtkNew<vtkLine> secondHand;
+  secondHand->GetPointIds()->SetId(0, centerPointId);
+  secondHand->GetPointIds()->SetId(1, secondHandId);
+  lines->InsertNextCell(secondHand);
+  
+  vtkNew<vtkLine> tenSecHand;
+  tenSecHand->GetPointIds()->SetId(0, centerPointId);
+  tenSecHand->GetPointIds()->SetId(1, tenSecHandId);
+  lines->InsertNextCell(tenSecHand);
+  
+  // Update actor with new geometry
+  vtkNew<vtkPolyData> stopwatchData;
+  stopwatchData->SetPoints(points);
+  stopwatchData->SetLines(lines);
+  
+  vtkPolyDataMapper2D* mapper = vtkPolyDataMapper2D::SafeDownCast(stopwatchActor->GetMapper());
+  if (mapper) {
+    mapper->SetInputData(stopwatchData);
+  }
+  
+  // Update time text (centered horizontally below hands center)
+  char timeStr[32];
+  snprintf(timeStr, sizeof(timeStr), "%.2f", currentTime);
+  stopwatchTimeActor->SetInput(timeStr);
+  stopwatchTimeActor->SetPosition(centerX - 12, centerY - 25); // Centered horizontally, positioned below hands center
+}
+
+void Renderer::hideStopwatch() {
+  if (stopwatchActor && stopwatchTimeActor) {
+    vtkRenderer* renderer = vtkRenderer::SafeDownCast(renderWindow->GetRenderers()->GetFirstRenderer());
+    if (renderer) {
+      renderer->RemoveActor2D(stopwatchActor);
+      renderer->RemoveActor2D(stopwatchTimeActor);
+    }
+    stopwatchVisible = false;
+  }
+}
+
 void Renderer::togglePlaybackAnimation() {
   if (isPlaybackActive) {
     // Stop animation
@@ -1768,6 +1958,15 @@ void Renderer::togglePlaybackAnimation() {
     isPlaybackPaused = false;
     totalPausedTime = std::chrono::duration<double>::zero();
     animationStartTime = std::chrono::steady_clock::now();
+    stopwatchVisible = true;
+    
+    // Show stopwatch actors (need to get the renderer from the render window)
+    vtkRenderer* renderer = vtkRenderer::SafeDownCast(renderWindow->GetRenderers()->GetFirstRenderer());
+    if (renderer) {
+      renderer->AddActor2D(stopwatchActor);
+      renderer->AddActor2D(stopwatchTimeActor);
+    }
+    
     std::cout << "Real-time playback animation started" << std::endl;
     // Start with first animation frame
     updatePlaybackAnimation();
@@ -1817,11 +2016,20 @@ void Renderer::updatePlaybackAnimation() {
   // Use real-time playback - elapsed seconds = simulation seconds
   double currentSimTime = elapsed;
   
+  // Update stopwatch
+  if (stopwatchVisible) {
+    updateStopwatch(currentSimTime);
+  }
+  
   // Check if animation is complete
   if (primaryDuration > 0.0 && currentSimTime >= primaryDuration) {
     currentSimTime = primaryDuration;
     isPlaybackActive = false;
     animationTimerId = 0;
+    // Keep stopwatch visible showing final time
+    if (stopwatchVisible) {
+      updateStopwatch(currentSimTime);
+    }
     std::cout << "Playback animation completed (duration: " << primaryDuration << "s)" << std::endl;
   }
   

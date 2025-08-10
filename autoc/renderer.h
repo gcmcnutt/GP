@@ -11,12 +11,15 @@
 #include <vtkObjectFactory.h>
 #include <vtkVertexGlyphFilter.h>
 #include <vtkPolyDataMapper.h>
+#include <vtkPolyDataMapper2D.h>
 #include <vtkActor.h>
+#include <vtkActor2D.h>
 #include <vtkRenderer.h>
 #include <vtkRenderWindow.h>
 #include <vtkRenderWindowInteractor.h>
 #include <vtkNamedColors.h>
 #include <vtkProperty.h>
+#include <vtkProperty2D.h>
 #include <vtkAxesActor.h>
 #include <vtkOrientationMarkerWidget.h>
 #include <vtkCommand.h>
@@ -35,6 +38,7 @@
 #include <vtkPointData.h>
 #include <vtkTextActor.h>
 #include <vtkTextProperty.h>
+#include <vtkRendererCollection.h>
 #include <chrono>
 
 #define FIELD_SIZE 100.0
@@ -84,6 +88,7 @@ public:
   void pausePlaybackAnimation();
   void resumePlaybackAnimation();
   void renderFullScene(); // Render complete scene without S3 fetch
+  void hideStopwatch();
 
   int genNumber = 0;
   
@@ -131,6 +136,12 @@ private:
   vtkSmartPointer<vtkTextActor> fitnessValueActor;
   vtkSmartPointer<vtkTextActor> testTextActor;
   vtkSmartPointer<vtkTextActor> testValueActor;
+  
+  // Stopwatch components
+  vtkSmartPointer<vtkActor2D> stopwatchActor;
+  vtkSmartPointer<vtkTextActor> stopwatchTimeActor;
+  bool stopwatchVisible = false;
+  double stopwatchTime = 0.0;
 
   Eigen::Vector3d renderingOffset(int i); // locate a coordinate offset for our rendering screen
   vtkSmartPointer<vtkPolyData> createPointSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> points);
@@ -144,6 +155,8 @@ private:
   std::vector<Eigen::Vector3d> stateToOrientation(const std::vector<AircraftState> state);
   double extractFitnessFromGP(const std::vector<char>& gpData);
   void createHighlightedFlightTapes(Eigen::Vector3d offset);
+  void createStopwatch();
+  void updateStopwatch(double currentTime);
 };
 
 // CustomInteractorStyle implementation

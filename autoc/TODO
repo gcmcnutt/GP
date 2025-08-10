@@ -47,3 +47,4 @@
 - the portable part of the evaluator should be autoc-eval.cc -- e.g. that is the file that should be portable, not a sub-piece
 - get the run/eval to have two autoc.ini file so we can write to different buckets
 - let's correct the math for sub (is -a -b) right now
+- renderer generation display should be anchored on the lower right -- similar to how the stopwatch is anchored
