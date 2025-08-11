@@ -479,6 +479,8 @@ public:
     if (renderer_) {
       // Update text display with current values when window is resized
       renderer_->updateTextDisplay(renderer_->currentGeneration, renderer_->currentFitness);
+      // Update stopwatch position when window is resized
+      renderer_->updateStopwatchPosition();
     }
   }
 
@@ -1417,13 +1419,32 @@ void updateBlackboxForCurrentTest() {
     
     // Ensure we have valid indices
     if (startIdx < endIdx && startIdx < fullBlackboxAircraftStates.size()) {
+      // Calculate offset to align test start with path origin
+      Eigen::Vector3d testStartPosition = fullBlackboxAircraftStates[startIdx].getPosition();
+      Eigen::Vector3d pathOrigin(0.0, 0.0, 0.0); // Path origin is at (0,0,0) for horizontal position
+      
+      // Calculate horizontal offset (preserve altitude/elevation differences)
+      Eigen::Vector3d positionOffset;
+      positionOffset[0] = pathOrigin[0] - testStartPosition[0]; // North offset
+      positionOffset[1] = pathOrigin[1] - testStartPosition[1]; // East offset  
+      positionOffset[2] = 0.0; // Preserve original elevation - no vertical offset
+      
       for (size_t i = startIdx; i < endIdx; i++) {
-        blackboxAircraftStates.push_back(fullBlackboxAircraftStates[i]);
+        AircraftState offsetState = fullBlackboxAircraftStates[i];
+        
+        // Apply horizontal position offset to align test start with path origin
+        Eigen::Vector3d originalPosition = offsetState.getPosition();
+        Eigen::Vector3d offsetPosition = originalPosition + positionOffset;
+        offsetState.setPosition(offsetPosition);
+        
+        // Keep original attitude (yaw, pitch, roll) - no attitude offset needed
+        blackboxAircraftStates.push_back(offsetState);
       }
       
       std::cout << "Showing test " << (renderer.currentTestIndex + 1) << ": " 
                 << blackboxAircraftStates.size() << " states (indices " 
-                << startIdx << "-" << (endIdx-1) << ")" << std::endl;
+                << startIdx << "-" << (endIdx-1) << ") with position offset ("
+                << positionOffset[0] << ", " << positionOffset[1] << ", " << positionOffset[2] << ")" << std::endl;
     } else {
       std::cerr << "Invalid test span indices: " << startIdx << "-" << endIdx << std::endl;
       // Fallback to full flight
@@ -1926,6 +1947,23 @@ void Renderer::updateStopwatch(double currentTime) {
   snprintf(timeStr, sizeof(timeStr), "%.2f", currentTime);
   stopwatchTimeActor->SetInput(timeStr);
   stopwatchTimeActor->SetPosition(centerX - 12, centerY - 25); // Centered horizontally, positioned below hands center
+}
+
+void Renderer::updateStopwatchPosition() {
+  if (!stopwatchActor || !stopwatchTimeActor || !stopwatchVisible) {
+    return;
+  }
+  
+  // Recalculate position based on current window size
+  int* windowSize = renderWindow->GetSize();
+  double centerX = windowSize[0] - 70; // 70px from right edge
+  double centerY = windowSize[1] - 70; // 70px from top
+  
+  // Update the stopwatch geometry with new center position
+  // This requires recreating the geometry since the center position has changed
+  if (stopwatchTime >= 0.0) { // Only update if we have valid stopwatch time
+    updateStopwatch(stopwatchTime); // This will recreate the geometry with new position
+  }
 }
 
 void Renderer::hideStopwatch() {

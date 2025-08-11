@@ -89,6 +89,7 @@ public:
   void resumePlaybackAnimation();
   void renderFullScene(); // Render complete scene without S3 fetch
   void hideStopwatch();
+  void updateStopwatchPosition();
 
   int genNumber = 0;
   
