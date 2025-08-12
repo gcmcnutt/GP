@@ -20,7 +20,7 @@ double evaluateGPOperator(int opcode, PathProvider& pathProvider,
             result = args[0] + args[1]; 
             break;
         case SUB: 
-            result = -args[0] - args[1]; // autoc convention
+            result = args[0] - args[1];
             break;
         case MUL: 
             result = args[0] * args[1]; 

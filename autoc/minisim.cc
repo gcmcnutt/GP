@@ -127,6 +127,9 @@ public:
         // reset sim state
         aircraftState = AircraftState{ 0, SIM_INITIAL_VELOCITY, initial_velocity, aircraft_orientation, initialPosition, 0.0, 0.0, SIM_INITIAL_THROTTLE, 0 };
 
+        // Record initial aircraft state at time 0 to match path start
+        aircraftStateSteps.push_back(aircraftState);
+
         // iterate the simulator
         unsigned long int duration_msec = 0; // how long have we been running
         CrashReason crashReason = CrashReason::None;
@@ -183,9 +186,8 @@ public:
             crashReason = CrashReason::Eval;
           }
 
-          // search for location of next timestamp
-          double timeDistance = SIM_RABBIT_VELOCITY * duration_msec / 1000.0;
-          while (aircraftState.getThisPathIndex() < path.size() - 2 && (path.at(aircraftState.getThisPathIndex()).distanceFromStart < timeDistance)) {
+          // search for location of next timestamp using time-based targeting
+          while (aircraftState.getThisPathIndex() < path.size() - 2 && (path.at(aircraftState.getThisPathIndex()).simTimeMsec < duration_msec)) {
             aircraftState.setThisPathIndex(aircraftState.getThisPathIndex() + 1);
           }
 

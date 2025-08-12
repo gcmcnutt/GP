@@ -52,8 +52,9 @@ class GenerateRandom : public GeneratorMethod {
           double dVector = lastDirection.dot(newDirection);
           double dAngle = std::acos(std::clamp(dVector / (lastDirection.norm() * newDirection.norm()), -1.0, 1.0));
 
-          // add next segment            
-          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), odometer, turnmeter };
+          // add next segment with simulation timestamp
+          double simTimeMsec = (odometer / SIM_RABBIT_VELOCITY) * 1000.0;
+          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), odometer, turnmeter, simTimeMsec };
           path.push_back(pathSegment);
 
           odometer += newDistance;
@@ -128,8 +129,9 @@ class GenerateClassic : public GeneratorMethod {
           double dVector = lastDirection.dot(newDirection);
           double dAngle = std::acos(std::clamp(dVector / (lastDirection.norm() * newDirection.norm()), -1.0, 1.0));
 
-          // add next segment            
-          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), odometer, turnmeter };
+          // add next segment with simulation timestamp
+          double simTimeMsec = (odometer / SIM_RABBIT_VELOCITY) * 1000.0;
+          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), odometer, turnmeter, simTimeMsec };
           path.push_back(pathSegment);
 
           odometer += newDistance;
@@ -175,7 +177,8 @@ class GenerateComputedPaths : public GeneratorMethod {
         double cSize = 0.8 * radius;
         for (double turn = 0; turn < M_PI * 2; turn += 0.05) {
           Eigen::Vector3d interpolatedPoint = { cSize * cos(turn), cSize * sin(turn), base - SIM_INITIAL_LOCATION_DITHER };
-          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), turn * radius, 0.0 };
+          double simTimeMsecLocal = (turn * radius / SIM_RABBIT_VELOCITY) * 1000.0;
+          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), turn * radius, 0.0, simTimeMsecLocal };
           path.push_back(pathSegment);
         }
         break;
@@ -184,7 +187,8 @@ class GenerateComputedPaths : public GeneratorMethod {
         double cSize = 0.8 * radius;
         for (double turn = 0; turn < M_PI * 2; turn += 0.05) {
           Eigen::Vector3d interpolatedPoint = { cSize * cos(turn), 0.0, base - SIM_INITIAL_LOCATION_DITHER - cSize * sin(turn)};
-          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), turn * cSize, 0.0 };
+          double simTimeMsecLocal = (turn * cSize / SIM_RABBIT_VELOCITY) * 1000.0;
+          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), turn * cSize, 0.0, simTimeMsecLocal };
           path.push_back(pathSegment);
         }
         break;
@@ -193,12 +197,14 @@ class GenerateComputedPaths : public GeneratorMethod {
         double cSize = 0.4 * radius;
         for (double turn = 0; turn < M_PI * 2; turn += 0.05) {
           Eigen::Vector3d interpolatedPoint = { (cSize * cos(turn)) - cSize, 0.0, base - SIM_INITIAL_LOCATION_DITHER - (cSize * sin(turn))};
-          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), (turn * cSize), 0.0 };
+          double simTimeMsecLocal = ((turn * cSize) / SIM_RABBIT_VELOCITY) * 1000.0;
+          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), (turn * cSize), 0.0, simTimeMsecLocal };
           path.push_back(pathSegment);
         }
         for (double turn = 0; turn < M_PI * 2; turn += 0.05) {
           Eigen::Vector3d interpolatedPoint = { (-cSize * cos(turn)) + cSize, 0.0, base - SIM_INITIAL_LOCATION_DITHER - (cSize * sin(turn))};
-          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), (turn * cSize) + (M_PI * 2 * cSize), 0.0 };
+          double simTimeMsecLocal = (((turn * cSize) + (M_PI * 2 * cSize)) / SIM_RABBIT_VELOCITY) * 1000.0;
+          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), (turn * cSize) + (M_PI * 2 * cSize), 0.0, simTimeMsecLocal };
           path.push_back(pathSegment);
         }
         break;
@@ -207,22 +213,26 @@ class GenerateComputedPaths : public GeneratorMethod {
         double sSize = 0.7 * radius;
         for (double span = -sSize; span < sSize; span += 0.1) {
           Eigen::Vector3d interpolatedPoint = { span, -sSize, base - SIM_INITIAL_LOCATION_DITHER };
-          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), span, 0.0 };
+          double simTimeMsecLocal = (span / SIM_RABBIT_VELOCITY) * 1000.0;
+          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), span, 0.0, simTimeMsecLocal };
           path.push_back(pathSegment);
         }  
         for (double span = -sSize; span < sSize; span += 0.1) {
           Eigen::Vector3d interpolatedPoint = { sSize, span, base - SIM_INITIAL_LOCATION_DITHER };
-          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), 2 * sSize + span, 0.0 };
+          double simTimeMsecLocal = ((2 * sSize + span) / SIM_RABBIT_VELOCITY) * 1000.0;
+          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), 2 * sSize + span, 0.0, simTimeMsecLocal };
           path.push_back(pathSegment);
         } 
         for (double span = -sSize; span < sSize; span += 0.1) {
           Eigen::Vector3d interpolatedPoint = { -span, sSize, base - SIM_INITIAL_LOCATION_DITHER };
-          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), 4 * sSize + span, 0.0 };
+          double simTimeMsecLocal = ((4 * sSize + span) / SIM_RABBIT_VELOCITY) * 1000.0;
+          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), 4 * sSize + span, 0.0, simTimeMsecLocal };
           path.push_back(pathSegment);
         }  
         for (double span = -sSize; span < sSize; span += 0.1) {
           Eigen::Vector3d interpolatedPoint = { -sSize, -span, base - SIM_INITIAL_LOCATION_DITHER };
-          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), 6 * sSize + span, 0.0 };
+          double simTimeMsecLocal = ((6 * sSize + span) / SIM_RABBIT_VELOCITY) * 1000.0;
+          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), 6 * sSize + span, 0.0, simTimeMsecLocal };
           path.push_back(pathSegment);
         }      
         break;
@@ -231,22 +241,26 @@ class GenerateComputedPaths : public GeneratorMethod {
         double sSize = 0.7 * radius;
         for (double span = -sSize; span < sSize; span += 0.1) {
           Eigen::Vector3d interpolatedPoint = { span, 0, base - SIM_INITIAL_LOCATION_DITHER - sSize };
-          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), span, 0.0 };
+          double simTimeMsecLocal = (span / SIM_RABBIT_VELOCITY) * 1000.0;
+          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), span, 0.0, simTimeMsecLocal };
           path.push_back(pathSegment);
         }  
         for (double span = -sSize; span < sSize; span += 0.1) {
           Eigen::Vector3d interpolatedPoint = { sSize, 0, base - SIM_INITIAL_LOCATION_DITHER + span };
-          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), 2 * sSize + span, 0.0 };
+          double simTimeMsecLocal = ((2 * sSize + span) / SIM_RABBIT_VELOCITY) * 1000.0;
+          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), 2 * sSize + span, 0.0, simTimeMsecLocal };
           path.push_back(pathSegment);
         } 
         for (double span = -sSize; span < sSize; span += 0.1) {
           Eigen::Vector3d interpolatedPoint = { -span, 0, base - SIM_INITIAL_LOCATION_DITHER + sSize };
-          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), 4 * sSize + span, 0.0 };
+          double simTimeMsecLocal = ((4 * sSize + span) / SIM_RABBIT_VELOCITY) * 1000.0;
+          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), 4 * sSize + span, 0.0, simTimeMsecLocal };
           path.push_back(pathSegment);
         }  
         for (double span = -sSize; span < sSize; span += 0.1) {
           Eigen::Vector3d interpolatedPoint = { -sSize, 0, base - SIM_INITIAL_LOCATION_DITHER -span };
-          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), 6 * sSize + span, 0.0 };
+          double simTimeMsecLocal = ((6 * sSize + span) / SIM_RABBIT_VELOCITY) * 1000.0;
+          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), 6 * sSize + span, 0.0, simTimeMsecLocal };
           path.push_back(pathSegment);
         }      
         break;
@@ -255,7 +269,8 @@ class GenerateComputedPaths : public GeneratorMethod {
         double cSize = 0.8 * radius;
         for (double turn = 0; turn < M_PI * 2; turn += 0.05) {
           Eigen::Vector3d interpolatedPoint = { cSize * cos(turn), cSize * sin(turn), base - SIM_INITIAL_LOCATION_DITHER - cSize * sin(turn)};
-          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), turn * cSize, 0.0 };
+          double simTimeMsecLocal = (turn * cSize / SIM_RABBIT_VELOCITY) * 1000.0;
+          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), turn * cSize, 0.0, simTimeMsecLocal };
           path.push_back(pathSegment);
         }
         break;
@@ -277,7 +292,8 @@ class GenerateLine : public GeneratorMethod {
     double distance = 0.0;
     for (double i = -SIM_PATH_RADIUS_LIMIT; i <= SIM_PATH_RADIUS_LIMIT; i += 5) {
       Eigen::Vector3d interpolatedPoint = { -30, i, SIM_INITIAL_ALTITUDE };
-      Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), distance, 0.0 };
+      double simTimeMsecLocal = (distance / SIM_RABBIT_VELOCITY) * 1000.0;
+      Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), distance, 0.0, simTimeMsecLocal };
       path.push_back(pathSegment);
       distance += 5;
     }
@@ -303,7 +319,8 @@ public:
     //   Eigen::Vector3d point = circleCenter + Eigen::Vector3d(-loopRadius * sin(turn), 0, loopRadius * cos(turn));
     //   double distance = (longPath.empty() ? 0 : (point - longPath.back().start).norm());
     //   totalDistance += distance;
-    //   Path pathSegment = { point, Eigen::Vector3d::UnitX(), totalDistance, 0.0 };
+    //   double simTimeMsecLocal = (totalDistance / SIM_RABBIT_VELOCITY) * 1000.0;
+    //   Path pathSegment = { point, Eigen::Vector3d::UnitX(), totalDistance, 0.0, simTimeMsecLocal };
     //   longPath.push_back(pathSegment);
     // }
 
@@ -315,7 +332,8 @@ public:
       Eigen::Vector3d point = circleCenter + Eigen::Vector3d(-loopRadius * sin(turn), loopRadius * cos(turn), 0);
       double distance = (longPath.empty() ? 0 : (point - longPath.back().start).norm());
       totalDistance += distance;
-      Path pathSegment = { point, Eigen::Vector3d::UnitX(), totalDistance, 0.0 };
+      double simTimeMsecLocal = (totalDistance / SIM_RABBIT_VELOCITY) * 1000.0;
+      Path pathSegment = { point, Eigen::Vector3d::UnitX(), totalDistance, 0.0, simTimeMsecLocal };
       longPath.push_back(pathSegment);
     }
 
@@ -328,7 +346,8 @@ public:
       Eigen::Vector3d point = circleCenter + Eigen::Vector3d(-loopRadius * sin(turn), -loopRadius * cos(turn), 0);
       double distance = (point - longPath.back().start).norm();
       totalDistance += distance;
-      Path pathSegment = { point, Eigen::Vector3d::UnitX(), totalDistance, 0.0 };
+      double simTimeMsecLocal = (totalDistance / SIM_RABBIT_VELOCITY) * 1000.0;
+      Path pathSegment = { point, Eigen::Vector3d::UnitX(), totalDistance, 0.0, simTimeMsecLocal };
       longPath.push_back(pathSegment);
     }
 
@@ -342,7 +361,8 @@ public:
       Eigen::Vector3d point = circleCenter + Eigen::Vector3d(-loopRadius * sin(turn), -loopRadius * cos(turn), loopRadius * cos(turn));
       double distance = (longPath.empty() ? 0 : (point - longPath.back().start).norm());
       totalDistance += distance;
-      Path pathSegment = { point, Eigen::Vector3d::UnitX(), totalDistance, 0.0 };
+      double simTimeMsecLocal = (totalDistance / SIM_RABBIT_VELOCITY) * 1000.0;
+      Path pathSegment = { point, Eigen::Vector3d::UnitX(), totalDistance, 0.0, simTimeMsecLocal };
       longPath.push_back(pathSegment);
     }
 
@@ -354,7 +374,8 @@ public:
       Eigen::Vector3d point = circleCenter + Eigen::Vector3d(-loopRadius * sin(turn), loopRadius * cos(turn), loopRadius * cos(turn));
       double distance = (longPath.empty() ? 0 : (point - longPath.back().start).norm());
       totalDistance += distance;
-      Path pathSegment = { point, Eigen::Vector3d::UnitX(), totalDistance, 0.0 };
+      double simTimeMsecLocal = (totalDistance / SIM_RABBIT_VELOCITY) * 1000.0;
+      Path pathSegment = { point, Eigen::Vector3d::UnitX(), totalDistance, 0.0, simTimeMsecLocal };
       longPath.push_back(pathSegment);
     }
     */

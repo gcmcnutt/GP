@@ -8,7 +8,7 @@
 
 - try to simplify the eval tree by passing a class reference instead of N args
 * replay functions
-  - select board
+  - select board, recenter view on an arena, etc
 - consider fitness function for distance, alignment is ramped sensitivity for first couple of seconds (to allow capture from random start)
 - walk various classes for copy by reference, copy by pointer, copy by value == a smaller mem leak in autoc
 - we can buffer the best run over a population vs re-running it -- save the final eval steps
@@ -41,12 +41,10 @@
   - an info panel or attitude display or vector toward intercept display would help
   - fpv mode for playback
 - also seems crrcsim is dependent on a valid DISPLAY even when in headless
-- enable it so that a run of a tool that looks for autoc.ini can have a command line override to an alternate file
 
 - move evaluator embedded to xiao-gp
 - check for dangling or vestiage files
 - the portable part of the evaluator should be autoc-eval.cc -- e.g. that is the file that should be portable, not a sub-piece
 - get the run/eval to have two autoc.ini file so we can write to different buckets
-- let's correct the math for sub (is -a -b) right now
 - xiao blackbox of flight paths
 - xiao consider bluetooth download in field

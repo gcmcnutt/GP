@@ -460,10 +460,15 @@ public:
   virtual void Execute(vtkObject*, unsigned long, void*)
   {
     std::cout << "Exit requested. Stopping interactor." << std::endl;
+    // Stop any active playback animation before exiting to prevent crashes
+    if (this->RendererPtr && this->RendererPtr->isPlaybackActive) {
+      this->RendererPtr->togglePlaybackAnimation(); // This will stop the animation
+    }
     if (this->Interactor)
       this->Interactor->TerminateApp();
   }
   vtkRenderWindowInteractor* Interactor;
+  ::Renderer* RendererPtr;
 };
 
 class WindowResizeCommand : public vtkCommand {
@@ -939,6 +944,7 @@ void Renderer::initialize() {
   // exit command
   vtkNew<ExitCommand> exitCommand;
   exitCommand->Interactor = renderWindowInteractor;
+  exitCommand->RendererPtr = this;
   renderWindowInteractor->AddObserver(vtkCommand::ExitEvent, exitCommand);
   
   // Timer callback for animation
@@ -2041,13 +2047,14 @@ void Renderer::updatePlaybackAnimation() {
   auto effectiveElapsed = totalElapsed - totalPausedTime;
   auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(effectiveElapsed).count() / 1000.0;
   
-  // Path always drives the timing - find longest simulation duration across all paths
+  // Path always drives the timing - find longest path duration across all arenas
   double primaryDuration = 0.0;
   int maxArenas = evalResults.pathList.size();
   for (int i = 0; i < maxArenas; i++) {
-    if (!evalResults.aircraftStateList[i].empty()) {
-      double pathMaxTime = evalResults.aircraftStateList[i].back().getSimTimeMsec() / 1000.0;
-      primaryDuration = std::max(primaryDuration, pathMaxTime);
+    if (!evalResults.pathList[i].empty()) {
+      // Use path timestamp directly (convert from milliseconds to seconds)
+      double pathDuration = evalResults.pathList[i].back().simTimeMsec / 1000.0;
+      primaryDuration = std::max(primaryDuration, pathDuration);
     }
   }
   
@@ -2092,23 +2099,69 @@ void Renderer::updatePlaybackAnimation() {
     std::vector<Eigen::Vector3d> p = pathToVector(evalResults.pathList[i]);
     std::vector<Eigen::Vector3d> a = stateToVector(evalResults.aircraftStateList[i]);
     
-    // Calculate progress for this path based on real simulation time
-    double simProgress = 1.0; // Default to show all
-    if (!evalResults.aircraftStateList[i].empty()) {
-      double simDuration = evalResults.aircraftStateList[i].back().getSimTimeMsec() / 1000.0;
-      if (simDuration > 0.0) {
-        simProgress = std::min(1.0, currentSimTime / simDuration);
+    // Time-based filtering: show data up to currentSimTime
+    
+    // Filter path points by simulation timestamp
+    std::vector<Eigen::Vector3d> visiblePathVector;
+    if (!evalResults.pathList[i].empty()) {
+      std::vector<Path> visiblePath;
+      for (const auto& pathPoint : evalResults.pathList[i]) {
+        double pathPointTime = pathPoint.simTimeMsec / 1000.0; // Convert to seconds
+        if (pathPointTime <= currentSimTime) {
+          visiblePath.push_back(pathPoint);
+        }
+      }
+      if (!visiblePath.empty()) {
+        visiblePathVector = pathToVector(visiblePath);
       }
     }
+    // Always add path data (empty if no visible path) to prevent VTK warnings
+    this->paths->AddInputData(createPointSet(offset, visiblePathVector));
     
-    if (!p.empty()) {
-      this->paths->AddInputData(createPointSet(offset, p, simProgress));
+    // Filter aircraft states by timestamp
+    std::vector<AircraftState> visibleStates;
+    std::vector<Eigen::Vector3d> visibleStateVector;
+    if (!evalResults.aircraftStateList[i].empty()) {
+      for (const auto& state : evalResults.aircraftStateList[i]) {
+        double stateTime = state.getSimTimeMsec() / 1000.0;
+        if (stateTime <= currentSimTime) {
+          visibleStates.push_back(state);
+        }
+      }
+      if (!visibleStates.empty()) {
+        visibleStateVector = stateToVector(visibleStates);
+      }
     }
-    if (!a.empty()) {
-      this->actuals->AddInputData(createTapeSet(offset, a, stateToOrientation(evalResults.aircraftStateList[i]), simProgress));
-    }
-    if (!a.empty() && !p.empty()) {
-      this->segmentGaps->AddInputData(createSegmentSet(offset, evalResults.aircraftStateList[i], p, simProgress));
+    // Always add aircraft data (empty if no visible states) to prevent VTK warnings
+    this->actuals->AddInputData(createTapeSet(offset, visibleStateVector, 
+      visibleStates.empty() ? std::vector<Eigen::Vector3d>() : stateToOrientation(visibleStates)));
+    
+    // Add segment gaps only if we have visible states and the full path exists
+    if (!visibleStates.empty() && !evalResults.pathList[i].empty()) {
+      // Use full path for segment connections (aircraft states reference original path indices)
+      std::vector<Eigen::Vector3d> fullPathVector = pathToVector(evalResults.pathList[i]);
+      
+      // Further filter visible states to only include those with valid path references
+      std::vector<AircraftState> validStates;
+      for (const auto& state : visibleStates) {
+        if (state.getThisPathIndex() < fullPathVector.size()) {
+          validStates.push_back(state);
+        }
+      }
+      
+      if (!validStates.empty()) {
+        this->segmentGaps->AddInputData(createSegmentSet(offset, validStates, fullPathVector));
+      } else {
+        // Add empty segment gaps to prevent VTK warnings
+        std::vector<AircraftState> emptyStates;
+        std::vector<Eigen::Vector3d> emptyPath;
+        this->segmentGaps->AddInputData(createSegmentSet(offset, emptyStates, emptyPath));
+      }
+    } else {
+      // Add empty segment gaps to prevent VTK warnings
+      std::vector<AircraftState> emptyStates;
+      std::vector<Eigen::Vector3d> emptyPath;
+      this->segmentGaps->AddInputData(createSegmentSet(offset, emptyStates, emptyPath));
     }
     
     // Add blackbox data to first arena only (with animation)
@@ -2138,26 +2191,25 @@ void Renderer::updatePlaybackAnimation() {
           blackboxActor->GetProperty()->SetOpacity(1.0);
           blackboxActor->GetBackfaceProperty()->SetOpacity(1.0);
         } else if (inDecodeMode && showingFullFlight && !testSpans.empty()) {
-          // For full flight mode, still animate the dimmed background tape
-          std::vector<Eigen::Vector3d> fullPoints = stateToVector(fullBlackboxAircraftStates);
-          if (fullPoints.size() >= 2) {
-            double fullFlightProgress = 1.0;
-            if (!fullBlackboxAircraftStates.empty()) {
-              double fullStartTime = fullBlackboxAircraftStates.front().getSimTimeMsec() / 1000.0;
-              double fullEndTime = fullBlackboxAircraftStates.back().getSimTimeMsec() / 1000.0;
-              double fullDuration = fullEndTime - fullStartTime;
-              
-              if (fullDuration > 0.0) {
-                // Simple progress for full flight too
-                fullFlightProgress = std::min(1.0, currentSimTime / fullDuration);
-              }
+          // For full flight mode, filter full flight blackbox data by time
+          double fullStartTime = fullBlackboxAircraftStates.front().getSimTimeMsec() / 1000000.0; // microseconds to seconds
+          std::vector<AircraftState> visibleFullStates;
+          
+          for (const auto& state : fullBlackboxAircraftStates) {
+            double stateTime = state.getSimTimeMsec() / 1000000.0; // microseconds to seconds
+            double relativeTime = stateTime - fullStartTime; // normalize to start at 0
+            if (relativeTime <= currentSimTime) {
+              visibleFullStates.push_back(state);
             }
-            
-            this->blackboxTapes->AddInputData(createTapeSet(blackboxOffset, fullPoints, stateToOrientation(fullBlackboxAircraftStates), fullFlightProgress));
+          }
+          
+          if (visibleFullStates.size() >= 2) {
+            std::vector<Eigen::Vector3d> visibleFullVector = stateToVector(visibleFullStates);
+            this->blackboxTapes->AddInputData(createTapeSet(blackboxOffset, visibleFullVector, stateToOrientation(visibleFullStates)));
             blackboxActor->GetProperty()->SetOpacity(0.25);
             blackboxActor->GetBackfaceProperty()->SetOpacity(0.25);
             
-            // Animate highlighted test spans
+            // Animate highlighted test spans with time-based filtering
             for (const TestSpan& span : testSpans) {
               size_t startIdx = std::min(span.startIndex, fullBlackboxAircraftStates.size());
               size_t endIdx = std::min(span.endIndex + 1, fullBlackboxAircraftStates.size());
@@ -2168,17 +2220,42 @@ void Renderer::updatePlaybackAnimation() {
                   spanStates.push_back(fullBlackboxAircraftStates[j]);
                 }
                 
-                if (spanStates.size() >= 2) {
-                  std::vector<Eigen::Vector3d> spanPoints = stateToVector(spanStates);
-                  this->blackboxHighlightTapes->AddInputData(createTapeSet(blackboxOffset, spanPoints, stateToOrientation(spanStates), fullFlightProgress));
+                // Filter span states by time
+                std::vector<AircraftState> visibleSpanStates;
+                for (const auto& state : spanStates) {
+                  double stateTime = state.getSimTimeMsec() / 1000000.0; // microseconds to seconds
+                  double relativeTime = stateTime - fullStartTime; // use full flight start time
+                  if (relativeTime <= currentSimTime) {
+                    visibleSpanStates.push_back(state);
+                  }
+                }
+                
+                if (visibleSpanStates.size() >= 2) {
+                  std::vector<Eigen::Vector3d> visibleSpanVector = stateToVector(visibleSpanStates);
+                  this->blackboxHighlightTapes->AddInputData(createTapeSet(blackboxOffset, visibleSpanVector, stateToOrientation(visibleSpanStates)));
                 }
               }
             }
           }
         } else {
-          this->blackboxTapes->AddInputData(createTapeSet(blackboxOffset, a_bb, stateToOrientation(blackboxAircraftStates), blackboxProgress));
-          blackboxActor->GetProperty()->SetOpacity(1.0);
-          blackboxActor->GetBackfaceProperty()->SetOpacity(1.0);
+          // Standard blackbox mode with time-based filtering
+          std::vector<AircraftState> visibleBlackboxStates;
+          double blackboxStartTime = blackboxAircraftStates.front().getSimTimeMsec() / 1000000.0; // microseconds to seconds
+          
+          for (const auto& state : blackboxAircraftStates) {
+            double stateTime = state.getSimTimeMsec() / 1000000.0; // microseconds to seconds
+            double relativeTime = stateTime - blackboxStartTime; // normalize to start at 0
+            if (relativeTime <= currentSimTime) {
+              visibleBlackboxStates.push_back(state);
+            }
+          }
+          
+          if (visibleBlackboxStates.size() >= 2) {
+            std::vector<Eigen::Vector3d> visibleBlackboxVector = stateToVector(visibleBlackboxStates);
+            this->blackboxTapes->AddInputData(createTapeSet(blackboxOffset, visibleBlackboxVector, stateToOrientation(visibleBlackboxStates)));
+            blackboxActor->GetProperty()->SetOpacity(1.0);
+            blackboxActor->GetBackfaceProperty()->SetOpacity(1.0);
+          }
         }
       }
     }
