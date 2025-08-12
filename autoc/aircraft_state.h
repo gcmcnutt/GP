@@ -55,13 +55,15 @@ public:
   Eigen::Vector3d orientation;
   double distanceFromStart;
   double radiansFromStart;
+  double simTimeMsec;  // Simulation timestamp in milliseconds
 
 #ifdef GP_BUILD
   void dump(std::ostream& os) {
-    os << boost::format("Path: (%f, %f, %f), Odometer: %f, Turnmeter: %f")
+    os << boost::format("Path: (%f, %f, %f), Odometer: %f, Turnmeter: %f, Time: %f")
       % start[0] % start[1] % start[2]
       % distanceFromStart
-      % radiansFromStart;
+      % radiansFromStart
+      % simTimeMsec;
   }
 
   friend class boost::serialization::access;
@@ -72,11 +74,17 @@ public:
     ar& orientation;
     ar& distanceFromStart;
     ar& radiansFromStart;
+    if (version >= 2) {
+      ar& simTimeMsec;
+    } else if (Archive::is_loading::value) {
+      // For old data, compute timestamp from distance and rabbit velocity
+      simTimeMsec = (distanceFromStart / SIM_RABBIT_VELOCITY) * 1000.0;
+    }
   }
 #endif
 };
 #ifdef GP_BUILD
-BOOST_CLASS_VERSION(Path, 1)
+BOOST_CLASS_VERSION(Path, 2)
 #endif
 
 // Portable path provider interface for unified GP evaluation
