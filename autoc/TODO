@@ -28,7 +28,6 @@
   - activate
 * clean shutdown method for terminating sims
   - now that a crrcsim batch runs long, perhaps have polling loop for keepalive as when autoc exits crrcsim will exit
-- develop an offline fitness validator where a recorded path set and GP can be replayed, perhaps on a different path (e.g. old GP on different path set), etc
 - blackbox rendering improvements:
   - we will need to select a path and a blackbox log to do comparisons
   - user interface to allow selecting path, log file, etc -- similar to how the path/actual works
@@ -37,7 +36,6 @@
   - might need additional attributes on renderer playback, e.g. loss of GPS signal, etc
   - on playback maybe render the flight controls input and some parameters power, velocity
   - blackbox logs are 1/32 which is still a lot of data, can we do subselect, perhaps 5 hz?
-  - probably need to export quaternion data to blackbox so that we don't get tumble effects
   - an info panel or attitude display or vector toward intercept display would help
   - fpv mode for playback
 - also seems crrcsim is dependent on a valid DISPLAY even when in headless

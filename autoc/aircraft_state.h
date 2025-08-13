@@ -57,6 +57,16 @@ public:
   double radiansFromStart;
   double simTimeMsec;  // Simulation timestamp in milliseconds
 
+  // Default constructor for backward compatibility
+  Path() : start(Eigen::Vector3d::Zero()), orientation(Eigen::Vector3d::UnitX()), 
+           distanceFromStart(0.0), radiansFromStart(0.0), simTimeMsec(0.0) {}
+
+  // Constructor to ensure all fields are properly initialized
+  Path(const Eigen::Vector3d& start_pos, const Eigen::Vector3d& orient, 
+       double distance, double radians, double time_msec)
+    : start(start_pos), orientation(orient), distanceFromStart(distance), 
+      radiansFromStart(radians), simTimeMsec(time_msec) {}
+
 #ifdef GP_BUILD
   void dump(std::ostream& os) {
     os << boost::format("Path: (%f, %f, %f), Odometer: %f, Turnmeter: %f, Time: %f")
@@ -74,12 +84,7 @@ public:
     ar& orientation;
     ar& distanceFromStart;
     ar& radiansFromStart;
-    if (version >= 2) {
-      ar& simTimeMsec;
-    } else if (Archive::is_loading::value) {
-      // For old data, compute timestamp from distance and rabbit velocity
-      simTimeMsec = (distanceFromStart / SIM_RABBIT_VELOCITY) * 1000.0;
-    }
+    ar& simTimeMsec;
   }
 #endif
 };
