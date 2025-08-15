@@ -1102,20 +1102,25 @@ int main(int argc, char** argv) {
   static struct option long_options[] = {
     {"keyname", required_argument, 0, 'k'},
     {"decoder", required_argument, 0, 'd'},
+    {"config", required_argument, 0, 'i'},
     {"help", no_argument, 0, 'h'},
     {0, 0, 0, 0}
   };
   
+  std::string configFile = "autoc.ini";
   int option_index = 0;
   int c;
   
-  while ((c = getopt_long(argc, argv, "k:d:h", long_options, &option_index)) != -1) {
+  while ((c = getopt_long(argc, argv, "k:d:i:h", long_options, &option_index)) != -1) {
     switch (c) {
       case 'k':
         computedKeyName = optarg;
         break;
       case 'd':
         decoderCommand = optarg;
+        break;
+      case 'i':
+        configFile = optarg;
         break;
       case 'h':
         printUsage(argv[0]);
@@ -1136,7 +1141,7 @@ int main(int argc, char** argv) {
   std::string keyName = "";
   
   // Initialize configuration
-  ConfigManager::initialize("autoc.ini");
+  ConfigManager::initialize(configFile);
 
   // AWS setup
   Aws::SDKOptions options;
@@ -2352,6 +2357,7 @@ void printUsage(const char* progName) {
   std::cout << "  -d, --decoder COMMAND    Specify shell command to generate CSV data\n";
   std::cout << "                           Use '-' to read CSV data from stdin\n";
   std::cout << "                           If not specified, no blackbox data is loaded\n";
+  std::cout << "  -i, --config FILE        Use specified config file (default: autoc.ini)\n";
   std::cout << "  -h, --help               Show this help message\n";
   std::cout << "\n";
   std::cout << "Examples:\n";

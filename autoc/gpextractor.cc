@@ -56,6 +56,7 @@ void printUsage(const char* progName) {
   std::cout << "  -g, --generation GEN     Specify generation number\n";
   std::cout << "  -b, --bytecode           Generate bytecode for interpreter\n";
   std::cout << "  -o, --output FILE        Output file for bytecode (default: gp_program.dat)\n";
+  std::cout << "  -i, --config FILE        Use specified config file (default: autoc.ini)\n";
   std::cout << "  -h, --help               Show this help message\n";
   std::cout << "\n";
   std::cout << "Examples:\n";
@@ -276,6 +277,7 @@ int main(int argc, char** argv) {
     {"generation", required_argument, 0, 'g'},
     {"bytecode", no_argument, 0, 'b'},
     {"output", required_argument, 0, 'o'},
+    {"config", required_argument, 0, 'i'},
     {"help", no_argument, 0, 'h'},
     {0, 0, 0, 0}
   };
@@ -284,10 +286,11 @@ int main(int argc, char** argv) {
   int specifiedGeneration = -1;
   bool generateBytecode = false;
   std::string outputFile = "gp_program.dat";
+  std::string configFile = "autoc.ini";
   int option_index = 0;
   int c;
   
-  while ((c = getopt_long(argc, argv, "k:g:bo:h", long_options, &option_index)) != -1) {
+  while ((c = getopt_long(argc, argv, "k:g:bo:i:h", long_options, &option_index)) != -1) {
     switch (c) {
       case 'k':
         computedKeyName = optarg;
@@ -300,6 +303,9 @@ int main(int argc, char** argv) {
         break;
       case 'o':
         outputFile = optarg;
+        break;
+      case 'i':
+        configFile = optarg;
         break;
       case 'h':
         printUsage(argv[0]);
@@ -320,7 +326,7 @@ int main(int argc, char** argv) {
   std::string keyName = "";
   
   // Initialize configuration
-  ConfigManager::initialize("autoc.ini");
+  ConfigManager::initialize(configFile);
   
   // AWS setup
   Aws::SDKOptions options;

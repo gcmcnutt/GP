@@ -394,8 +394,28 @@ void newHandler()
 }
 
 
-int main()
+int main(int argc, char** argv)
 {
+  // Parse command line arguments
+  std::string configFile = "autoc.ini";
+  
+  for (int i = 1; i < argc; i++) {
+    if (strcmp(argv[i], "-i") == 0) {
+      if (i + 1 < argc) {
+        configFile = argv[i + 1];
+        i++; // Skip the next argument since we consumed it
+      } else {
+        std::cerr << "Error: -i option requires a filename argument" << std::endl;
+        return 1;
+      }
+    } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+      std::cout << "Usage: " << argv[0] << " [-i config_file]" << std::endl;
+      std::cout << "  -i config_file  Use specified config file instead of autoc.ini" << std::endl;
+      std::cout << "  -h, --help      Show this help message" << std::endl;
+      return 0;
+    }
+  }
+
   logging::add_console_log(
     std::cout,
     boost::log::keywords::format = (
@@ -423,7 +443,7 @@ int main()
   GPInit(1, -1);
 
   // Initialize ConfigManager (this replaces the old GPConfiguration call)
-  ConfigManager::initialize("autoc.ini", *logger.info());
+  ConfigManager::initialize(configFile, *logger.info());
 
   // AWS setup
   Aws::SDKOptions options;

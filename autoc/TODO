@@ -43,6 +43,17 @@
 - move evaluator embedded to xiao-gp
 - check for dangling or vestiage files
 - the portable part of the evaluator should be autoc-eval.cc -- e.g. that is the file that should be portable, not a sub-piece
-- get the run/eval to have two autoc.ini file so we can write to different buckets
 - xiao blackbox of flight paths
 - xiao consider bluetooth download in field
+
+a decent run on 6 paths seems a little generalized for random paths
+
+gmcnutt@GregDell:~/GP/autoc$ ../build/gpextractor 
+S3 Configuration: Using MinIO S3 (profile: minio, bucket: autoc-storage)
+Extracted GP from: autoc-9223370281651480053-2025-08-14T20:28:15.754Z/gen9891.dmp
+Generation: 9891
+GP Length: 30
+GP Depth: 11
+Fitness: 316.836
+
+GP: (SETTHROTTLE (MAX (SETPITCH (PROGN (ATAN2 (GETDPHI (GETDTHETA GETVEL)) (SQRT (SIN (PROGN (SETPITCH GETALPHA) (MIN GETTHROTTLE GETPITCH))))) (SUB (MUL (SETTHROTTLE (GETDTARGET 0)) (GETDTHETA (SIN (SETROLL (GETDPHI GETPITCH))))) (GETDTARGET (GETDTARGET GETROLL_RAD))))) GETPITCH_RAD))
