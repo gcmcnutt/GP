@@ -9,16 +9,6 @@ double GPEvaluatorEmbedded::evaluateGPSimple(AircraftState& aircraftState, const
     return evaluateBytecodePortable(program, program_size, pathProvider, aircraftState, arg);
 }
 
-// Embedded evaluator now uses the portable implementation
-// The actual implementation is in gp_evaluator_portable.cc
-// No platform-specific implementation needed
-
-int GPEvaluatorEmbedded::convertToMSPChannel(double gp_command) {
-    // Clamp GP command to [-1, 1] and map to MSP range [1000, 2000]
-    double clamped = CLAMP_DEF(gp_command, -1.0, 1.0);
-    return (int)(1500.0 + clamped * 500.0);
-}
-
 SinglePathProvider GPEvaluatorEmbedded::createPathProvider(const Path& currentPath, int currentIndex) {
     return SinglePathProvider(currentPath, currentIndex);
 }
