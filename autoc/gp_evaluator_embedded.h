@@ -4,22 +4,17 @@
 #include "gp_evaluator_portable.h"
 
 // Embedded/Arduino-specific extensions
+// Note: With static bytecode arrays, most embedded-specific functionality
+// is no longer needed. The portable evaluator handles everything.
+
 class GPEvaluatorEmbedded {
 public:
-    // Simple evaluation function for Arduino use - single path, single GP program
+    // Simple evaluation function for embedded use - delegates to portable evaluator
     static double evaluateGPSimple(AircraftState& aircraftState, const Path& currentPath, 
                                   const GPBytecode* program, int program_size, double arg = 0.0);
     
     // Helper to create single path provider
     static SinglePathProvider createPathProvider(const Path& currentPath, int currentIndex);
 };
-
-// Global GP program management for embedded systems
-void setEmbeddedGPProgram(const GPBytecode* program, int size);
-
-// C-style function for easy Arduino integration
-extern "C" {
-    double evaluateGPSimple(AircraftState& aircraftState, const Path& currentPath, double arg);
-}
 
 #endif

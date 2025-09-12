@@ -214,24 +214,52 @@ public:
     
     // Header generation removed - use stable gp_program.h instead
     
-    std::string generateArduinoWrapper(const std::string& functionName) {
+    std::string generateStaticBytecodeArray(const std::string& functionName) {
         std::stringstream code;
         
-        code << "// Arduino wrapper for generated GP evaluator\n";
-        code << "#include \"gp_program_generated.h\"\n";
-        code << "#include \"autoc/aircraft_state.h\"\n\n";
+        code << "// Auto-generated GP bytecode array for embedded evaluation\n";
+        code << "//\n";
+        code << "// Source GP Information:\n";
+        code << "//   S3 Key: " << std::string(header.s3_key) << "\n";
+        code << "//   Generation: " << header.generation << "\n";
+        code << "//   Original Length: " << header.length << "\n";
+        code << "//   Original Depth: " << header.depth << "\n";
+        code << "//   Fitness: " << (header.fitness_int / 1000000.0) << "\n";
+        code << "//   Bytecode Instructions: " << program_size << "\n";
+        code << "//\n";
+        code << "#include \"gp_program.h\"\n\n";
         
-        code << "// Simple evaluation function for Arduino use\n";
-        code << "double evaluateGPSimple(AircraftState& aircraftState, const Path& currentPath, double arg) {\n";
-        code << "    // Create single-path provider for embedded use\n";
-        code << "    SinglePathProvider pathProvider(currentPath, aircraftState.getThisPathIndex());\n";
-        code << "    \n";
-        code << "    // Call generated GP program\n";
-        code << "    return " << functionName << "(pathProvider, aircraftState, arg);\n";
+        // Generate static bytecode array
+        code << "// Static bytecode program for embedded evaluation\n";
+        code << "static const GPBytecode embedded_gp_bytecode[" << program_size << "] = {\n";
+        for (int i = 0; i < program_size; i++) {
+            const struct GPBytecode& inst = program[i];
+            code << "    {" << (int)inst.opcode << ", " << (int)inst.argc << ", ";
+            if (inst.constant == 0.0f) {
+                code << "0.0f";
+            } else {
+                code << inst.constant << "f";
+            }
+            code << "}";
+            if (i < program_size - 1) code << ",";
+            code << "  // " << getOperatorName(inst.opcode);
+            if (inst.argc > 0) code << " (argc=" << (int)inst.argc << ")";
+            if (inst.constant != 0.0f) code << " (const=" << inst.constant << ")";
+            code << "\n";
+        }
+        code << "};\n\n";
+        
+        code << "static const int embedded_gp_bytecode_size = " << program_size << ";\n\n";
+        
+        // Generate evaluation function that uses bytecode interpreter
+        code << "double " << functionName << "(PathProvider& pathProvider, AircraftState& aircraftState, double arg) {\n";
+        code << "    // Use portable bytecode evaluator for consistent behavior\n";
+        code << "    return evaluateBytecodePortable(embedded_gp_bytecode, embedded_gp_bytecode_size, pathProvider, aircraftState, arg);\n";
         code << "}\n";
         
         return code.str();
     }
+    
 };
 
 void printUsage(const char* progName) {
@@ -240,7 +268,7 @@ void printUsage(const char* progName) {
     std::cout << "  -i, --input FILE     Input bytecode file (required)\n";
     std::cout << "  -o, --output FILE    Output C++ source file (default: gp_program_generated.cpp)\n";
     std::cout << "  -f, --function NAME  Generated function name (default: generatedGPProgram)\n";
-    std::cout << "  -a, --arduino        Generate Arduino wrapper file\n";
+    std::cout << "  -b, --bytecode       Generate static bytecode array (embedded-friendly)\n";
     std::cout << "  --help               Show this help message\n";
     std::cout << "\n";
     std::cout << "Note: Function declaration is provided by stable gp_program.h header\n";
@@ -248,7 +276,7 @@ void printUsage(const char* progName) {
     std::cout << "Examples:\n";
     std::cout << "  " << progName << " -i gp_program.dat\n";
     std::cout << "  " << progName << " -i gp_program.dat -o my_gp.cpp -f myGPFunction\n";
-    std::cout << "  " << progName << " -i gp_program.dat -a\n";
+    std::cout << "  " << progName << " -b -i gp_program.dat\n";
 }
 
 int main(int argc, char** argv) {
@@ -256,7 +284,7 @@ int main(int argc, char** argv) {
         {"input", required_argument, 0, 'i'},
         {"output", required_argument, 0, 'o'},
         {"function", required_argument, 0, 'f'},
-        {"arduino", no_argument, 0, 'a'},
+        {"bytecode", no_argument, 0, 'b'},
         {"help", no_argument, 0, 0},
         {0, 0, 0, 0}
     };
@@ -264,12 +292,12 @@ int main(int argc, char** argv) {
     std::string inputFile = "";
     std::string outputFile = "gp_program_generated.cpp";
     std::string functionName = "generatedGPProgram";
-    bool generateArduino = false;
+    bool generateBytecode = false;
     
     int option_index = 0;
     int c;
     
-    while ((c = getopt_long(argc, argv, "i:o:f:a", long_options, &option_index)) != -1) {
+    while ((c = getopt_long(argc, argv, "i:o:f:b", long_options, &option_index)) != -1) {
         switch (c) {
             case 'i':
                 inputFile = optarg;
@@ -280,8 +308,8 @@ int main(int argc, char** argv) {
             case 'f':
                 functionName = optarg;
                 break;
-            case 'a':
-                generateArduino = true;
+            case 'b':
+                generateBytecode = true;
                 break;
             case 0:
                 if (long_options[option_index].name == std::string("help")) {
@@ -341,21 +369,13 @@ int main(int argc, char** argv) {
         std::cerr << "Error: Cannot create output file: " << outputFile << std::endl;
         return 1;
     }
-    cppFile << generator.generateEvaluatorFunction(functionName);
+    if (generateBytecode) {
+        cppFile << generator.generateStaticBytecodeArray(functionName);
+    } else {
+        cppFile << generator.generateEvaluatorFunction(functionName);
+    }
     cppFile.close();
     
-    // Write Arduino wrapper if requested
-    if (generateArduino) {
-        std::string arduinoFile = "gp_arduino_wrapper.cpp";
-        std::ofstream aFile(arduinoFile);
-        if (!aFile.is_open()) {
-            std::cerr << "Error: Cannot create Arduino wrapper file: " << arduinoFile << std::endl;
-            return 1;
-        }
-        aFile << generator.generateArduinoWrapper(functionName);
-        aFile.close();
-        std::cout << "Generated Arduino wrapper: " << arduinoFile << std::endl;
-    }
     
     std::cout << "Generated C++ source: " << outputFile << std::endl;
     std::cout << "Function name: " << functionName << std::endl;
