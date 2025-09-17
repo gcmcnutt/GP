@@ -12,6 +12,7 @@
 #include "renderer.h"
 #include "config_manager.h"
 #include "autoc.h"
+#include "aircraft_state.h"
 
 #include <vtkTextActor.h>
 #include <vtkTextProperty.h>
@@ -1434,11 +1435,11 @@ void updateBlackboxForCurrentTest() {
       Eigen::Vector3d testStartPosition = fullBlackboxAircraftStates[startIdx].getPosition();
       Eigen::Vector3d pathOrigin(0.0, 0.0, 0.0); // Path origin is at (0,0,0) for horizontal position
       
-      // Calculate horizontal offset (preserve altitude/elevation differences)
+      // Calculate offset to align test start with path origin and Z to SIM_INITIAL_ALTITUDE
       Eigen::Vector3d positionOffset;
       positionOffset[0] = pathOrigin[0] - testStartPosition[0]; // North offset
-      positionOffset[1] = pathOrigin[1] - testStartPosition[1]; // East offset  
-      positionOffset[2] = 0.0; // Preserve original elevation - no vertical offset
+      positionOffset[1] = pathOrigin[1] - testStartPosition[1]; // East offset
+      positionOffset[2] = SIM_INITIAL_ALTITUDE - testStartPosition[2]; // Offset Z to SIM_INITIAL_ALTITUDE
       
       for (size_t i = startIdx; i < endIdx; i++) {
         AircraftState offsetState = fullBlackboxAircraftStates[i];
