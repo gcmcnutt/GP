@@ -39,10 +39,9 @@
   - an info panel or attitude display or vector toward intercept display would help
   - fpv mode for playback
 - also seems crrcsim is dependent on a valid DISPLAY even when in headless
+- we should alter the base controller to be able to pitch up or down a little if target is slightly below
 
-- move evaluator embedded to xiao-gp
 - check for dangling or vestiage files
-- the portable part of the evaluator should be autoc-eval.cc -- e.g. that is the file that should be portable, not a sub-piece
 - xiao blackbox of flight paths
 - xiao consider bluetooth download in field
 
