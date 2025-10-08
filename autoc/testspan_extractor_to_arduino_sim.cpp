@@ -37,7 +37,7 @@ struct CSVFrame {
     int16_t gyroADC[3];         // roll, pitch, yaw rates
     int16_t accSmooth[3];       // x, y, z
     float vbat;
-    uint16_t servo[3];          // aileron, elevator, throttle (AET)
+    uint16_t rcData[3];         // aileron, elevator, throttle (AET) input commands
     uint32_t mspOverrideFlags;  // Direct from CSV - 1 = override active
     bool hasMSPRCOverride;      // Derived from mspOverrideFlags
     size_t csv_line_number;     // Source line number in CSV file (for diagnostics)
@@ -252,11 +252,11 @@ std::vector<CSVFrame> parseCSV(std::istream& input) {
             frame.accSmooth[i] = getField("accSmooth[" + std::to_string(i) + "]");
         }
 
-        // Servo outputs from rcData (AET format) - what INAV actually received as input
+        // RC input commands (AET format) - unified stream from TX or GP MSPRCOVERRIDE
         // rcData values are already in 1000-2000 range from receiver/MSP override
-        frame.servo[0] = getField("rcData[0]", 1500);  // Aileron (roll input)
-        frame.servo[1] = getField("rcData[1]", 1500);  // Elevator (pitch input)
-        frame.servo[2] = getField("rcData[3]", 1500);  // Throttle
+        frame.rcData[0] = getField("rcData[0]", 1500);  // Aileron (roll input)
+        frame.rcData[1] = getField("rcData[1]", 1500);  // Elevator (pitch input)
+        frame.rcData[2] = getField("rcData[3]", 1500);  // Throttle
 
 
         // Battery
@@ -394,7 +394,7 @@ void generateCppFile(const std::vector<CSVFrame>& frames, std::ostream& out) {
     out << "    msp_status_t status;\n";
     out << "    msp_attitude_quaternion_t attitude_quaternion;\n";
     out << "    msp_waypoint_t waypoint;\n";
-    out << "    uint16_t servo[3];          // servo outputs: aileron, elevator, throttle (AET)\n";
+    out << "    uint16_t rcData[3];         // RC input commands to INAV: aileron, elevator, throttle (AET)\n";
     out << "};\n\n";
 
     out << "// Flight data array\n";
@@ -436,7 +436,7 @@ void generateCppFile(const std::vector<CSVFrame>& frames, std::ostream& out) {
         out << "            .p3 = 0,\n";
         out << "            .flag = 0\n";
         out << "        },\n";
-        out << "        .servo = {" << frame.servo[0] << ", " << frame.servo[1] << ", " << frame.servo[2] << "}\n";
+        out << "        .rcData = {" << frame.rcData[0] << ", " << frame.rcData[1] << ", " << frame.rcData[2] << "}\n";
         out << "    }";
 
         if (i < frames.size() - 1) {
