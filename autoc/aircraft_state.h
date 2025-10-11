@@ -224,7 +224,10 @@ struct AircraftState {
       double delta_pitch = remainder(pitchCommand * dtSec * SIM_MAX_PITCH_RATE_RADSEC, M_PI);
 
       // adjust velocity as a function of throttle (-1:1)
-      dRelVel = SIM_INITIAL_VELOCITY + (throttleCommand * SIM_THROTTLE_SCALE);
+      // throttle = -1.0 → 0.5x base velocity (10 m/s)
+      // throttle =  0.0 → 1.0x base velocity (20 m/s)
+      // throttle = +1.0 → 1.5x base velocity (30 m/s)
+      dRelVel = SIM_INITIAL_VELOCITY * (1.0 + throttleCommand * 0.5);
 
       // Convert pitch and roll updates to quaternions (in the body frame)
       Eigen::Quaterniond delta_roll_quat(Eigen::AngleAxisd(delta_roll, Eigen::Vector3d::UnitX()));
