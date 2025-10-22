@@ -103,6 +103,9 @@ GPConfigVarInformation* ConfigManager::createConfigArray() {
         {"S3Profile", DATASTRING, &extraConfig->s3Profile},
         {"EvaluateMode", DATAINT, &extraConfig->evaluateMode},
         {"BytecodeFile", DATASTRING, &extraConfig->bytecodeFile},
+        {"WindScenarios", DATAINT, &extraConfig->windScenarioCount},
+        {"WindSeedBase", DATAINT, &extraConfig->windSeedBase},
+        {"WindSeedStride", DATAINT, &extraConfig->windSeedStride},
         {"", DATAINT, NULL}
     };
     return configArray;

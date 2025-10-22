@@ -48,6 +48,8 @@ public:
 
       // flip this back for return trip
       evalResults.gp = evalData.gp;
+      evalResults.scenario = evalData.scenario;
+      evalResults.scenarioList.clear();
 
       // Detect if we have GP tree data or bytecode data
       bool isGPTreeData = false;
@@ -205,6 +207,11 @@ public:
         }
 
         // save results of this run
+        {
+          ScenarioMetadata meta = evalData.scenario;
+          meta.pathVariantIndex = i;
+          evalResults.scenarioList.push_back(meta);
+        }
         evalResults.pathList.push_back(path);
         evalResults.aircraftStateList.push_back(aircraftStateSteps);
         evalResults.crashReasonList.push_back(crashReason);
@@ -218,6 +225,7 @@ public:
       evalResults.pathList.clear();
       evalResults.aircraftStateList.clear();
       evalResults.crashReasonList.clear();
+      evalResults.scenarioList.clear();
     }
   }
 

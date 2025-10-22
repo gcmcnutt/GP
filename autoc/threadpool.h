@@ -4,6 +4,7 @@
 #pragma once
 
 #include <boost/asio.hpp>
+#include <boost/process.hpp>
 #include <boost/thread.hpp>
 #include <vector>
 #include <queue>
@@ -11,7 +12,6 @@
 #include <memory>
 #include <atomic>
 #include <unistd.h>
-#include <random>
 #include <chrono>
 #include <thread>
 
@@ -46,15 +46,19 @@ private:
       std::vector<std::string> args = { std::to_string(getpid()), std::to_string(id), std::to_string(port_) };
       *logger.info() << "Launching: [" << id << "] " << subprocess_path << " " << port_ << endl;
 
-      // Add random 0-2 second delay to stagger subprocess launches
-      std::random_device rd;
-      std::mt19937 gen(rd());
-      std::uniform_int_distribution<> dis(0, 2000);
-      std::this_thread::sleep_for(std::chrono::milliseconds(dis(gen)));
+      // Add deterministic stagger to avoid simultaneous launches
+      unsigned int delayMs = static_cast<unsigned int>((id * 431) % 2000);
+      if (delayMs > 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+      }
+
+      boost::process::environment env = boost::this_process::environment();
+      env["AUTOC_DETERMINISTIC"] = "1";
 
       context.child_process = boost::process::child(
         subprocess_path,
-        args
+        boost::process::args(args),
+        boost::process::env = env
         // bp::std_out > bp::null,
         // bp::std_err > bp::null,
       );

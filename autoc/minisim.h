@@ -61,9 +61,26 @@ BOOST_SERIALIZATION_SPLIT_FREE(Eigen::Quaterniond)
 /*
  * here we send our requested paths to the sims
  */
-  struct EvalData {
+struct ScenarioMetadata {
+  int pathVariantIndex = 0;
+  int windVariantIndex = 0;
+  unsigned int windSeed = 0;
+
+  friend class boost::serialization::access;
+
+  template<class Archive>
+  void serialize(Archive& ar, const unsigned int /*version*/) {
+    ar& pathVariantIndex;
+    ar& windVariantIndex;
+    ar& windSeed;
+  }
+};
+BOOST_CLASS_VERSION(ScenarioMetadata, 1)
+
+struct EvalData {
   std::vector<char> gp;
   std::vector<std::vector<Path>> pathList;
+  ScenarioMetadata scenario;
 
   friend class boost::serialization::access;
 
@@ -71,9 +88,12 @@ BOOST_SERIALIZATION_SPLIT_FREE(Eigen::Quaterniond)
   void serialize(Archive& ar, const unsigned int version) {
     ar& gp;
     ar& pathList;
+    if (version > 1) {
+      ar& scenario;
+    }
   }
 };
-BOOST_CLASS_VERSION(EvalData, 1)
+BOOST_CLASS_VERSION(EvalData, 2)
 
 enum class CrashReason {
   None,
@@ -91,6 +111,8 @@ struct EvalResults {
   std::vector<CrashReason> crashReasonList;
   std::vector<std::vector<Path>> pathList;
   std::vector<std::vector<AircraftState>> aircraftStateList;
+  ScenarioMetadata scenario;
+  std::vector<ScenarioMetadata> scenarioList;
 
   friend class boost::serialization::access;
 
@@ -100,6 +122,23 @@ struct EvalResults {
     ar& crashReasonList;
     ar& pathList;
     ar& aircraftStateList;
+    if (version > 1) {
+      ar& scenario;
+      if (version > 2) {
+        ar& scenarioList;
+      } else if (Archive::is_loading::value) {
+        scenarioList.assign(pathList.size(), scenario);
+        for (size_t idx = 0; idx < scenarioList.size(); ++idx) {
+          scenarioList[idx].pathVariantIndex = static_cast<int>(idx);
+        }
+      }
+    } else if (Archive::is_loading::value) {
+      scenario = ScenarioMetadata();
+      scenarioList.assign(pathList.size(), scenario);
+      for (size_t idx = 0; idx < scenarioList.size(); ++idx) {
+        scenarioList[idx].pathVariantIndex = static_cast<int>(idx);
+      }
+    }
   }
 
   void dump(std::ostream& os) {
@@ -107,6 +146,12 @@ struct EvalResults {
       % crashReasonList.size() % pathList.size() % aircraftStateList.size();
 
     os << format("GP: %s\n") % "TODO";
+    os << format("Scenario: pathVariant=%d windVariant=%d windSeed=%u\n")
+      % scenario.pathVariantIndex % scenario.windVariantIndex % scenario.windSeed;
+    for (size_t i = 0; i < scenarioList.size(); ++i) {
+      os << format("  Scenario[%zu]: pathVariant=%d windVariant=%d windSeed=%u\n")
+        % i % scenarioList[i].pathVariantIndex % scenarioList[i].windVariantIndex % scenarioList[i].windSeed;
+    }
 
     for (int i = 0; i < crashReasonList.size(); i++) {
       os << format("  Crash %3d: %s\n") % i % crashReasonToString(crashReasonList.at(i));
@@ -144,7 +189,7 @@ struct EvalResults {
     }
   }
 };
-BOOST_CLASS_VERSION(EvalResults, 1)
+BOOST_CLASS_VERSION(EvalResults, 3)
 
 struct WorkerContext {
   std::unique_ptr<boost::asio::ip::tcp::socket> socket;

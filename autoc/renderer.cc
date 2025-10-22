@@ -296,7 +296,35 @@ bool Renderer::updateGenerationDisplay(int newGen) {
   emptyHighlightData->SetPoints(emptyHighlightPoints);
   this->blackboxHighlightTapes->AddInputData(emptyHighlightData);
 
-  int maxArenas = (!blackboxAircraftStates.empty()) ? 1 : evalResults.pathList.size();
+  std::cout << "Arena summary (" << evalResults.pathList.size() << " entries)" << std::endl;
+  bool hasPerPathMetadata = evalResults.scenarioList.size() == evalResults.pathList.size();
+  for (int i = 0; i < evalResults.pathList.size(); ++i) {
+    ScenarioMetadata meta = evalResults.scenario;
+    if (hasPerPathMetadata) {
+      meta = evalResults.scenarioList[i];
+    } else {
+      meta.pathVariantIndex = i;
+      if (meta.windSeed == 0 && meta.windVariantIndex == 0 && evalResults.scenario.windSeed != 0) {
+        meta.windSeed = evalResults.scenario.windSeed;
+        meta.windVariantIndex = evalResults.scenario.windVariantIndex;
+      }
+    }
+
+    Eigen::Vector3d finalPos = Eigen::Vector3d::Zero();
+    if (i < evalResults.aircraftStateList.size() && !evalResults.aircraftStateList[i].empty()) {
+      finalPos = evalResults.aircraftStateList[i].back().getPosition();
+    } else if (i < evalResults.pathList.size() && !evalResults.pathList[i].empty()) {
+      finalPos = evalResults.pathList[i].back().start;
+    }
+
+    std::cout << "  Arena " << i
+              << " pathIdx=" << meta.pathVariantIndex
+              << " windIdx=" << meta.windVariantIndex
+              << " windSeed=" << meta.windSeed
+              << " finalXYZ=" << finalPos.transpose() << std::endl;
+  }
+
+  int maxArenas = evalResults.pathList.size();
   for (int i = 0; i < maxArenas; i++) {
     Eigen::Vector3d offset = renderingOffset(i);
 
@@ -2300,7 +2328,7 @@ void Renderer::renderFullScene() {
   this->blackboxHighlightTapes->AddInputData(emptyHighlightData);
   
   // Render with full progress (1.0) using existing data
-  int maxArenas = (!blackboxAircraftStates.empty()) ? 1 : evalResults.pathList.size();
+  int maxArenas = evalResults.pathList.size();
   for (int i = 0; i < maxArenas; i++) {
     Eigen::Vector3d offset = renderingOffset(i);
     

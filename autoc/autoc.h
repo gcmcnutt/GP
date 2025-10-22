@@ -1,6 +1,8 @@
 #ifndef AUTOC_H
 #define AUTOC_H
 
+#include <vector>
+
 #include "gp.h"
 
 // Forward declarations
@@ -17,6 +19,13 @@ struct WorkerContext;
 #define MOVEMENT_EFFICIENCY_WEIGHT 1.5
 #define MOVEMENT_EFFICIENCY_MAX_PENALTY 8.0
 
+struct ScenarioDescriptor {
+  std::vector<std::vector<Path>> pathList;
+  unsigned int windSeed = 0;
+  int pathVariantIndex = 0;
+  int windVariantIndex = 0;
+};
+
 class ExtraConfig {
 public:
   int simNumPathsPerGen = 1;
@@ -28,6 +37,9 @@ public:
   char* s3Profile = "default";
   int evaluateMode = 0;  // 0=normal GP evolution, 1=bytecode verification
   char* bytecodeFile = "gp_program.dat";  // Bytecode file for verification mode
+  int windScenarioCount = 1;
+  int windSeedBase = 1337;
+  int windSeedStride = 1;
 
   // // Custom implementation of the << operator for the extraCfg type
   // std::ostream& operator << (std::ostream& os) {
@@ -128,8 +140,14 @@ public:
     return (MyGene*)GPContainer::Nth(n);
   }
 
+  void setScenarioIndex(int idx) { scenarioIndex = idx; }
+  int getScenarioIndex() const { return scenarioIndex; }
+
   // async evaluator
   virtual void evalTask(WorkerContext& context);
+
+private:
+  int scenarioIndex = 0;
 };
 
 
