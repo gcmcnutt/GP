@@ -39,6 +39,7 @@
 #include <vtkTextActor.h>
 #include <vtkTextProperty.h>
 #include <vtkRendererCollection.h>
+#include <array>
 #include <chrono>
 
 #define FIELD_SIZE 100.0
@@ -90,6 +91,12 @@ public:
   void renderFullScene(); // Render complete scene without S3 fetch
   void hideStopwatch();
   void updateStopwatchPosition();
+  void toggleFocusMode();
+  void adjustFocusArena(int delta);
+  void focusMoveLeft();
+  void focusMoveRight();
+  void focusMoveUp();
+  void focusMoveDown();
 
   int genNumber = 0;
   
@@ -102,6 +109,11 @@ public:
   int currentTestIndex = 0;
   bool showingFullFlight = false;
   bool inDecodeMode = false;
+  bool focusMode = false;
+  int focusArenaIndex = 0;
+  std::array<double,3> focusCameraPosition{0.0,0.0,0.0};
+  std::array<double,3> focusCameraFocalPoint{0.0,0.0,0.0};
+  std::array<double,3> focusCameraViewUp{0.0,0.0,-1.0};
   
   // Animation state
   bool isPlaybackActive = false;
@@ -130,6 +142,7 @@ private:
   vtkSmartPointer<vtkActor> actor3;
   vtkSmartPointer<vtkActor> blackboxActor;
   vtkSmartPointer<vtkActor> blackboxHighlightActor;  // For highlighted test spans
+  std::vector<vtkSmartPointer<vtkActor>> arenaLabelActors;
   
   vtkSmartPointer<vtkTextActor> generationTextActor;
   vtkSmartPointer<vtkTextActor> generationValueActor;
@@ -158,6 +171,7 @@ private:
   void createHighlightedFlightTapes(Eigen::Vector3d offset);
   void createStopwatch();
   void updateStopwatch(double currentTime);
+  void setFocusArena(int arenaIdx);
 };
 
 // CustomInteractorStyle implementation
@@ -197,6 +211,31 @@ protected:
     }
     else if (key == "space") {
       this->InvokeEvent(PlaybackEvent, nullptr);
+    }
+    else if (key == "f") {
+      if (renderer_) {
+        renderer_->toggleFocusMode();
+      }
+    }
+    else if (key == "Left") {
+      if (renderer_) {
+        renderer_->focusMoveLeft();
+      }
+    }
+    else if (key == "Right") {
+      if (renderer_) {
+        renderer_->focusMoveRight();
+      }
+    }
+    else if (key == "Up") {
+      if (renderer_) {
+        renderer_->focusMoveUp();
+      }
+    }
+    else if (key == "Down") {
+      if (renderer_) {
+        renderer_->focusMoveDown();
+      }
     }
     else {
       vtkInteractorStyleTrackballCamera::OnChar();

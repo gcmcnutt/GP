@@ -16,6 +16,10 @@
 
 #include <vtkTextActor.h>
 #include <vtkTextProperty.h>
+#include <vtkCamera.h>
+#include <vtkVectorText.h>
+#include <vtkTransform.h>
+#include <vtkTransformPolyDataFilter.h>
 
 #include <gp.h>
 
@@ -289,12 +293,20 @@ bool Renderer::updateGenerationDisplay(int newGen) {
   this->planeData->RemoveAllInputs();
   this->blackboxTapes->RemoveAllInputs();
   this->blackboxHighlightTapes->RemoveAllInputs();
-  
+
   // Always ensure highlight tapes has at least empty data to prevent VTK pipeline errors
   vtkNew<vtkPolyData> emptyHighlightData;
   vtkNew<vtkPoints> emptyHighlightPoints;
   emptyHighlightData->SetPoints(emptyHighlightPoints);
   this->blackboxHighlightTapes->AddInputData(emptyHighlightData);
+
+  vtkRenderer* activeRenderer = renderWindow->GetRenderers()->GetFirstRenderer();
+  for (auto& label : arenaLabelActors) {
+    if (activeRenderer) {
+      activeRenderer->RemoveActor(label);
+    }
+  }
+  arenaLabelActors.clear();
 
   std::cout << "Arena summary (" << evalResults.pathList.size() << " entries)" << std::endl;
   bool hasPerPathMetadata = evalResults.scenarioList.size() == evalResults.pathList.size();
@@ -373,7 +385,60 @@ bool Renderer::updateGenerationDisplay(int newGen) {
     planeSource->GetOutput()->GetCellData()->SetScalars(cellData);
     planeSource->Update();
     planeData->AddInputConnection(planeSource->GetOutputPort());
-    
+
+    ScenarioMetadata meta = evalResults.scenario;
+    if (evalResults.scenarioList.size() == evalResults.pathList.size()) {
+      meta = evalResults.scenarioList[i];
+    } else {
+      meta.pathVariantIndex = i;
+    }
+
+    std::ostringstream labelStream;
+    labelStream << "Arena " << i;
+    if (meta.pathVariantIndex >= 0) {
+      labelStream << "  Path " << meta.pathVariantIndex;
+    }
+    labelStream << "  Wind " << meta.windVariantIndex;
+    labelStream << "\nSeed " << meta.windSeed;
+
+    double labelScale = 6.0 * 0.5;
+    double textOffsetX = 45.0;
+    double textOffsetY = -45.0;
+    double anchorX = offset[0] + textOffsetX;
+    double anchorY = offset[1] + textOffsetY;
+    double anchorZ = offset[2] + 0.1;
+
+    vtkNew<vtkVectorText> textSource;
+    textSource->SetText(labelStream.str().c_str());
+    textSource->Update();
+    double bounds[6];
+    textSource->GetOutput()->GetBounds(bounds);
+
+    vtkNew<vtkTransform> textTransform;
+    textTransform->PostMultiply();
+    textTransform->Translate(-bounds[0], -bounds[3], -bounds[4]);
+    textTransform->Scale(labelScale, -labelScale, labelScale);
+    textTransform->RotateZ(90.0);
+    textTransform->Translate(anchorX, anchorY, anchorZ);
+
+    vtkNew<vtkTransformPolyDataFilter> transformFilter;
+    transformFilter->SetTransform(textTransform);
+    transformFilter->SetInputConnection(textSource->GetOutputPort());
+
+    vtkNew<vtkPolyDataMapper> textMapper;
+    textMapper->SetInputConnection(transformFilter->GetOutputPort());
+
+    vtkSmartPointer<vtkActor> labelActor = vtkSmartPointer<vtkActor>::New();
+    labelActor->SetMapper(textMapper);
+    labelActor->GetProperty()->SetColor(0.9, 0.9, 0.9);
+    labelActor->GetProperty()->SetOpacity(0.5);
+    labelActor->GetProperty()->SetLighting(false);
+
+    if (activeRenderer) {
+      activeRenderer->AddActor(labelActor);
+    }
+    arenaLabelActors.push_back(labelActor);
+
     // Add blackbox data to first arena only
     if (i == 0 && !blackboxAircraftStates.empty()) {
       // Center blackbox data in the arena by adding the arena offset
@@ -426,6 +491,7 @@ bool Renderer::updateGenerationDisplay(int newGen) {
 
   // Render the updated scene
   renderWindow->Render();
+  focusMode = false;
   return true;
 }
 
@@ -951,6 +1017,7 @@ void Renderer::initialize() {
   testValueActor->SetInput("-");
   renderer->AddActor2D(testValueActor);
 
+
   // Set initial text display
   updateTextDisplay(0, 0.0);
 
@@ -1277,6 +1344,8 @@ int main(int argc, char** argv) {
   std::cout << "  N - Jump to newest generation" << std::endl;
   std::cout << "  P - Jump to oldest generation (generation 1)" << std::endl;
   std::cout << "  SPACE - Toggle playback animation" << std::endl;
+  std::cout << "  f - Focus camera on current arena" << std::endl;
+  std::cout << "  Arrow keys - Move focus between arenas" << std::endl;
   if (!decoderCommand.empty() && !renderer.testSpans.empty()) {
     std::cout << "  t - Next test segment" << std::endl;
     std::cout << "  r - Previous test segment" << std::endl;
@@ -2003,6 +2072,185 @@ void Renderer::updateStopwatchPosition() {
   // This requires recreating the geometry since the center position has changed
   if (stopwatchTime >= 0.0) { // Only update if we have valid stopwatch time
     updateStopwatch(stopwatchTime); // This will recreate the geometry with new position
+  }
+}
+
+void Renderer::toggleFocusMode() {
+  if (evalResults.pathList.empty()) {
+    return;
+  }
+
+  focusMode = true;
+
+  if (focusArenaIndex < 0 || focusArenaIndex >= static_cast<int>(evalResults.pathList.size())) {
+    focusArenaIndex = 0;
+  }
+  setFocusArena(focusArenaIndex);
+  renderWindow->Render();
+}
+
+void Renderer::adjustFocusArena(int delta) {
+  if (evalResults.pathList.empty()) {
+    return;
+  }
+  focusMode = true;
+  int total = static_cast<int>(evalResults.pathList.size());
+  int newIndex = focusArenaIndex + delta;
+  if (total > 0) {
+    newIndex = (newIndex % total + total) % total;
+    setFocusArena(newIndex);
+    renderWindow->Render();
+  }
+}
+
+void Renderer::focusMoveLeft() {
+  if (evalResults.pathList.empty()) {
+    return;
+  }
+  int total = static_cast<int>(evalResults.pathList.size());
+  if (total <= 1) {
+    return;
+  }
+  focusMode = true;
+  int columns = static_cast<int>(std::ceil(std::sqrt(total)));
+  int rows = static_cast<int>(std::ceil(static_cast<double>(total) / columns));
+  int row = focusArenaIndex / columns;
+  int col = focusArenaIndex % columns;
+  int startRow = row;
+  do {
+    row = (row + rows - 1) % rows;
+    int candidate = row * columns + col;
+    if (candidate < total) {
+      focusArenaIndex = candidate;
+      setFocusArena(focusArenaIndex);
+      renderWindow->Render();
+      return;
+    }
+  } while (row != startRow);
+  setFocusArena(focusArenaIndex);
+  renderWindow->Render();
+}
+
+void Renderer::focusMoveRight() {
+  if (evalResults.pathList.empty()) {
+    return;
+  }
+  int total = static_cast<int>(evalResults.pathList.size());
+  if (total <= 1) {
+    return;
+  }
+  focusMode = true;
+  int columns = static_cast<int>(std::ceil(std::sqrt(total)));
+  int rows = static_cast<int>(std::ceil(static_cast<double>(total) / columns));
+  int row = focusArenaIndex / columns;
+  int col = focusArenaIndex % columns;
+  int startRow = row;
+  do {
+    row = (row + 1) % rows;
+    int candidate = row * columns + col;
+    if (candidate < total) {
+      focusArenaIndex = candidate;
+      setFocusArena(focusArenaIndex);
+      renderWindow->Render();
+      return;
+    }
+  } while (row != startRow);
+  setFocusArena(focusArenaIndex);
+  renderWindow->Render();
+}
+
+void Renderer::focusMoveUp() {
+  if (evalResults.pathList.empty()) {
+    return;
+  }
+  int total = static_cast<int>(evalResults.pathList.size());
+  if (total <= 1) {
+    return;
+  }
+  focusMode = true;
+  int columns = static_cast<int>(std::ceil(std::sqrt(total)));
+  int row = focusArenaIndex / columns;
+  int col = focusArenaIndex % columns;
+  int startCol = col;
+  do {
+    col = (col + 1) % columns;
+    int candidate = row * columns + col;
+    if (candidate < total) {
+      focusArenaIndex = candidate;
+      setFocusArena(focusArenaIndex);
+      renderWindow->Render();
+      return;
+    }
+  } while (col != startCol);
+  setFocusArena(focusArenaIndex);
+  renderWindow->Render();
+}
+
+void Renderer::focusMoveDown() {
+  if (evalResults.pathList.empty()) {
+    return;
+  }
+  int total = static_cast<int>(evalResults.pathList.size());
+  if (total <= 1) {
+    return;
+  }
+  focusMode = true;
+  int columns = static_cast<int>(std::ceil(std::sqrt(total)));
+  int row = focusArenaIndex / columns;
+  int col = focusArenaIndex % columns;
+  int startCol = col;
+  do {
+    col = (col + columns - 1) % columns;
+    int candidate = row * columns + col;
+    if (candidate < total) {
+      focusArenaIndex = candidate;
+      setFocusArena(focusArenaIndex);
+      renderWindow->Render();
+      return;
+    }
+  } while (col != startCol);
+  setFocusArena(focusArenaIndex);
+  renderWindow->Render();
+}
+
+void Renderer::setFocusArena(int arenaIdx) {
+  if (evalResults.pathList.empty()) {
+    return;
+  }
+
+  int total = static_cast<int>(evalResults.pathList.size());
+  if (total == 0) {
+    return;
+  }
+
+  arenaIdx = (arenaIdx % total + total) % total;
+  focusArenaIndex = arenaIdx;
+
+  vtkRenderer* activeRenderer = renderWindow->GetRenderers()->GetFirstRenderer();
+  if (!activeRenderer) {
+    return;
+  }
+
+  Eigen::Vector3d offset = renderingOffset(arenaIdx);
+  double focusZ = 0.0;
+  if (arenaIdx < static_cast<int>(evalResults.pathList.size()) && !evalResults.pathList[arenaIdx].empty()) {
+    focusZ = evalResults.pathList[arenaIdx].front().start[2];
+  }
+
+  double camX = offset[0] - 70.0;
+  double camY = offset[1] - 10.0;
+  double camZ = offset[2] - 100.0;
+
+  focusCameraPosition = {camX, camY, camZ};
+  focusCameraFocalPoint = {offset[0], offset[1], offset[2] - 10.0};
+  focusCameraViewUp = {0.0, 0.0, -1.0};
+
+  vtkCamera* camera = activeRenderer->GetActiveCamera();
+  if (camera) {
+    camera->SetPosition(focusCameraPosition.data());
+    camera->SetFocalPoint(focusCameraFocalPoint.data());
+    camera->SetViewUp(focusCameraViewUp.data());
+    activeRenderer->ResetCameraClippingRange();
   }
 }
 
