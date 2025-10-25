@@ -27,7 +27,6 @@ add_executable(minisim minisim.cc minisim.h aircraft_state.h autoc.h autoc-eval.
 add_executable(renderer renderer.cc renderer.h minisim.h aircraft_state.h autoc.h config_manager.cc config_manager.h)
 add_executable(gpextractor gpextractor.cc minisim.h aircraft_state.h config_manager.cc config_manager.h autoc-eval.cc gp_evaluator_portable.cc gp_evaluator_portable.h gp_evaluator_desktop.cc gp_evaluator_desktop.h)
 add_executable(bytecode2cpp bytecode2cpp.cc gp_bytecode.cc gp_bytecode.h gp_evaluator_portable.cc gp_evaluator_portable.h gp_evaluator_desktop.cc gp_evaluator_desktop.h config_manager.cc config_manager.h)
-add_executable(testspan_extractor_to_arduino_sim testspan_extractor_to_arduino_sim.cpp)
 
 target_link_libraries(autoc gp ${Boost_LIBRARIES} Eigen3::Eigen ${AWSSDK_LIBRARIES})
 target_link_libraries(minisim gp ${Boost_LIBRARIES} Eigen3::Eigen)
