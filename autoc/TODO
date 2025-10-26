@@ -8,17 +8,14 @@
 
 - try to simplify the eval tree by passing a class reference instead of N args
 * replay functions
-  - select board, recenter view on an arena, etc
 - consider fitness function for distance, alignment is ramped sensitivity for first couple of seconds (to allow capture from random start)
 - walk various classes for copy by reference, copy by pointer, copy by value == a smaller mem leak in autoc
 - we can buffer the best run over a population vs re-running it -- save the final eval steps
 - can not interactively flip to autoc input as it attempts to use the callback port -- soften this dependency for when it is manually run (maybe if port not set, it falls back to Mouse)
 - plumb stdout/stderr nicely for a build run -- perhaps hook this into archiving system too
 - figure out how to use crrcsim robots to form lead plane
-* more accurate hb1 model
 - Still getting thermal crash/corruption
 - variations project - to get closer to zero-shot
-  - vary wind, turbulence
   - maybe revisit thermal model
   - power, drag, service response times
   - get random start/orientation working in crrcsim
