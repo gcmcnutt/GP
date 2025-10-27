@@ -18,6 +18,7 @@
 #include <boost/archive/text_oarchive.hpp>
 #include <boost/archive/text_iarchive.hpp>
 
+#include <cmath>
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
 
@@ -172,15 +173,25 @@ struct EvalResults {
     for (int i = 0; i < aircraftStateList.size(); i++) {
       for (int j = 0; j < aircraftStateList.at(i).size(); j++) {
         AircraftState aircraftState = aircraftStateList.at(i).at(j);
-        Eigen::Vector3d euler = aircraftState.getOrientation().toRotationMatrix().eulerAngles(2, 1, 0);
+        Eigen::Quaterniond orientQuat = aircraftState.getOrientation();
+        if (!std::isnan(orientQuat.norm()) && std::abs(orientQuat.norm() - 1.0) > 1e-6) {
+          orientQuat.normalize();
+        }
+
+        Eigen::Vector3d euler = orientQuat.toRotationMatrix().eulerAngles(2, 1, 0);
+        Eigen::Vector3d eulerWrapped;
+        for (int axis = 0; axis < 3; ++axis) {
+          eulerWrapped[axis] = std::atan2(std::sin(euler[axis]), std::cos(euler[axis]));
+        }
         // TODO distance from start
-        os << format("  Path %3d:%3d: Time %5d Index %3d: pos[%8.2f %8.2f %8.2f] orient[%8.2f %8.2f %8.2f] vel[%8.2f] pitch[%5.2f] roll[%5.2f] throttle[%5.2f]\n")
+        os << format("  Path %3d:%3d: Time %5d Index %3d: pos[%8.2f %8.2f %8.2f] orientRPY[%8.2f %8.2f %8.2f] quat[%+7.4f %+7.4f %+7.4f %+7.4f] vel[%8.2f] pitch[%5.2f] roll[%5.2f] throttle[%5.2f]\n")
           % i
           % j
           % aircraftState.getSimTimeMsec()
           % aircraftState.getThisPathIndex()
           % aircraftState.getPosition()[0] % aircraftState.getPosition()[1] % aircraftState.getPosition()[2]
-          % euler.x() % euler.y() % euler.z()
+          % eulerWrapped.x() % eulerWrapped.y() % eulerWrapped.z()
+          % orientQuat.w() % orientQuat.x() % orientQuat.y() % orientQuat.z()
           % aircraftState.getRelVel()
           % aircraftState.getPitchCommand()
           % aircraftState.getRollCommand()
