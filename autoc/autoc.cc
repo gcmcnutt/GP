@@ -480,7 +480,7 @@ void MyGP::evalTask(WorkerContext& context)
       if (printEval) {
 
         if (printHeader) {
-          fout << "Pth:Step:   Time Idx  totDist   pathX    pathY    pathZ        X        Y        Z       dr       dp       dy   relVel     roll    pitch    power    distP   angleP  movEffP\n";
+          fout << "Pth:Step:   Time Idx  totDist   pathX    pathY    pathZ        X        Y        Z       dr       dp       dy   relVel     roll    pitch    power    distP   angleP  movEffP      qw      qx      qy      qz   vxBody   vyBody   vzBody    alpha     beta   dtheta    dphi   dhome\n";
           printHeader = false;
         }
 
@@ -513,8 +513,29 @@ void MyGP::evalTask(WorkerContext& context)
           euler[2] = atan2(rotMatrix(1, 0), rotMatrix(0, 0)); // yaw (psi)
         }
 
-        char outbuf[1000]; // XXX use c++20
-        sprintf(outbuf, "%03d:%04d: %06ld %3d % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f\n",
+        // Calculate body-frame velocity for GP operators
+        Eigen::Vector3d velocity_body = stepAircraftState.getOrientation().inverse() *
+                                         stepAircraftState.getVelocity();
+
+        // Calculate GP operator values (matching GP/autoc/gp_operators.h)
+        double alpha_deg = atan2(-velocity_body.z(), velocity_body.x()) * 180.0 / M_PI;  // GETALPHA
+        double beta_deg = atan2(velocity_body.y(), velocity_body.x()) * 180.0 / M_PI;    // GETBETA
+
+        // Calculate angle to target in body frame (GETDTHETA, GETDPHI)
+        Eigen::Vector3d craftToTarget = path.at(pathIndex).start - stepAircraftState.getPosition();
+        Eigen::Vector3d target_body = stepAircraftState.getOrientation().inverse() * craftToTarget;
+        double dtheta_deg = atan2(-target_body.z(), target_body.x()) * 180.0 / M_PI;    // GETDTHETA
+        double dphi_deg = atan2(target_body.y(), target_body.x()) * 180.0 / M_PI;       // GETDPHI
+
+        // Distance to home (GETDHOME)
+        Eigen::Vector3d home(0, 0, SIM_INITIAL_ALTITUDE);
+        double dhome = (home - stepAircraftState.getPosition()).norm();
+
+        // Get raw quaternion
+        Eigen::Quaterniond q = stepAircraftState.getOrientation();
+
+        char outbuf[1500]; // XXX use c++20
+        sprintf(outbuf, "%03d:%04d: %06ld %3d % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.4f % 7.4f % 7.4f % 7.4f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f\n",
           i, simulation_steps,
           stepAircraftState.getSimTimeMsec(), pathIndex,
           path.at(pathIndex).distanceFromStart,
@@ -533,7 +554,13 @@ void MyGP::evalTask(WorkerContext& context)
           stepAircraftState.getThrottleCommand(),
           distanceFromGoal,
           angle_rad,
-          movement_efficiency
+          movement_efficiency,
+          // NEW FIELDS:
+          q.w(), q.x(), q.y(), q.z(),                       // Quaternion
+          velocity_body.x(), velocity_body.y(), velocity_body.z(),  // Body velocity
+          alpha_deg, beta_deg,                              // GETALPHA, GETBETA
+          dtheta_deg, dphi_deg,                             // GETDTHETA, GETDPHI
+          dhome                                             // GETDHOME
         );
         fout << outbuf;
       }
@@ -817,7 +844,7 @@ int main(int argc, char** argv)
               bestOfEvalResults = context.evalResults;
               
               if (stepIndex == 1) {
-                fout << "Pth:Step:   Time Idx  totDist   pathX    pathY    pathZ        X        Y        Z       dr       dp       dy   relVel     roll    pitch    power    distP   angleP  movEffP\n";
+                fout << "Pth:Step:   Time Idx  totDist   pathX    pathY    pathZ        X        Y        Z       dr       dp       dy   relVel     roll    pitch    power    distP   angleP  movEffP      qw      qx      qy      qz   vxBody   vyBody   vzBody    alpha     beta   dtheta    dphi   dhome\n";
               }
               
               Eigen::Matrix3d rotMatrix = stepAircraftState.getOrientation().toRotationMatrix();
@@ -837,9 +864,30 @@ int main(int argc, char** argv)
                 euler[1] = -asin(rotMatrix(2, 0));
                 euler[2] = atan2(rotMatrix(1, 0), rotMatrix(0, 0));
               }
-              
-              char outbuf[1000];
-              sprintf(outbuf, "%03d:%04d: %06ld %3d % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f\n",
+
+              // Calculate body-frame velocity for GP operators
+              Eigen::Vector3d velocity_body = stepAircraftState.getOrientation().inverse() *
+                                               stepAircraftState.getVelocity();
+
+              // Calculate GP operator values (matching GP/autoc/gp_operators.h)
+              double alpha_deg = atan2(-velocity_body.z(), velocity_body.x()) * 180.0 / M_PI;  // GETALPHA
+              double beta_deg = atan2(velocity_body.y(), velocity_body.x()) * 180.0 / M_PI;    // GETBETA
+
+              // Calculate angle to target in body frame (GETDTHETA, GETDPHI)
+              Eigen::Vector3d craftToTarget = path.at(pathIndex).start - stepAircraftState.getPosition();
+              Eigen::Vector3d target_body = stepAircraftState.getOrientation().inverse() * craftToTarget;
+              double dtheta_deg = atan2(-target_body.z(), target_body.x()) * 180.0 / M_PI;    // GETDTHETA
+              double dphi_deg = atan2(target_body.y(), target_body.x()) * 180.0 / M_PI;       // GETDPHI
+
+              // Distance to home (GETDHOME)
+              Eigen::Vector3d home(0, 0, SIM_INITIAL_ALTITUDE);
+              double dhome = (home - stepAircraftState.getPosition()).norm();
+
+              // Get raw quaternion
+              Eigen::Quaterniond q = stepAircraftState.getOrientation();
+
+              char outbuf[1500];
+              sprintf(outbuf, "%03d:%04d: %06ld %3d % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.4f % 7.4f % 7.4f % 7.4f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f\n",
                 i, simulation_steps,
                 stepAircraftState.getSimTimeMsec(), pathIndex,
                 path.at(pathIndex).distanceFromStart,
@@ -858,7 +906,13 @@ int main(int argc, char** argv)
                 stepAircraftState.getThrottleCommand(),
                 distanceFromGoal,
                 angle_rad,
-                movement_efficiency
+                movement_efficiency,
+                // NEW FIELDS:
+                q.w(), q.x(), q.y(), q.z(),                       // Quaternion
+                velocity_body.x(), velocity_body.y(), velocity_body.z(),  // Body velocity
+                alpha_deg, beta_deg,                              // GETALPHA, GETBETA
+                dtheta_deg, dphi_deg,                             // GETDTHETA, GETDPHI
+                dhome                                             // GETDHOME
               );
               fout << outbuf;
             }
