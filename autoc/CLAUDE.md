@@ -25,6 +25,19 @@ export DISPLAY=:99
 - Boost (thread, system, serialization, log)
 - AWS SDK for C++ (S3 storage)
 
+General build is done by:
+
+```bash
+cd ~/GP
+make clean
+rm -rf build
+cd build
+cmake -DCMAKE_BUILD_TYPE=Debug ../autoc
+# and then the incremental build is
+cd ~/GP
+make
+```
+
 ## Architecture
 
 **Core Components:**

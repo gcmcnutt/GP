@@ -19,8 +19,14 @@ struct WorkerContext;
 #define MOVEMENT_EFFICIENCY_WEIGHT 1.5
 #define MOVEMENT_EFFICIENCY_MAX_PENALTY 8.0
 
+struct WindScenarioConfig {
+  unsigned int windSeed = 0;
+  int windVariantIndex = 0;
+};
+
 struct ScenarioDescriptor {
   std::vector<std::vector<Path>> pathList;
+  std::vector<WindScenarioConfig> windScenarios;
   unsigned int windSeed = 0;
   int pathVariantIndex = 0;
   int windVariantIndex = 0;
@@ -142,12 +148,15 @@ public:
 
   void setScenarioIndex(int idx) { scenarioIndex = idx; }
   int getScenarioIndex() const { return scenarioIndex; }
+  void setBakeoffMode(bool mode) { bakeoffMode = mode; }
+  bool isBakeoffMode() const { return bakeoffMode; }
 
   // async evaluator
   virtual void evalTask(WorkerContext& context);
 
 private:
   int scenarioIndex = 0;
+  bool bakeoffMode = false;
 };
 
 

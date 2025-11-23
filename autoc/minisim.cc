@@ -22,6 +22,33 @@
 using namespace std;
 using boost::asio::ip::tcp;
 
+namespace {
+
+void ensureScenarioMetadata(EvalData& evalData) {
+  if (evalData.scenarioList.size() == evalData.pathList.size()) {
+    return;
+  }
+  evalData.scenarioList.assign(evalData.pathList.size(), evalData.scenario);
+  for (size_t idx = 0; idx < evalData.scenarioList.size(); ++idx) {
+    if (evalData.scenarioList[idx].pathVariantIndex < 0) {
+      evalData.scenarioList[idx].pathVariantIndex = static_cast<int>(idx);
+    }
+  }
+}
+
+ScenarioMetadata scenarioForPathIndex(const EvalData& evalData, size_t idx) {
+  if (idx < evalData.scenarioList.size()) {
+    return evalData.scenarioList.at(idx);
+  }
+  ScenarioMetadata meta = evalData.scenario;
+  if (meta.pathVariantIndex < 0) {
+    meta.pathVariantIndex = static_cast<int>(idx);
+  }
+  return meta;
+}
+
+} // namespace
+
 boost::iostreams::stream<boost::iostreams::array_source> charArrayToIstream(const std::vector<char>& charArray) {
   return boost::iostreams::stream<boost::iostreams::array_source>(
     boost::iostreams::array_source(charArray.data(), charArray.size())
@@ -46,10 +73,17 @@ public:
       // ok what does main say to do
       EvalData evalData = receiveRPC<EvalData>(socket_);
 
+      ensureScenarioMetadata(evalData);
+
       // flip this back for return trip
       evalResults.gp = evalData.gp;
-      evalResults.scenario = evalData.scenario;
+      if (!evalData.scenarioList.empty()) {
+        evalResults.scenario = evalData.scenarioList.front();
+      } else {
+        evalResults.scenario = evalData.scenario;
+      }
       evalResults.scenarioList.clear();
+      evalResults.scenarioList.reserve(evalData.scenarioList.size());
 
       // Detect if we have GP tree data or bytecode data
       bool isGPTreeData = false;
@@ -208,8 +242,7 @@ public:
 
         // save results of this run
         {
-          ScenarioMetadata meta = evalData.scenario;
-          meta.pathVariantIndex = i;
+          ScenarioMetadata meta = scenarioForPathIndex(evalData, static_cast<size_t>(i));
           evalResults.scenarioList.push_back(meta);
         }
         evalResults.pathList.push_back(path);

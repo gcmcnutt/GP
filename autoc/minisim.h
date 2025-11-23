@@ -4,6 +4,7 @@
 
 #include <vector>
 #include <iostream>
+#include <cstdint>
 
 #include <boost/iostreams/stream.hpp>
 #include <boost/iostreams/device/back_inserter.hpp>
@@ -66,22 +67,37 @@ struct ScenarioMetadata {
   int pathVariantIndex = 0;
   int windVariantIndex = 0;
   unsigned int windSeed = 0;
+  uint64_t scenarioSequence = 0;
+  uint64_t bakeoffSequence = 0;
 
   friend class boost::serialization::access;
 
   template<class Archive>
-  void serialize(Archive& ar, const unsigned int /*version*/) {
+  void serialize(Archive& ar, const unsigned int version) {
     ar& pathVariantIndex;
     ar& windVariantIndex;
     ar& windSeed;
+    if (version > 2) {
+      ar& scenarioSequence;
+      ar& bakeoffSequence;
+    } else if (version > 1) {
+      ar& scenarioSequence;
+      if (Archive::is_loading::value) {
+        bakeoffSequence = 0;
+      }
+    } else if (Archive::is_loading::value) {
+      scenarioSequence = 0;
+      bakeoffSequence = 0;
+    }
   }
 };
-BOOST_CLASS_VERSION(ScenarioMetadata, 1)
+BOOST_CLASS_VERSION(ScenarioMetadata, 3)
 
 struct EvalData {
   std::vector<char> gp;
   std::vector<std::vector<Path>> pathList;
   ScenarioMetadata scenario;
+  std::vector<ScenarioMetadata> scenarioList;
 
   friend class boost::serialization::access;
 
@@ -91,10 +107,26 @@ struct EvalData {
     ar& pathList;
     if (version > 1) {
       ar& scenario;
+      if (version > 2) {
+        ar& scenarioList;
+      } else if (Archive::is_loading::value) {
+        scenarioList.assign(pathList.size(), scenario);
+        for (size_t idx = 0; idx < scenarioList.size(); ++idx) {
+          if (scenarioList[idx].pathVariantIndex < 0) {
+            scenarioList[idx].pathVariantIndex = static_cast<int>(idx);
+          }
+        }
+      }
+    } else if (Archive::is_loading::value) {
+      scenario = ScenarioMetadata();
+      scenarioList.assign(pathList.size(), scenario);
+      for (size_t idx = 0; idx < scenarioList.size(); ++idx) {
+        scenarioList[idx].pathVariantIndex = static_cast<int>(idx);
+      }
     }
   }
 };
-BOOST_CLASS_VERSION(EvalData, 2)
+BOOST_CLASS_VERSION(EvalData, 3)
 
 enum class CrashReason {
   None,
@@ -147,11 +179,15 @@ struct EvalResults {
       % crashReasonList.size() % pathList.size() % aircraftStateList.size();
 
     os << format("GP: %s\n") % "TODO";
-    os << format("Scenario: pathVariant=%d windVariant=%d windSeed=%u\n")
-      % scenario.pathVariantIndex % scenario.windVariantIndex % scenario.windSeed;
+    os << format("Scenario: pathVariant=%d windVariant=%d windSeed=%u seq=%llu bake=%llu\n")
+      % scenario.pathVariantIndex % scenario.windVariantIndex % scenario.windSeed
+      % static_cast<unsigned long long>(scenario.scenarioSequence)
+      % static_cast<unsigned long long>(scenario.bakeoffSequence);
     for (size_t i = 0; i < scenarioList.size(); ++i) {
-      os << format("  Scenario[%zu]: pathVariant=%d windVariant=%d windSeed=%u\n")
-        % i % scenarioList[i].pathVariantIndex % scenarioList[i].windVariantIndex % scenarioList[i].windSeed;
+      os << format("  Scenario[%zu]: pathVariant=%d windVariant=%d windSeed=%u seq=%llu bake=%llu\n")
+        % i % scenarioList[i].pathVariantIndex % scenarioList[i].windVariantIndex % scenarioList[i].windSeed
+        % static_cast<unsigned long long>(scenarioList[i].scenarioSequence)
+        % static_cast<unsigned long long>(scenarioList[i].bakeoffSequence);
     }
 
     for (int i = 0; i < crashReasonList.size(); i++) {

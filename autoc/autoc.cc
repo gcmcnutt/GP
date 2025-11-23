@@ -19,6 +19,8 @@ From skeleton/skeleton.cc
 #include <chrono>
 #include <memory>
 #include <cstdint>
+#include <limits>
+#include <iomanip>
 
 #include "gp.h"
 #include "gp_bytecode.h"
@@ -71,6 +73,9 @@ EvalResults bestOfEvalResults;
 EvalResults aggregatedEvalResults;
 EvalResults* activeEvalCollector = nullptr;
 std::atomic<uint64_t> evaluationProgress{0};
+std::atomic<uint64_t> globalScenarioCounter{0};
+std::atomic<uint64_t> bakeoffPathCounter{0};
+std::atomic<uint64_t> globalSimRunCounter{0};
 
 
 
@@ -99,19 +104,35 @@ void rebuildGenerationScenarios(const std::vector<std::vector<Path>>& basePaths)
 
   if (basePaths.empty()) {
     ScenarioDescriptor scenario;
-    scenario.windSeed = seedBase;
+    scenario.pathList = basePaths;
     scenario.pathVariantIndex = -1;
     scenario.windVariantIndex = 0;
+    scenario.windSeed = seedBase;
+    scenario.windScenarios.push_back({seedBase, 0});
     generationScenarios.push_back(std::move(scenario));
     return;
   }
 
-  for (int windIdx = 0; windIdx < windScenarioCount; ++windIdx) {
+  // Create one scenario per path. Each scenario contains ONE path evaluated
+  // across ALL wind conditions. This allows demes to specialize on specific
+  // path geometries while being robust to wind variations.
+  for (size_t pathIdx = 0; pathIdx < basePaths.size(); ++pathIdx) {
     ScenarioDescriptor scenario;
-    scenario.pathList = basePaths;
-    scenario.windSeed = seedBase + seedStride * static_cast<unsigned int>(windIdx);
-    scenario.pathVariantIndex = -1;
-    scenario.windVariantIndex = windIdx;
+    scenario.pathVariantIndex = static_cast<int>(pathIdx);
+    for (int windIdx = 0; windIdx < windScenarioCount; ++windIdx) {
+      scenario.pathList.push_back(basePaths[pathIdx]);
+      WindScenarioConfig windScenario;
+      windScenario.windSeed = seedBase + seedStride * static_cast<unsigned int>(windIdx);
+      windScenario.windVariantIndex = windIdx;
+      scenario.windScenarios.push_back(windScenario);
+    }
+    if (!scenario.windScenarios.empty()) {
+      scenario.windSeed = scenario.windScenarios.front().windSeed;
+      scenario.windVariantIndex = scenario.windScenarios.front().windVariantIndex;
+    } else {
+      scenario.windSeed = seedBase;
+      scenario.windVariantIndex = 0;
+    }
     generationScenarios.push_back(std::move(scenario));
   }
 
@@ -121,6 +142,7 @@ void rebuildGenerationScenarios(const std::vector<std::vector<Path>>& basePaths)
     scenario.windVariantIndex = 0;
     scenario.windSeed = seedBase;
     scenario.pathList = basePaths;
+    scenario.windScenarios.push_back({seedBase, 0});
     generationScenarios.push_back(std::move(scenario));
   }
 }
@@ -131,6 +153,9 @@ int computeScenarioIndexForIndividual(int individualIndex) {
 
   if (gpCfg.DemeticGrouping && gpCfg.DemeSize > 0) {
     int demeIndex = individualIndex / gpCfg.DemeSize;
+    if (scenarioCount == 0) {
+      return 0;
+    }
     return demeIndex % scenarioCount;
   }
 
@@ -144,6 +169,12 @@ const ScenarioDescriptor& scenarioForIndex(int scenarioIndex) {
     fallback.windSeed = static_cast<unsigned int>(ConfigManager::getExtraConfig().windSeedBase);
     fallback.pathVariantIndex = -1;
     fallback.windVariantIndex = 0;
+    fallback.windScenarios.clear();
+    fallback.windScenarios.resize(fallback.pathList.size());
+    for (size_t idx = 0; idx < fallback.windScenarios.size(); ++idx) {
+      fallback.windScenarios[idx].windSeed = fallback.windSeed;
+      fallback.windScenarios[idx].windVariantIndex = static_cast<int>(idx);
+    }
     return fallback;
   }
   int clampedIndex = ((scenarioIndex % static_cast<int>(generationScenarios.size())) + static_cast<int>(generationScenarios.size())) % static_cast<int>(generationScenarios.size());
@@ -241,29 +272,96 @@ public:
     *logger.debug() << "printEval flag=" << printEval
                     << " activeEvalCollector=" << (activeEvalCollector ? 1 : 0) << endl;
     if (printEval) {
-      MyGP* best = NthMyGP(bestOfPopulation);
+      bakeoffPathCounter.store(0, std::memory_order_relaxed);
+      const GPVariables& gpCfg = ConfigManager::getGPConfig();
+      std::vector<int> candidateIndices;
+      candidateIndices.reserve(static_cast<size_t>(std::max(1, containerSize())));
+
+      if (gpCfg.DemeticGrouping && gpCfg.DemeSize > 0) {
+        int demeSize = gpCfg.DemeSize;
+        if (demeSize <= 0) {
+          demeSize = 1;
+        }
+        for (int start = 0; start < containerSize(); start += demeSize) {
+          int end = std::min(start + demeSize, containerSize());
+          double bestFitness = std::numeric_limits<double>::infinity();
+          int bestIndex = start;
+          for (int idx = start; idx < end; ++idx) {
+            MyGP* candidate = NthMyGP(idx);
+            if (!candidate) {
+              continue;
+            }
+            double fitness = candidate->getFitness();
+            if (!std::isfinite(fitness)) {
+              continue;
+            }
+            if (fitness < bestFitness) {
+              bestFitness = fitness;
+              bestIndex = idx;
+            }
+          }
+          candidateIndices.push_back(bestIndex);
+        }
+      } else {
+        candidateIndices.push_back(bestOfPopulation);
+      }
+
+      if (candidateIndices.empty()) {
+        candidateIndices.push_back(bestOfPopulation);
+      }
+
+      MyGP* best = nullptr;
 
       if (!generationScenarios.empty()) {
-        int originalScenarioIndex = best->getScenarioIndex();
-        clearEvalResults(aggregatedEvalResults);
-        aggregatedEvalResults.scenario.pathVariantIndex = -1;
-        aggregatedEvalResults.scenario.windVariantIndex = -1;
-        aggregatedEvalResults.scenario.windSeed = 0;
-
+        double bestAggregatedFitness = std::numeric_limits<double>::infinity();
         EvalResults* previousCollector = activeEvalCollector;
-        activeEvalCollector = &aggregatedEvalResults;
 
-        for (size_t scenarioIdx = 0; scenarioIdx < generationScenarios.size(); ++scenarioIdx) {
-          best->setScenarioIndex(static_cast<int>(scenarioIdx));
-          threadPool->enqueue([best](WorkerContext& context) {
-            best->evalTask(context);
-          });
-          threadPool->wait_for_tasks();
+        for (int candidateIndex : candidateIndices) {
+          MyGP* candidate = NthMyGP(candidateIndex);
+          if (!candidate) {
+            continue;
+          }
+
+          int originalScenarioIndex = candidate->getScenarioIndex();
+          candidate->setBakeoffMode(true);
+          clearEvalResults(aggregatedEvalResults);
+          aggregatedEvalResults.scenario.pathVariantIndex = -1;
+          aggregatedEvalResults.scenario.windVariantIndex = -1;
+          aggregatedEvalResults.scenario.windSeed = 0;
+          activeEvalCollector = &aggregatedEvalResults;
+
+          double cumulativeFitness = 0.0;
+          size_t scenariosEvaluated = 0;
+
+          for (size_t scenarioIdx = 0; scenarioIdx < generationScenarios.size(); ++scenarioIdx) {
+            candidate->setScenarioIndex(static_cast<int>(scenarioIdx));
+            threadPool->enqueue([candidate](WorkerContext& context) {
+              candidate->evalTask(context);
+            });
+            threadPool->wait_for_tasks();
+            cumulativeFitness += candidate->getFitness();
+            ++scenariosEvaluated;
+          }
+
+          candidate->setScenarioIndex(originalScenarioIndex);
+          candidate->setBakeoffMode(false);
+
+          double averageFitness = scenariosEvaluated > 0
+            ? cumulativeFitness / static_cast<double>(scenariosEvaluated)
+            : std::numeric_limits<double>::infinity();
+
+          if (averageFitness < bestAggregatedFitness) {
+            bestAggregatedFitness = averageFitness;
+            bestOfEvalResults = aggregatedEvalResults;
+            best = candidate;
+          }
         }
 
-        best->setScenarioIndex(originalScenarioIndex);
         activeEvalCollector = previousCollector;
-        bestOfEvalResults = aggregatedEvalResults;
+      }
+
+      if (!best) {
+        best = NthMyGP(bestOfPopulation);
       }
 
       // Re-serialize the best GP with updated fitness for storage
@@ -335,13 +433,42 @@ void MyGP::evalTask(WorkerContext& context)
   outStream.flush();
 
   const ScenarioDescriptor& scenario = scenarioForIndex(getScenarioIndex());
+  uint64_t scenarioSequence = globalScenarioCounter.fetch_add(1, std::memory_order_relaxed) + 1;
 
   EvalData evalData;
   evalData.gp = buffer;
   evalData.pathList = scenario.pathList;
-  evalData.scenario.pathVariantIndex = scenario.pathVariantIndex;
-  evalData.scenario.windVariantIndex = scenario.windVariantIndex;
-  evalData.scenario.windSeed = scenario.windSeed;
+  evalData.scenario.scenarioSequence = scenarioSequence;
+  evalData.scenario.bakeoffSequence = 0;
+  evalData.scenarioList.clear();
+  evalData.scenarioList.reserve(scenario.pathList.size());
+  bool isBakeoff = bakeoffMode;
+  for (size_t idx = 0; idx < scenario.pathList.size(); ++idx) {
+    ScenarioMetadata meta;
+    meta.pathVariantIndex = scenario.pathVariantIndex;
+    meta.scenarioSequence = scenarioSequence;
+    if (isBakeoff) {
+      meta.bakeoffSequence = bakeoffPathCounter.fetch_add(1, std::memory_order_relaxed) + 1;
+    } else {
+      meta.bakeoffSequence = 0;
+    }
+    if (idx < scenario.windScenarios.size()) {
+      meta.windVariantIndex = scenario.windScenarios[idx].windVariantIndex;
+      meta.windSeed = scenario.windScenarios[idx].windSeed;
+    } else {
+      meta.windVariantIndex = scenario.windVariantIndex;
+      meta.windSeed = scenario.windSeed;
+    }
+    evalData.scenarioList.push_back(meta);
+  }
+  if (!evalData.scenarioList.empty()) {
+    evalData.scenario = evalData.scenarioList.front();
+  } else {
+    evalData.scenario.scenarioSequence = scenarioSequence;
+    evalData.scenario.bakeoffSequence = isBakeoff
+      ? bakeoffPathCounter.fetch_add(1, std::memory_order_relaxed) + 1
+      : 0;
+  }
 
   sendRPC(*context.socket, evalData);
 
@@ -353,6 +480,10 @@ void MyGP::evalTask(WorkerContext& context)
   if (context.evalResults.pathList.empty() && !evalData.pathList.empty()) {
     context.evalResults.pathList = evalData.pathList;
   }
+  if (context.evalResults.scenarioList.empty() && !evalData.scenarioList.empty()) {
+    context.evalResults.scenarioList = evalData.scenarioList;
+  }
+  globalSimRunCounter.fetch_add(context.evalResults.pathList.size(), std::memory_order_relaxed);
   // context.evalResults.dump(std::cerr);
 
   if (printEval) {
@@ -375,6 +506,28 @@ void MyGP::evalTask(WorkerContext& context)
     auto& path = context.evalResults.pathList.at(i);
     auto& aircraftState = context.evalResults.aircraftStateList.at(i);
     auto& crashReason = context.evalResults.crashReasonList.at(i);
+
+    // Get scenario metadata for this path (for logging)
+    int pathVariantIndex = i;  // default to loop index
+    int windVariantIndex = -1;
+    unsigned int windSeed = 0;
+    uint64_t scenarioSequence = context.evalResults.scenario.scenarioSequence;
+    uint64_t bakeoffSequence = context.evalResults.scenario.bakeoffSequence;
+    if (i < context.evalResults.scenarioList.size()) {
+      const auto& meta = context.evalResults.scenarioList.at(i);
+      pathVariantIndex = meta.pathVariantIndex;
+      windVariantIndex = meta.windVariantIndex;
+      windSeed = meta.windSeed;
+      scenarioSequence = meta.scenarioSequence;
+      bakeoffSequence = meta.bakeoffSequence;
+    } else {
+      if (windVariantIndex < 0) {
+        windVariantIndex = context.evalResults.scenario.windVariantIndex;
+      }
+      if (windSeed == 0) {
+        windSeed = context.evalResults.scenario.windSeed;
+      }
+    }
 
     // compute this path fitness
     double localFitness = 0;
@@ -480,7 +633,7 @@ void MyGP::evalTask(WorkerContext& context)
       if (printEval) {
 
         if (printHeader) {
-          fout << "Pth:Step:   Time Idx  totDist   pathX    pathY    pathZ        X        Y        Z       dr       dp       dy   relVel     roll    pitch    power    distP   angleP  movEffP      qw      qx      qy      qz   vxBody   vyBody   vzBody    alpha     beta   dtheta    dphi   dhome\n";
+          fout << "Scn    Bake   Pth/Wnd:Step:   Time Idx  totDist   pathX    pathY    pathZ        X        Y        Z       dr       dp       dy   relVel     roll    pitch    power    distP   angleP  movEffP      qw      qx      qy      qz   vxBody   vyBody   vzBody    alpha     beta   dtheta    dphi   dhome\n";
           printHeader = false;
         }
 
@@ -534,9 +687,11 @@ void MyGP::evalTask(WorkerContext& context)
         // Get raw quaternion
         Eigen::Quaterniond q = stepAircraftState.getOrientation();
 
-        char outbuf[1500]; // XXX use c++20
-        sprintf(outbuf, "%03d:%04d: %06ld %3d % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.4f % 7.4f % 7.4f % 7.4f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f\n",
-          i, simulation_steps,
+        char outbuf[1600]; // XXX use c++20
+        sprintf(outbuf, "%06llu %06llu %03d/%02d:%04d: %06ld %3d % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.4f % 7.4f % 7.4f % 7.4f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f\n",
+          static_cast<unsigned long long>(scenarioSequence),
+          static_cast<unsigned long long>(bakeoffSequence),
+          pathVariantIndex, windVariantIndex, simulation_steps,
           stepAircraftState.getSimTimeMsec(), pathIndex,
           path.at(pathIndex).distanceFromStart,
           path.at(pathIndex).start[0],
@@ -643,8 +798,6 @@ int main(int argc, char** argv)
   // we don't know it's there.
   set_new_handler(newHandler);
 
-  std::string startTime = generate_iso8601_timestamp();
-
   // Init GP system.
   GPInit(1, -1);
 
@@ -682,13 +835,38 @@ int main(int argc, char** argv)
   fout.open(strOutFile.str());
   ofstream bout(strStatFile.str());
 
+  std::string startTime = generate_iso8601_timestamp();
+  auto runStartTime = std::chrono::steady_clock::now();
+  auto lastThroughputTime = runStartTime;
+  uint64_t lastSimRunCount = 0;
+  auto logGenerationStats = [&](int genIndex) {
+    auto now = std::chrono::steady_clock::now();
+    double deltaSec = std::chrono::duration<double>(now - lastThroughputTime).count();
+    uint64_t currentRuns = globalSimRunCounter.load(std::memory_order_relaxed);
+    uint64_t deltaRuns = currentRuns - lastSimRunCount;
+    double rate = (deltaSec > 0.0) ? static_cast<double>(deltaRuns) / deltaSec : 0.0;
+    bout << std::fixed << std::setprecision(2)
+         << "#GenSimStats gen=" << genIndex
+         << " sims=" << deltaRuns
+         << " total=" << currentRuns
+         << " durationSec=" << deltaSec
+         << " rate=" << rate
+         << std::defaultfloat << std::endl;
+    bout.flush();
+    lastThroughputTime = now;
+    lastSimRunCount = currentRuns;
+  };
+
   // prime the paths?
   generationPaths = generateSmoothPaths(ConfigManager::getExtraConfig().generatorMethod, ConfigManager::getExtraConfig().simNumPathsPerGen, SIM_PATH_BOUNDS, SIM_PATH_BOUNDS);
   rebuildGenerationScenarios(generationPaths);
+  const int windsPerPath = std::max(ConfigManager::getExtraConfig().windScenarioCount, 1);
   *logger.debug() << "Wind scenarios this generation: paths="
                  << ConfigManager::getExtraConfig().simNumPathsPerGen
-                 << " windScenarios=" << ConfigManager::getExtraConfig().windScenarioCount
-                 << " total=" << generationScenarios.size() << endl;
+                 << " windsPerPath=" << windsPerPath
+                 << " dispatchScenarios=" << generationScenarios.size()
+                 << " totalEvaluations=" << generationScenarios.size() * windsPerPath
+                 << endl;
   warnIfScenarioMismatch();
 
   if (ConfigManager::getExtraConfig().evaluateMode) {
@@ -722,9 +900,37 @@ int main(int argc, char** argv)
         EvalData evalData;
         evalData.gp = bytecodeBuffer;
         evalData.pathList = scenario.pathList;
-        evalData.scenario.pathVariantIndex = scenario.pathVariantIndex;
-        evalData.scenario.windVariantIndex = scenario.windVariantIndex;
-        evalData.scenario.windSeed = scenario.windSeed;
+        uint64_t scenarioSequence = globalScenarioCounter.fetch_add(1, std::memory_order_relaxed) + 1;
+        evalData.scenario.scenarioSequence = scenarioSequence;
+        evalData.scenarioList.clear();
+        evalData.scenarioList.reserve(scenario.pathList.size());
+        bool isBakeoff = isBakeoffMode();
+        for (size_t idx = 0; idx < scenario.pathList.size(); ++idx) {
+          ScenarioMetadata meta;
+          meta.pathVariantIndex = scenario.pathVariantIndex;
+          meta.scenarioSequence = scenarioSequence;
+          if (isBakeoff) {
+            meta.bakeoffSequence = bakeoffPathCounter.fetch_add(1, std::memory_order_relaxed) + 1;
+          } else {
+            meta.bakeoffSequence = 0;
+          }
+          if (idx < scenario.windScenarios.size()) {
+            meta.windVariantIndex = scenario.windScenarios[idx].windVariantIndex;
+            meta.windSeed = scenario.windScenarios[idx].windSeed;
+          } else {
+            meta.windVariantIndex = scenario.windVariantIndex;
+            meta.windSeed = scenario.windSeed;
+          }
+          evalData.scenarioList.push_back(meta);
+        }
+        if (!evalData.scenarioList.empty()) {
+          evalData.scenario = evalData.scenarioList.front();
+        } else {
+          evalData.scenario.scenarioSequence = scenarioSequence;
+          evalData.scenario.bakeoffSequence = isBakeoff
+            ? bakeoffPathCounter.fetch_add(1, std::memory_order_relaxed) + 1
+            : 0;
+        }
         sendRPC(*context.socket, evalData);
         
         // Get simulation results
@@ -735,6 +941,10 @@ int main(int argc, char** argv)
         if (context.evalResults.scenario.windSeed == 0 && evalData.scenario.windSeed != 0) {
           context.evalResults.scenario = evalData.scenario;
         }
+        if (context.evalResults.scenarioList.empty() && !evalData.scenarioList.empty()) {
+          context.evalResults.scenarioList = evalData.scenarioList;
+        }
+        globalSimRunCounter.fetch_add(context.evalResults.pathList.size(), std::memory_order_relaxed);
 
         if (printEval) {
           if (activeEvalCollector) {
@@ -749,7 +959,17 @@ int main(int argc, char** argv)
           auto& path = context.evalResults.pathList.at(i);
           auto& aircraftState = context.evalResults.aircraftStateList.at(i);
           auto& crashReason = context.evalResults.crashReasonList.at(i);
-          
+
+          // Get scenario metadata for this path (for logging)
+          int pathVariantIndex = i;  // default to loop index
+          int windVariantIndex = -1;
+          unsigned int windSeed = 0;
+          if (i < context.evalResults.scenarioList.size()) {
+            pathVariantIndex = context.evalResults.scenarioList.at(i).pathVariantIndex;
+            windVariantIndex = context.evalResults.scenarioList.at(i).windVariantIndex;
+            windSeed = context.evalResults.scenarioList.at(i).windSeed;
+          }
+
           double localFitness = 0;
           int stepIndex = 0;
           
@@ -888,7 +1108,7 @@ int main(int argc, char** argv)
 
               char outbuf[1500];
               sprintf(outbuf, "%03d:%04d: %06ld %3d % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.4f % 7.4f % 7.4f % 7.4f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f\n",
-                i, simulation_steps,
+                pathVariantIndex, simulation_steps,
                 stepAircraftState.getSimTimeMsec(), pathIndex,
                 path.at(pathIndex).distanceFromStart,
                 path.at(pathIndex).start[0],
@@ -1036,6 +1256,7 @@ int main(int argc, char** argv)
     pop->create();
     *logger.info() << "Ok." << endl;
     pop->createGenerationReport(1, 0, fout, bout, *logger.info());
+    logGenerationStats(0);
 
     // This next for statement is the actual genetic programming system
     // which is in essence just repeated reproduction and crossover loop
@@ -1080,6 +1301,7 @@ int main(int argc, char** argv)
         *logger.warn() << "NanDetector count: " << nanDetector << endl;
       }
       pop->createGenerationReport(0, gen, fout, bout, *logger.info());
+      logGenerationStats(gen);
     }
 
     // TODO send exit message to workers
@@ -1090,4 +1312,13 @@ int main(int argc, char** argv)
 
     *logger.info() << "GP complete!" << endl;
   }
+
+  uint64_t totalRuns = globalSimRunCounter.load(std::memory_order_relaxed);
+  double durationSec = std::chrono::duration<double>(std::chrono::steady_clock::now() - runStartTime).count();
+  double simsPerSec = (durationSec > 0.0) ? static_cast<double>(totalRuns) / durationSec : 0.0;
+  bout << "#SimRuns " << totalRuns << " DurationSec " << durationSec << std::endl;
+  bout.flush();
+  *logger.info() << std::fixed << std::setprecision(2)
+                 << "Simulation throughput: " << totalRuns << " runs in "
+                 << durationSec << "s (" << simsPerSec << " sims/s)" << std::defaultfloat << std::endl;
 }
