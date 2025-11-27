@@ -7,6 +7,7 @@ find_package(Boost REQUIRED COMPONENTS thread system serialization log)
 find_package(AWSSDK REQUIRED COMPONENTS core s3)
 
 option(USE_SANITIZER "Build with Address Sanitizer" OFF)
+option(ENABLE_PROFILING "Build with frame pointers and debug info for perf/FlameGraph" OFF)
 
 set(CMAKE_EXE_LINKER_FLAGS "-no-pie")
 
@@ -14,6 +15,12 @@ if(USE_SANITIZER)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address -fno-omit-frame-pointer")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address -fno-omit-frame-pointer")
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address")
+endif()
+
+if(ENABLE_PROFILING)
+    message(STATUS "Enabling profiling-friendly compiler flags for autoc")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -fno-omit-frame-pointer -fno-optimize-sibling-calls")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -fno-omit-frame-pointer -fno-optimize-sibling-calls")
 endif()
 
 include(${VTK_USE_FILE})
