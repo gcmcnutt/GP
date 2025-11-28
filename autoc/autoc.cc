@@ -470,6 +470,7 @@ void MyGP::evalTask(WorkerContext& context)
       : 0;
   }
 
+  evalData.sanitizePaths();
   sendRPC(*context.socket, evalData);
 
   // How did it go?
@@ -931,6 +932,7 @@ int main(int argc, char** argv)
             ? bakeoffPathCounter.fetch_add(1, std::memory_order_relaxed) + 1
             : 0;
         }
+        evalData.sanitizePaths();
         sendRPC(*context.socket, evalData);
         
         // Get simulation results

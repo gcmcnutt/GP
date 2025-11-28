@@ -125,6 +125,14 @@ struct EvalData {
       }
     }
   }
+
+  void sanitizePaths() {
+    for (auto& pathGroup : pathList) {
+      for (auto& path : pathGroup) {
+        path.sanitize();
+      }
+    }
+  }
 };
 BOOST_CLASS_VERSION(EvalData, 3)
 

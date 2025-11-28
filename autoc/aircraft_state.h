@@ -67,6 +67,20 @@ public:
     : start(start_pos), orientation(orient), distanceFromStart(distance), 
       radiansFromStart(radians), simTimeMsec(time_msec) {}
 
+  void sanitize() {
+    auto sanitizeScalar = [](double value, double fallback = 0.0) {
+      return std::isfinite(value) ? value : fallback;
+    };
+    for (int i = 0; i < 3; ++i) {
+      start[i] = sanitizeScalar(start[i]);
+      double defaultOrient = (i == 0) ? 1.0 : 0.0;
+      orientation[i] = sanitizeScalar(orientation[i], defaultOrient);
+    }
+    distanceFromStart = sanitizeScalar(distanceFromStart);
+    radiansFromStart = sanitizeScalar(radiansFromStart);
+    simTimeMsec = sanitizeScalar(simTimeMsec);
+  }
+
 #ifdef GP_BUILD
   void dump(std::ostream& os) {
     os << boost::format("Path: (%f, %f, %f), Odometer: %f, Turnmeter: %f, Time: %f")
