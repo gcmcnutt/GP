@@ -19,6 +19,14 @@ struct WorkerContext;
 #define MOVEMENT_EFFICIENCY_WEIGHT 1.5
 #define MOVEMENT_EFFICIENCY_MAX_PENALTY 8.0
 
+// Cross-track and attitude penalties
+#define CROSS_TRACK_WEIGHT 1.2
+#define CROSS_TRACK_SIGN_THRESHOLD 1.0
+#define CROSS_TRACK_OSC_WEIGHT 1.4
+#define ORIENTATION_TANGENT_WEIGHT 1.1
+#define ORIENTATION_UP_WEIGHT 1.3
+#define PATH_UP_INVERSION_PENALTY 75.0
+
 struct WindScenarioConfig {
   unsigned int windSeed = 0;
   int windVariantIndex = 0;

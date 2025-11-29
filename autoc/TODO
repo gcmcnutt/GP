@@ -37,6 +37,7 @@
   - fpv mode for playback
 - also seems crrcsim is dependent on a valid DISPLAY even when in headless
 - we should alter the base controller to be able to pitch up or down a little if target is slightly below
+- need to refactor the opcode enum to only have one -- and then to stop using numeric opcodes in the bytecode2cpp generator
 
 - check for dangling or vestiage files
 - xiao blackbox of flight paths
