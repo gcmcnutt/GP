@@ -39,6 +39,10 @@ fastmath::GPScalar evaluateGPOperator(int opcode, PathProvider& pathProvider,
                          AircraftState& aircraftState, 
                          const fastmath::GPScalar* args, int argc, fastmath::GPScalar contextArg = fastmath::GPScalar::zero());
 
+double evaluateGPOperatorReference(int opcode, PathProvider& pathProvider,
+                                   AircraftState& aircraftState,
+                                   const double* args, int argc, double contextArg = 0.0);
+
 // Navigation helpers - same logic, different path access
 fastmath::GPScalar executeGetDPhi(PathProvider& pathProvider, AircraftState& aircraftState, fastmath::GPScalar arg);
 fastmath::GPScalar executeGetDTheta(PathProvider& pathProvider, AircraftState& aircraftState, fastmath::GPScalar arg);
@@ -68,5 +72,9 @@ inline fastmath::GPScalar applyRangeLimit(fastmath::GPScalar value) {
 fastmath::GPScalar evaluateBytecodePortable(const GPBytecode* program, int program_size, 
                                PathProvider& pathProvider, AircraftState& aircraftState, 
                                fastmath::GPScalar contextArg = fastmath::GPScalar::zero());
+
+double evaluateBytecodeReference(const GPBytecode* program, int program_size,
+                                 PathProvider& pathProvider, AircraftState& aircraftState,
+                                 double contextArg = 0.0);
 
 #endif

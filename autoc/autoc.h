@@ -106,6 +106,7 @@ public:
   // Tree evaluation (not mandatory, but somehow the trees must be
   // parsed to evaluate the fitness)
   double evaluate(std::vector<Path>& path, MyGP& gp, double arg);
+  double evaluateReference(std::vector<Path>& path, MyGP& gp, double arg, AircraftState& evalState);
 
   // Load and save (not mandatory)
   MyGene() {}

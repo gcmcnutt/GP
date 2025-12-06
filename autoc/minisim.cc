@@ -68,6 +68,7 @@ public:
   }
 
   void run() {
+    const bool comparisonEnabled = fastmath::isFastMathComparisonEnabled();
     while (true) { // TODO have reply have a controlled loop exit
       EvalResults evalResults;
 
@@ -199,6 +200,10 @@ public:
           
           // run the controller (GP tree or bytecode interpreter) - BOTH NOW HAVE SAME BASELINE
           double evaluation_result = 0.0;
+          AircraftState referenceState;
+          if (comparisonEnabled) {
+            referenceState = aircraftState;
+          }
           if (isGPTreeData) {
             evaluation_result = gp.NthMyGene(0)->evaluate(path, gp, 0);
           } else if (isBytecodeData) {
@@ -206,6 +211,24 @@ public:
             // NOTE: Bytecode interpreter now starts with proper baseline estimates set above
             evaluation_result = interpreter.evaluate(aircraftState, path, 0.0);
             // Note: The bytecode interpreter can modify control commands via SETPITCH, SETROLL, SETTHROTTLE opcodes
+          }
+
+          if (comparisonEnabled) {
+            double reference_result = evaluation_result;
+            if (isGPTreeData) {
+              reference_result = gp.NthMyGene(0)->evaluateReference(path, gp, 0.0, referenceState);
+            } else if (isBytecodeData) {
+              reference_result = interpreter.evaluateReference(referenceState, path, 0.0);
+            }
+            fastmath::recordFastMathComparison(
+              aircraftState.getPitchCommand(),
+              referenceState.getPitchCommand(),
+              aircraftState.getRollCommand(),
+              referenceState.getRollCommand(),
+              aircraftState.getThrottleCommand(),
+              referenceState.getThrottleCommand(),
+              evaluation_result,
+              reference_result);
           }
           
 
@@ -259,6 +282,9 @@ public:
       if (evalCount <= 0.0) evalCount = 1.0;
       fastmath::logFastMathMetrics("minisim", std::cout, evalCount);
 #endif
+      if (comparisonEnabled) {
+        fastmath::logFastMathComparison("minisim", std::cout);
+      }
 
       // prepare results for next cycle
       evalResults.pathList.clear();

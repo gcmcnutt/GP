@@ -5,13 +5,13 @@ This document expands on `specs/FASTMATH.md` by detailing how to remove all `flo
 ## 1. Goals and Constraints
 - **Single scalar domain**: Every opcode executed by `evaluateGPOperator` (`GP/autoc/gp_evaluator_portable.cc:12-177`) and every stack slot in `evaluateBytecodePortable` (`GP/autoc/gp_evaluator_portable.cc:230-320`) must use the same fixed-precision scalar type. Legacy `double`/`float` usage is allowed only when ingesting external sensor/simulator inputs and when logging.
 - **Scalar-native AircraftState**: Internally, `AircraftState`, `Path`, and all cached sensor values live entirely in the integer domain; minisim, Xiao/INAV, and CRRCSim perform conversions at their boundaries so the evaluator never pays per-opcode casts.
-- **Eigen removal in hot paths**: Frequent sensors such as `GETALPHA`, `GETBETA`, `GETROLL_RAD`, and `GETPITCH_RAD` currently depend on Eigen quaternions/vectors (e.g., `Eigen::Quaterniond` in `aircraft_state.h:211-248`). We will replace these with lightweight structs so that the GP evaluator does not pull in Eigen on embedded targets.
+- **Eigen removal in hot paths**: Frequent sensors such as `GETALPHA`, `GETBETA`, `GETROLL_RAD`, and `GETPITCH_RAD` used to depend on Eigen quaternions/vectors (e.g., `Eigen::Quaterniond` in `aircraft_state.h:211-248`). Lightweight helpers in `fastmath/orientation_math.h` now cover those opcodes so the evaluator build no longer drags Eigen; the remaining Eigen usage lives at the simulator/firmware boundaries until they finish migrating their state containers.
 - **Determinism and performance**: Controllers trained in `minisim` (`GP/autoc/minisim.cc`) and validated in CRRCSim (`~/crsim/crrcsim-0.9.13/.../inputdev_autoc.cpp`) must see the same scalar math that runs on the Xiao flight controller (`~/xiao-gp/src/msplink.cpp:312-360`). Expensive ops (e.g., trig, quaternion math) must be rewritten as LUT/CORDIC routines to handle thousands of opcode calls per evaluation without falling back to libm.
 - **Accept hard saturation**: Sensor opcodes can clamp to their natural ranges; training from scratch will adapt to those limits, so we bias toward deterministic saturation over preserving float headroom.
 
 ## 2. Scalar Abstraction
 1. **`gp_scalar` traits**  
-   - Add `fastmath/gp_scalar.h` defining a templated `GPScalar<T>` wrapper with:
+   - `fastmath/gp_scalar.h` defines a templated `GPScalar<T>` wrapper with:
      - Underlying storage (`int32_t` in signed Q15.15 for production, optional `float` for desktop debugging). Q15.15 gives ~4–5 decimal digits of resolution above/below zero, matching the 10.10 fidelity target while leaving margin for command stacking.
      - Compile-time scale (`1 << 15`) and helpers (`fromDouble`, `toFloat`, `mul`, `div`, `saturatingAdd`, `narrowToCommand`).
      - A build flag `GP_ENABLE_FASTMATH` selecting the Q-format vs. float.
@@ -19,12 +19,12 @@ This document expands on `specs/FASTMATH.md` by detailing how to remove all `flo
    - Document the expected dynamic range so edge adapters know when to pre-clamp inputs before converting to `gp_scalar`.
 
 2. **Math helpers**  
-   - `fastmath/fixed_math.h` exports LUT-based `sin`, `cos`, `atan2`, `sqrt`, and `rsqrt`. Each function consumes/produces `gp_scalar` and uses higher-precision accumulators (e.g., 64-bit) internally.
+   - `fastmath/fixed_math.h` exports LUT-based `sinApprox`, `cosApprox`, `atan2Approx`, and integer `sqrtApprox`/`rsqrtApprox`. Each function consumes/produces `gp_scalar` and uses higher-precision accumulators (e.g., 64-bit) internally.
    - Range pre-conditioning (e.g., modulo 2π before sine lookup) ensures we stay within table bounds even when opcodes feed offsets repeatedly (per `specs/FASTMATH.md:13-20` strategy note).
 
 3. **Vector/quaternion micro-library**  
-   - Replace Eigen usage inside `AircraftState` with small structs (`Vec3`, `Quat`) storing floats but exposing conversion helpers to/from the scalar domain.  
-   - Provide inline routines (`quat_normalize`, `quat_rotate_vec`, `quat_to_euler`) that use `gp_scalar` math when `GP_ENABLE_FASTMATH` is set, keeping compatibility with the Xiao build where Eigen is unavailable.
+   - `fastmath/orientation_math.h` replaces Eigen usage inside hot sensor helpers with small structs (`FastVec3`, `FastQuat`) storing scalars but exposing conversion helpers to/from the float domain.  
+   - Inline routines (`quat_normalize`, `quat_rotate_vec`, `quat_to_euler`) use `gp_scalar` math when `GP_ENABLE_FASTMATH` is set, keeping compatibility with the Xiao build where Eigen is unavailable. Remaining Eigen references will be removed once the Xiao/crrcsim adapters finish their conversions.
 
 ## 3. Project-Specific Rollout
 
@@ -45,10 +45,10 @@ This document expands on `specs/FASTMATH.md` by detailing how to remove all `flo
    - Ensure `gp_bytecode.h` uses scalar types for literal storage (`int32_t value` instead of `float constant` when FASTMATH is on).
 
 4. **Testing harness**  
-   - Extend `minisim` to run dual-mode evaluations (float vs. scalar) during CI: log per-op differences, assert max error <0.01 command units. Provide a runtime flag to dump operand ranges so we can tune the Q-format before flipping the build default.
+   - `gp_fastmath_tests` exercises opcode semantics, getters/setters, nav math, and evaluator stack flow. `ctest` (and therefore `make`) now builds and runs the tests automatically. Future work: add a dual-mode minisim regression that compares float vs. scalar outputs (<0.01 command delta) for full-program validation.
 
 5. **Interpreter flattening**  
-   - After the scalar backend is proven, implement an inline/flattened evaluator that expands bytecode into a sequence of macros or templated lambdas (similar to Eigen expression templates) to eliminate the large opcode `switch`. This becomes FASTMATH Phase 2 once the fixed-point conversion delivers the baseline <5 ms target.
+   - Phase 1 landed: `evaluateBytecodePortable` now handles arithmetic/logical/sensor opcodes inline with range-checked pushes instead of bouncing through `evaluateGPOperator`. Phase 2 (post-scalar validation) will explore per-program unrolling or macro expansion to erase the remaining switch/branch overhead.
 
 ### 3.2 xiao-gp (flight firmware)
 1. **State ingestion**  
@@ -60,7 +60,7 @@ This document expands on `specs/FASTMATH.md` by detailing how to remove all `flo
    - Gate FASTMATH via build flag so flight builds always use the fixed-point backend; provide an optional debug menu to run the float reference for comparison if needed.
 
 3. **Instrumentation**  
-   - Record evaluation duration plus the number of high-cost opcodes per frame using the scalar backend. Store stats in `MSP_SEND_LOG` so we can confirm the <5 ms goal once fixed-point math replaces float/libm calls.
+   - Record evaluation duration plus the number of high-cost opcodes per frame using the scalar backend. Store stats in `MSP_SEND_LOG` so we can confirm the <5 ms goal once fixed-point math replaces float/libm calls. When `GP_FASTMATH_TRACE` is set, reuse the shared metrics output (totals + per-eval averages, suppressed when all counters are zero).
 
 ### 3.3 CRRCSim integration
 1. **Boundary translation**  
@@ -75,8 +75,8 @@ This document expands on `specs/FASTMATH.md` by detailing how to remove all `flo
    - Update CRRCSim’s usage of Boost archives to serialize scalar values as integers. Provide version bumps in `Path`/`AircraftState` serialization to remain backward compatible with existing logs.
 
 ## 4. Migration Steps
-1. **Instrumentation phase**
-   - Add optional tracing in `evaluateGPOperator` to capture min/max operand values per opcode under real workloads (minisim, CRRCSim, Xiao logs). Use this to confirm Q15.15 (or fallback 10.10) covers all dynamic ranges without saturation. Because training will restart with the new precision, we only need to ensure sensors stay inside their saturation bands. Instrumentation hooks should be guarded by `GP_FASTMATH_TRACE` so production builds stay lean while dev builds can query `fastmath::getFastMathMetrics()` for saturation/range-clamp stats.
+1. **Instrumentation phase (DONE)**
+   - Optional tracing (`GP_FASTMATH_TRACE`) in `evaluateBytecodePortable` captures saturation, clamp, and zero-injection counts per opcode. Logs emit total counts plus per-evaluation averages and stay quiet when all counters are zero. Use these stats from minisim, CRRCSim, and Xiao runs to confirm Q15.15 (or fallback 10.10) covers the observed ranges.
 
 2. **Scalar scaffolding**
    - Land the `gp_scalar` traits, math helpers, and quaternion micro-library. Keep builds in float mode initially to avoid behavior changes while we wire up the new types.
@@ -113,7 +113,9 @@ Answering these during the implementation phases above will keep all environment
 - **2025-12-04 – Metrics scaffolding**: Added optional `GP_FASTMATH_TRACE` counters (via `fastmath::getFastMathMetrics()`) so long runs can report how often `GPScalar` saturates, range limits clamp, or outputs get zero-snapped. This keeps instrumentation zero-cost unless explicitly enabled.
 - **2025-12-04 – Metrics logging & Eigen-light sensors**: Enabled FastMath metric dumps in `minisim` and CRRCSim (under `GP_FASTMATH_TRACE`) and replaced the GETALPHA/BETA/ROLL/PITCH implementations with lightweight quaternion math that avoids Eigen matrix conversions. World→body rotations now use direct quaternion formulas, reducing per-opcode overhead.
 - **2025-12-05 – Metrics normalization**: FastMath logs now include per-evaluation averages (total counts divided by evaluated paths) so CRRCSim/minisim logs remain short even over thousands of sims, making it easier to correlate saturation rates with GP size.
+- **2025-12-05 – Metrics noise reduction**: Instrumentation skips printing when totals are zero, keeping CRRCSim logs readable even when saturation rarely triggers.
 - **2025-12-05 – Inline opcode handling**: `evaluateBytecodePortable` now handles arithmetic/logical/sensor opcodes directly (with range limiting on every push) instead of re-entering `evaluateGPOperator`, reducing per-instruction overhead while keeping a fallback for uncommon operations.
+- **2025-12-05 – Cached sensor state & unit tests**: `AircraftState` now caches body-frame velocity plus roll/pitch angles so hot opcodes don’t recompute Eigen transforms. Added `gp_fastmath_tests` to exercise opcode semantics and evaluator stack ordering via CTest.
 - **Pending validation**:
   1. Run `minisim` regression suite comparing legacy float vs. new scalar evaluator (expect <0.01 command delta). Capture any saturation warnings.
   2. Exercise CRRCSim autopilot path with the scalar evaluator to confirm deterministic behavior before flashing Xiao builds.

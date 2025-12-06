@@ -90,6 +90,7 @@ public:
     
     // Main evaluation function - compatible with autoc's existing interface
     double evaluate(AircraftState& aircraftState, std::vector<Path>& path, double arg);
+    double evaluateReference(AircraftState& aircraftState, std::vector<Path>& path, double arg);
     
     // Debug functions
     void printProgram() const;

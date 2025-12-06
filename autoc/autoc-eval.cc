@@ -136,3 +136,18 @@ double MyGene::evaluate(std::vector<Path>& path, MyGP& run, double arg)
   
   return evaluateGPOperator(node->value(), pathProvider, aircraftState, childArgs, numArgs, contextScalar).toDouble();
 }
+
+double MyGene::evaluateReference(std::vector<Path>& path, MyGP& run, double arg, AircraftState& evalState)
+{
+  VectorPathProvider pathProvider(path, evalState.getThisPathIndex());
+  if (containerSize() == 0) {
+    return evaluateGPOperatorReference(node->value(), pathProvider, evalState, nullptr, 0, arg);
+  }
+
+  double childArgs[3] = {0.0, 0.0, 0.0};
+  int numArgs = containerSize();
+  for (int i = 0; i < numArgs && i < 3; ++i) {
+    childArgs[i] = NthMyChild(i)->evaluateReference(path, run, arg, evalState);
+  }
+  return evaluateGPOperatorReference(node->value(), pathProvider, evalState, childArgs, numArgs, arg);
+}

@@ -79,6 +79,14 @@ double GPBytecodeInterpreter::evaluate(AircraftState& aircraftState, std::vector
     return GPEvaluatorDesktop::evaluateGPBytecode(program, path, aircraftState, arg);
 }
 
+double GPBytecodeInterpreter::evaluateReference(AircraftState& aircraftState, std::vector<Path>& path, double arg) {
+    if (program.empty()) {
+        std::cerr << "Error: No bytecode program loaded" << std::endl;
+        return 0.0;
+    }
+    return GPEvaluatorDesktop::evaluateGPBytecodeReference(program, path, aircraftState, arg);
+}
+
 void GPBytecodeInterpreter::printProgram() const {
     std::cout << "GP Bytecode Program (" << program.size() << " instructions):" << std::endl;
     for (size_t i = 0; i < program.size(); i++) {

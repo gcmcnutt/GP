@@ -3,6 +3,7 @@
 #define AIRCRAFT_STATE_H
 
 #include <cmath>
+#include "fastmath/orientation_math.h"
 #include "fastmath/gp_scalar.h"
 
 #ifdef GP_BUILD
@@ -201,7 +202,9 @@ struct AircraftState {
         simTimeMsec(0), pitchCommand(0.0), rollCommand(0.0), throttleCommand(0.0),
         pitchCommandScalar(fastmath::GPScalar::zero()), rollCommandScalar(fastmath::GPScalar::zero()),
         throttleCommandScalar(fastmath::GPScalar::zero()),
-        relVelScalar(fastmath::GPScalar::zero()) {}
+        relVelScalar(fastmath::GPScalar::zero()),
+        bodyCacheDirty(true), cachedBodyVelocity(Eigen::Vector3d::Zero()),
+        cachedRollRad(0.0), cachedPitchRad(0.0) {}
 
     AircraftState(int thisPathIndex, double relVel, Eigen::Vector3d vel, Eigen::Quaterniond orientation,
       Eigen::Vector3d pos, double pc, double rc, double tc,
@@ -211,7 +214,9 @@ struct AircraftState {
       pitchCommandScalar(fastmath::GPScalar::fromDouble(pc)),
       rollCommandScalar(fastmath::GPScalar::fromDouble(rc)),
       throttleCommandScalar(fastmath::GPScalar::fromDouble(tc)),
-      relVelScalar(fastmath::GPScalar::fromDouble(relVel)) {
+      relVelScalar(fastmath::GPScalar::fromDouble(relVel)),
+      bodyCacheDirty(true), cachedBodyVelocity(Eigen::Vector3d::Zero()),
+      cachedRollRad(0.0), cachedPitchRad(0.0) {
     }
 
     // generate setters and getters
@@ -226,10 +231,10 @@ struct AircraftState {
     }
     
     Eigen::Vector3d getVelocity() const { return velocity; }
-    void setVelocity(const Eigen::Vector3d& vel) { velocity = vel; }
+    void setVelocity(const Eigen::Vector3d& vel) { velocity = vel; bodyCacheDirty = true; }
 
     Eigen::Quaterniond getOrientation() const { return aircraft_orientation; }
-    void setOrientation(Eigen::Quaterniond orientation) { aircraft_orientation = orientation; }
+    void setOrientation(Eigen::Quaterniond orientation) { aircraft_orientation = orientation; bodyCacheDirty = true; }
 
     Eigen::Vector3d getPosition() const { return position; }
     void setPosition(Eigen::Vector3d pos) { position = pos; }
@@ -294,6 +299,7 @@ struct AircraftState {
 
       // Store the actual velocity vector (convert from distance per timestep to velocity)
       velocity = velocity_world / dtSec;
+      bodyCacheDirty = true;
 
       // adjust position
       position += velocity_world;
@@ -313,6 +319,36 @@ struct AircraftState {
     fastmath::GPScalar rollCommandScalar;
     fastmath::GPScalar throttleCommandScalar;
     fastmath::GPScalar relVelScalar;
+    mutable bool bodyCacheDirty;
+    mutable Eigen::Vector3d cachedBodyVelocity;
+    mutable double cachedRollRad;
+    mutable double cachedPitchRad;
+
+    void ensureBodyCache() const {
+      if (!bodyCacheDirty) {
+        return;
+      }
+      cachedBodyVelocity = fastmath::rotateWorldToBody(aircraft_orientation, velocity);
+      cachedRollRad = fastmath::rollFromQuaternion(aircraft_orientation);
+      cachedPitchRad = fastmath::pitchFromQuaternion(aircraft_orientation);
+      bodyCacheDirty = false;
+    }
+
+  public:
+    const Eigen::Vector3d& getBodyVelocity() const {
+      ensureBodyCache();
+      return cachedBodyVelocity;
+    }
+
+    double getRollRad() const {
+      ensureBodyCache();
+      return cachedRollRad;
+    }
+
+    double getPitchRad() const {
+      ensureBodyCache();
+      return cachedPitchRad;
+    }
 
 #ifdef GP_BUILD
     friend class boost::serialization::access;

@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.10)
 project(autoc)
+enable_testing()
 
 find_package(VTK REQUIRED)
 find_package(Eigen3 REQUIRED)
@@ -25,6 +26,15 @@ if(ENABLE_PROFILING)
 endif()
 
 include(${VTK_USE_FILE})
+include(GoogleTest)
+include(FetchContent)
+
+set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+FetchContent_Declare(
+    googletest
+    URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
+)
+FetchContent_MakeAvailable(googletest)
 include_directories(../include ${EIGEN3_INCLUDE_DIR} ${VTK_INCLUDE_DIRS} ${Boost_INCLUDE_DIRS} ${AWSSDK_INCLUDE_DIRS})
 link_directories(../lib)
 add_compile_options(-Wno-write-strings)
@@ -35,6 +45,7 @@ add_executable(minisim minisim.cc minisim.h aircraft_state.h autoc.h autoc-eval.
 add_executable(renderer renderer.cc renderer.h minisim.h aircraft_state.h autoc.h config_manager.cc config_manager.h)
 add_executable(gpextractor gpextractor.cc minisim.h aircraft_state.h config_manager.cc config_manager.h autoc-eval.cc gp_evaluator_portable.cc gp_evaluator_portable.h gp_evaluator_desktop.cc gp_evaluator_desktop.h)
 add_executable(bytecode2cpp bytecode2cpp.cc gp_bytecode.cc gp_bytecode.h gp_evaluator_portable.cc gp_evaluator_portable.h gp_evaluator_desktop.cc gp_evaluator_desktop.h config_manager.cc config_manager.h)
+add_executable(gp_fastmath_tests tests/gp_evaluator_tests.cpp gp_evaluator_portable.cc gp_bytecode.cc gp_evaluator_desktop.cc)
 
 if(GP_FASTMATH_TRACE)
     target_compile_definitions(autoc PRIVATE GP_FASTMATH_TRACE)
@@ -42,6 +53,7 @@ if(GP_FASTMATH_TRACE)
     target_compile_definitions(renderer PRIVATE GP_FASTMATH_TRACE)
     target_compile_definitions(gpextractor PRIVATE GP_FASTMATH_TRACE)
     target_compile_definitions(bytecode2cpp PRIVATE GP_FASTMATH_TRACE)
+    target_compile_definitions(gp_fastmath_tests PRIVATE GP_FASTMATH_TRACE)
 endif()
 
 target_link_libraries(autoc gp ${Boost_LIBRARIES} Eigen3::Eigen ${AWSSDK_LIBRARIES})
@@ -49,3 +61,14 @@ target_link_libraries(minisim gp ${Boost_LIBRARIES} Eigen3::Eigen)
 target_link_libraries(renderer gp ${VTK_LIBRARIES} ${Boost_LIBRARIES} Eigen3::Eigen ${AWSSDK_LIBRARIES})
 target_link_libraries(gpextractor gp ${Boost_LIBRARIES} Eigen3::Eigen ${AWSSDK_LIBRARIES})
 target_link_libraries(bytecode2cpp gp ${Boost_LIBRARIES} Eigen3::Eigen ${AWSSDK_LIBRARIES})
+target_link_libraries(gp_fastmath_tests gp ${Boost_LIBRARIES} Eigen3::Eigen GTest::gtest GTest::gtest_main)
+
+gtest_discover_tests(gp_fastmath_tests
+    TEST_PREFIX gp_fastmath_tests.
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES LABELS gp_fastmath)
+add_custom_target(run_fastmath_tests ALL
+    COMMAND ${CMAKE_CTEST_COMMAND} -R gp_fastmath_tests --output-on-failure
+    DEPENDS gp_fastmath_tests
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})

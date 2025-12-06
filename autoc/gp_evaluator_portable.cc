@@ -1,7 +1,8 @@
 #include "gp_evaluator_portable.h"
+#include <array>
 #include <cmath>
+#include <type_traits>
 #include "fastmath/fixed_math.h"
-#include "fastmath/orientation_math.h"
 
 #ifdef GP_BUILD
 #include "gp_bytecode.h"  // Full GPBytecode definition for GP builds
@@ -11,430 +12,522 @@
 #include <iostream>
 #endif
 
-fastmath::GPScalar evaluateGPOperator(int opcode, PathProvider& pathProvider, 
-                         AircraftState& aircraftState,
-                         const fastmath::GPScalar* args, int argc, fastmath::GPScalar contextArg) {
-    using fastmath::GPScalar;
-    GPScalar result = GPScalar::zero();
+namespace {
+
+constexpr double kRangeLimit = 1000000.0;
+
+template <typename Scalar>
+struct ScalarOps;
+
+template <>
+struct ScalarOps<fastmath::GPScalar> {
+    static fastmath::GPScalar zero() { return fastmath::GPScalar::zero(); }
+    static fastmath::GPScalar fromDouble(double value) { return fastmath::GPScalar::fromDouble(value); }
+    static double toDouble(const fastmath::GPScalar& value) { return value.toDouble(); }
+    static bool isZero(const fastmath::GPScalar& value) { return value.isZero(); }
+    static fastmath::GPScalar sin(const fastmath::GPScalar& value) { return fastmath::sinApprox(value); }
+    static fastmath::GPScalar cos(const fastmath::GPScalar& value) { return fastmath::cosApprox(value); }
+    static fastmath::GPScalar atan2(const fastmath::GPScalar& y, const fastmath::GPScalar& x) { return fastmath::atan2Approx(y, x); }
+    static fastmath::GPScalar sqrt(const fastmath::GPScalar& value) { return fastmath::sqrtApprox(value); }
+    static fastmath::GPScalar clamp(const fastmath::GPScalar& value,
+                                    const fastmath::GPScalar& min,
+                                    const fastmath::GPScalar& max) {
+        return fastmath::clamp(value, min, max);
+    }
+    static fastmath::GPScalar abs(const fastmath::GPScalar& value) { return value.abs(); }
+    static fastmath::GPScalar min(const fastmath::GPScalar& a, const fastmath::GPScalar& b) {
+        return fastmath::min(a, b);
+    }
+    static fastmath::GPScalar max(const fastmath::GPScalar& a, const fastmath::GPScalar& b) {
+        return fastmath::max(a, b);
+    }
+    static fastmath::GPScalar applyRangeLimit(const fastmath::GPScalar& value) {
+        return ::applyRangeLimit(value);
+    }
+};
+
+template <>
+struct ScalarOps<double> {
+    static double zero() { return 0.0; }
+    static double fromDouble(double value) { return value; }
+    static double toDouble(double value) { return value; }
+    static bool isZero(double value) { return std::abs(value) < 1e-12; }
+    static double sin(double value) { return std::sin(value); }
+    static double cos(double value) { return std::cos(value); }
+    static double atan2(double y, double x) { return std::atan2(y, x); }
+    static double sqrt(double value) { return value <= 0.0 ? 0.0 : std::sqrt(value); }
+    static double clamp(double value, double min, double max) { return CLAMP_DEF(value, min, max); }
+    static double abs(double value) { return std::abs(value); }
+    static double min(double a, double b) { return std::min(a, b); }
+    static double max(double a, double b) { return std::max(a, b); }
+    static double applyRangeLimit(double value) {
+        if (value < -kRangeLimit) {
+            return -kRangeLimit;
+        }
+        if (value > kRangeLimit) {
+            return kRangeLimit;
+        }
+        if (std::abs(value) < 1e-6) {
+            return 0.0;
+        }
+        return value;
+    }
+};
+
+template <typename Scalar>
+inline Scalar getPitchCommandValue(AircraftState& state) {
+    if constexpr (std::is_same_v<Scalar, fastmath::GPScalar>) {
+        return state.getPitchCommandScalar();
+    } else {
+        return ScalarOps<Scalar>::fromDouble(state.getPitchCommand());
+    }
+}
+
+template <typename Scalar>
+inline Scalar getRollCommandValue(AircraftState& state) {
+    if constexpr (std::is_same_v<Scalar, fastmath::GPScalar>) {
+        return state.getRollCommandScalar();
+    } else {
+        return ScalarOps<Scalar>::fromDouble(state.getRollCommand());
+    }
+}
+
+template <typename Scalar>
+inline Scalar getThrottleCommandValue(AircraftState& state) {
+    if constexpr (std::is_same_v<Scalar, fastmath::GPScalar>) {
+        return state.getThrottleCommandScalar();
+    } else {
+        return ScalarOps<Scalar>::fromDouble(state.getThrottleCommand());
+    }
+}
+
+template <typename Scalar>
+inline Scalar getRelVelValue(AircraftState& state) {
+    if constexpr (std::is_same_v<Scalar, fastmath::GPScalar>) {
+        return state.getRelVelScalar();
+    } else {
+        return ScalarOps<Scalar>::fromDouble(state.getRelVel());
+    }
+}
+
+template <typename Scalar>
+Scalar executeGetDPhiImpl(PathProvider& pathProvider, AircraftState& aircraftState, Scalar arg) {
+    int idx = getPathIndex(pathProvider, aircraftState, ScalarOps<Scalar>::toDouble(arg));
+    Eigen::Vector3d craftToTarget = pathProvider.getPath(idx).start - aircraftState.getPosition();
+    Eigen::Vector3d target_local = aircraftState.getOrientation().inverse() * craftToTarget;
+    Eigen::Vector3d projectedVector(0, target_local.y(), target_local.z());
+    return ScalarOps<Scalar>::atan2(
+        ScalarOps<Scalar>::fromDouble(projectedVector.y()),
+        ScalarOps<Scalar>::fromDouble(-projectedVector.z()));
+}
+
+template <typename Scalar>
+Scalar executeGetDThetaImpl(PathProvider& pathProvider, AircraftState& aircraftState, Scalar arg) {
+    int idx = getPathIndex(pathProvider, aircraftState, ScalarOps<Scalar>::toDouble(arg));
+    Eigen::Vector3d craftToTarget = pathProvider.getPath(idx).start - aircraftState.getPosition();
+    Eigen::Vector3d target_local = aircraftState.getOrientation().inverse() * craftToTarget;
+    Eigen::Vector3d projectedVector(0, target_local.y(), target_local.z());
+
+    double rollEstimate = ScalarOps<Scalar>::toDouble(
+        ScalarOps<Scalar>::atan2(
+            ScalarOps<Scalar>::fromDouble(projectedVector.y()),
+            ScalarOps<Scalar>::fromDouble(-projectedVector.z())));
+
+    Eigen::Quaterniond rollRotation(Eigen::AngleAxisd(rollEstimate, Eigen::Vector3d::UnitX()));
+    Eigen::Quaterniond virtualOrientation = aircraftState.getOrientation() * rollRotation;
+    Eigen::Vector3d newLocalTargetVector = virtualOrientation.inverse() * craftToTarget;
+
+    return ScalarOps<Scalar>::atan2(
+        ScalarOps<Scalar>::fromDouble(-newLocalTargetVector.z()),
+        ScalarOps<Scalar>::fromDouble(newLocalTargetVector.x()));
+}
+
+template <typename Scalar>
+Scalar executeGetDTargetImpl(PathProvider& pathProvider, AircraftState& aircraftState, Scalar arg) {
+    int idx = getPathIndex(pathProvider, aircraftState, ScalarOps<Scalar>::toDouble(arg));
+    double distance = (pathProvider.getPath(idx).start - aircraftState.getPosition()).norm();
+    double relVel = aircraftState.getRelVel();
+    double clamped = CLAMP_DEF((distance - 10.0) / relVel, -1.0, 1.0);
+    return ScalarOps<Scalar>::fromDouble(clamped);
+}
+
+template <typename Scalar>
+Scalar executeGetDHomeImpl(AircraftState& aircraftState) {
+    double distance = (Eigen::Vector3d(0, 0, SIM_INITIAL_ALTITUDE) - aircraftState.getPosition()).norm();
+    return ScalarOps<Scalar>::fromDouble(distance);
+}
+
+template <typename Scalar>
+Scalar evaluateGPOperatorImpl(int opcode, PathProvider& pathProvider,
+                              AircraftState& aircraftState,
+                              const Scalar* args, int argc, Scalar contextArg) {
+    Scalar result = ScalarOps<Scalar>::zero();
     switch (opcode) {
-        // Math operators - identical on all platforms
-        case ADD: 
-            result = args[0] + args[1]; 
+        case ADD:
+            if (!args || argc < 2) return ScalarOps<Scalar>::zero();
+            result = args[0] + args[1];
             break;
-        case SUB: 
+        case SUB:
+            if (!args || argc < 2) return ScalarOps<Scalar>::zero();
             result = args[0] - args[1];
             break;
-        case MUL: 
-            result = args[0] * args[1]; 
+        case MUL:
+            if (!args || argc < 2) return ScalarOps<Scalar>::zero();
+            result = args[0] * args[1];
             break;
-        case DIV: 
-            result = args[1].isZero() ? GPScalar::zero() : args[0] / args[1]; 
+        case DIV:
+            if (!args || argc < 2) return ScalarOps<Scalar>::zero();
+            result = ScalarOps<Scalar>::isZero(args[1]) ? ScalarOps<Scalar>::zero() : args[0] / args[1];
             break;
-        
-        // Control operators - use CLAMP_DEF macro (platform-specific)
-        case SETPITCH: 
-            result = GPScalar::fromDouble(aircraftState.setPitchCommand(args[0].toDouble())); 
+        case SETPITCH:
+            if (!args || argc < 1) return ScalarOps<Scalar>::zero();
+            result = ScalarOps<Scalar>::fromDouble(
+                aircraftState.setPitchCommand(ScalarOps<Scalar>::toDouble(args[0])));
             break;
-        case SETROLL: 
-            result = GPScalar::fromDouble(aircraftState.setRollCommand(args[0].toDouble())); 
+        case SETROLL:
+            if (!args || argc < 1) return ScalarOps<Scalar>::zero();
+            result = ScalarOps<Scalar>::fromDouble(
+                aircraftState.setRollCommand(ScalarOps<Scalar>::toDouble(args[0])));
             break;
-        case SETTHROTTLE: 
-            result = GPScalar::fromDouble(aircraftState.setThrottleCommand(args[0].toDouble())); 
+        case SETTHROTTLE:
+            if (!args || argc < 1) return ScalarOps<Scalar>::zero();
+            result = ScalarOps<Scalar>::fromDouble(
+                aircraftState.setThrottleCommand(ScalarOps<Scalar>::toDouble(args[0])));
             break;
-        
-        // State queries - identical logic
-        case GETPITCH: 
-            result = aircraftState.getPitchCommandScalar(); 
+        case GETPITCH:
+            result = getPitchCommandValue<Scalar>(aircraftState);
             break;
-        case GETROLL: 
-            result = aircraftState.getRollCommandScalar(); 
+        case GETROLL:
+            result = getRollCommandValue<Scalar>(aircraftState);
             break;
-        case GETTHROTTLE: 
-            result = aircraftState.getThrottleCommandScalar(); 
+        case GETTHROTTLE:
+            result = getThrottleCommandValue<Scalar>(aircraftState);
             break;
-        case GETVEL: 
-            result = aircraftState.getRelVelScalar(); 
+        case GETVEL:
+            result = getRelVelValue<Scalar>(aircraftState);
             break;
-        
-        // Navigation - use PathProvider abstraction
-        case GETDPHI: 
-            result = executeGetDPhi(pathProvider, aircraftState, args ? args[0] : contextArg); 
+        case GETDPHI:
+            result = executeGetDPhiImpl(
+                pathProvider, aircraftState,
+                (args && argc > 0) ? args[0] : contextArg);
             break;
-        case GETDTHETA: 
-            result = executeGetDTheta(pathProvider, aircraftState, args ? args[0] : contextArg); 
+        case GETDTHETA:
+            result = executeGetDThetaImpl(
+                pathProvider, aircraftState,
+                (args && argc > 0) ? args[0] : contextArg);
             break;
-        case GETDTARGET: 
-            result = executeGetDTarget(pathProvider, aircraftState, args ? args[0] : contextArg); 
+        case GETDTARGET:
+            result = executeGetDTargetImpl(
+                pathProvider, aircraftState,
+                (args && argc > 0) ? args[0] : contextArg);
             break;
-        case GETDHOME: 
-            result = executeGetDHome(aircraftState); 
+        case GETDHOME:
+            result = executeGetDHomeImpl<Scalar>(aircraftState);
             break;
-        
-        // Trigonometry - use C math library (available on all platforms)
-        case SIN: 
-            result = fastmath::sinApprox(args[0]); 
+        case SIN:
+            if (!args || argc < 1) return ScalarOps<Scalar>::zero();
+            result = ScalarOps<Scalar>::sin(args[0]);
             break;
-        case COS: 
-            result = fastmath::cosApprox(args[0]); 
+        case COS:
+            if (!args || argc < 1) return ScalarOps<Scalar>::zero();
+            result = ScalarOps<Scalar>::cos(args[0]);
             break;
-        case ATAN2: 
-            result = fastmath::atan2Approx(args[0], args[1]); 
+        case ATAN2:
+            if (!args || argc < 2) return ScalarOps<Scalar>::zero();
+            result = ScalarOps<Scalar>::atan2(args[0], args[1]);
             break;
-        
-        // Math helpers - use platform macros  
-        case CLAMP: 
-            result = fastmath::clamp(args[0], args[1], args[2]); 
+        case CLAMP:
+            if (!args || argc < 3) return ScalarOps<Scalar>::zero();
+            result = ScalarOps<Scalar>::clamp(args[0], args[1], args[2]);
             break;
-        case ABS: 
-            result = args[0].abs(); 
+        case ABS:
+            if (!args || argc < 1) return ScalarOps<Scalar>::zero();
+            result = ScalarOps<Scalar>::abs(args[0]);
             break;
-        case SQRT: 
-            result = fastmath::sqrtApprox(args[0]); 
+        case SQRT:
+            if (!args || argc < 1) return ScalarOps<Scalar>::zero();
+            result = ScalarOps<Scalar>::sqrt(args[0]);
             break;
-        case MIN: 
-            result = fastmath::min(args[0], args[1]); 
+        case MIN:
+            if (!args || argc < 2) return ScalarOps<Scalar>::zero();
+            result = ScalarOps<Scalar>::min(args[0], args[1]);
             break;
-        case MAX: 
-            result = fastmath::max(args[0], args[1]); 
+        case MAX:
+            if (!args || argc < 2) return ScalarOps<Scalar>::zero();
+            result = ScalarOps<Scalar>::max(args[0], args[1]);
             break;
-        
-        // Logical operators
-        case IF: 
-            result = !args[0].isZero() ? args[1] : args[2]; 
+        case IF:
+            if (!args || argc < 3) return ScalarOps<Scalar>::zero();
+            result = ScalarOps<Scalar>::isZero(args[0]) ? args[2] : args[1];
             break;
-        case EQ: 
-            result = (args[0] == args[1]) ? GPScalar::fromInt(1) : GPScalar::zero(); 
+        case EQ:
+            if (!args || argc < 2) return ScalarOps<Scalar>::zero();
+            result = (args[0] == args[1]) ? ScalarOps<Scalar>::fromDouble(1.0) : ScalarOps<Scalar>::zero();
             break;
-        case GT: 
-            result = (args[0] > args[1]) ? GPScalar::fromInt(1) : GPScalar::zero(); 
+        case GT:
+            if (!args || argc < 2) return ScalarOps<Scalar>::zero();
+            result = (args[0] > args[1]) ? ScalarOps<Scalar>::fromDouble(1.0) : ScalarOps<Scalar>::zero();
             break;
-        case PROGN: 
-            result = args[1]; // Return second arg, ignore first
+        case PROGN:
+            if (!args || argc < 2) return ScalarOps<Scalar>::zero();
+            result = args[1];
             break;
-        
-        // Constants
         case OP_PI:
-            result = GPScalar::fromDouble(M_PI); 
+            result = ScalarOps<Scalar>::fromDouble(M_PI);
             break;
-        case ZERO: 
-            result = GPScalar::zero(); 
+        case ZERO:
+            result = ScalarOps<Scalar>::zero();
             break;
-        case ONE: 
-            result = GPScalar::fromInt(1); 
+        case ONE:
+            result = ScalarOps<Scalar>::fromDouble(1.0);
             break;
-        case TWO: 
-            result = GPScalar::fromInt(2); 
+        case TWO:
+            result = ScalarOps<Scalar>::fromDouble(2.0);
             break;
-        
-        // Velocity/attitude sensors
-        case GETVELX: 
-            result = GPScalar::fromDouble(aircraftState.getVelocity().x()); 
+        case GETVELX:
+            result = ScalarOps<Scalar>::fromDouble(aircraftState.getVelocity().x());
             break;
-        case GETVELY: 
-            result = GPScalar::fromDouble(aircraftState.getVelocity().y()); 
+        case GETVELY:
+            result = ScalarOps<Scalar>::fromDouble(aircraftState.getVelocity().y());
             break;
-        case GETVELZ: 
-            result = GPScalar::fromDouble(aircraftState.getVelocity().z()); 
+        case GETVELZ:
+            result = ScalarOps<Scalar>::fromDouble(aircraftState.getVelocity().z());
             break;
-        
         case GETALPHA: {
             Eigen::Vector3d velocity_body = fastmath::rotateWorldToBody(
                 aircraftState.getOrientation(), aircraftState.getVelocity());
-            result = fastmath::atan2Approx(
-                GPScalar::fromDouble(-velocity_body.z()),
-                GPScalar::fromDouble(velocity_body.x()));
+            result = ScalarOps<Scalar>::atan2(
+                ScalarOps<Scalar>::fromDouble(-velocity_body.z()),
+                ScalarOps<Scalar>::fromDouble(velocity_body.x()));
             break;
         }
-        
         case GETBETA: {
             Eigen::Vector3d velocity_body = fastmath::rotateWorldToBody(
                 aircraftState.getOrientation(), aircraftState.getVelocity());
-            result = fastmath::atan2Approx(
-                GPScalar::fromDouble(velocity_body.y()),
-                GPScalar::fromDouble(velocity_body.x()));
+            result = ScalarOps<Scalar>::atan2(
+                ScalarOps<Scalar>::fromDouble(velocity_body.y()),
+                ScalarOps<Scalar>::fromDouble(velocity_body.x()));
             break;
         }
-        
         case GETROLL_RAD: {
             double roll = fastmath::rollFromQuaternion(aircraftState.getOrientation());
-            result = GPScalar::fromDouble(roll);
+            result = ScalarOps<Scalar>::fromDouble(roll);
             break;
         }
-        
         case GETPITCH_RAD: {
             double pitch = fastmath::pitchFromQuaternion(aircraftState.getOrientation());
-            result = GPScalar::fromDouble(pitch);
+            result = ScalarOps<Scalar>::fromDouble(pitch);
             break;
         }
-        
         default:
 #ifdef GP_BUILD
             std::cerr << "Unknown operator: " << opcode << std::endl;
 #endif
-            result = GPScalar::zero();
+            result = ScalarOps<Scalar>::zero();
             break;
     }
-    
-    return applyRangeLimit(result);
+    return ScalarOps<Scalar>::applyRangeLimit(result);
 }
 
-fastmath::GPScalar executeGetDPhi(PathProvider& pathProvider, AircraftState& aircraftState, fastmath::GPScalar arg) {
-    // Calculate the vector from craft to target in world frame
-    int idx = getPathIndex(pathProvider, aircraftState, arg.toDouble());
-    Eigen::Vector3d craftToTarget = pathProvider.getPath(idx).start - aircraftState.getPosition();
-    
-    // Transform the craft-to-target vector to body frame
-    Eigen::Vector3d target_local = aircraftState.getOrientation().inverse() * craftToTarget;
-    
-    // Project the craft-to-target vector onto the body YZ plane
-    Eigen::Vector3d projectedVector(0, target_local.y(), target_local.z());
-    
-    // Calculate the angle between the projected vector and the body Z-axis
-    return fastmath::atan2Approx(fastmath::GPScalar::fromDouble(projectedVector.y()),
-                                 fastmath::GPScalar::fromDouble(-projectedVector.z()));
-}
-
-fastmath::GPScalar executeGetDTheta(PathProvider& pathProvider, AircraftState& aircraftState, fastmath::GPScalar arg) {
-    // Calculate the vector from craft to target in world frame
-    int idx = getPathIndex(pathProvider, aircraftState, arg.toDouble());
-    Eigen::Vector3d craftToTarget = pathProvider.getPath(idx).start - aircraftState.getPosition();
-    
-    // Transform the craft-to-target vector to body frame
-    Eigen::Vector3d target_local = aircraftState.getOrientation().inverse() * craftToTarget;
-    
-    // Project the craft-to-target vector onto the body YZ plane
-    Eigen::Vector3d projectedVector(0, target_local.y(), target_local.z());
-    
-    // Calculate the angle between the projected vector and the body Z-axis
-    double rollEstimate = fastmath::atan2Approx(
-        fastmath::GPScalar::fromDouble(projectedVector.y()),
-        fastmath::GPScalar::fromDouble(-projectedVector.z())).toDouble();
-    
-    // *** PITCH: Calculate the vector from craft to target in world frame if it did rotate
-    Eigen::Quaterniond rollRotation(Eigen::AngleAxisd(rollEstimate, Eigen::Vector3d::UnitX()));
-    Eigen::Quaterniond virtualOrientation = aircraftState.getOrientation() * rollRotation;
-    
-    // Transform target vector to new virtual orientation
-    Eigen::Vector3d newLocalTargetVector = virtualOrientation.inverse() * craftToTarget;
-    
-    // Calculate pitch angle
-    return fastmath::atan2Approx(
-        fastmath::GPScalar::fromDouble(-newLocalTargetVector.z()),
-        fastmath::GPScalar::fromDouble(newLocalTargetVector.x()));
-}
-
-fastmath::GPScalar executeGetDTarget(PathProvider& pathProvider, AircraftState& aircraftState, fastmath::GPScalar arg) {
-    int idx = getPathIndex(pathProvider, aircraftState, arg.toDouble());
-    double distance = (pathProvider.getPath(idx).start - aircraftState.getPosition()).norm();
-    double relVel = aircraftState.getRelVelScalar().toDouble();
-    double clamped = CLAMP_DEF((distance - 10) / relVel, -1.0, 1.0);
-    return fastmath::GPScalar::fromDouble(clamped);
-}
-
-fastmath::GPScalar executeGetDHome(AircraftState& aircraftState) {
-    double distance = (Eigen::Vector3d(0, 0, SIM_INITIAL_ALTITUDE) - aircraftState.getPosition()).norm();
-    return fastmath::GPScalar::fromDouble(distance);
-}
-
-// Portable bytecode evaluation implementation - works on all platforms
-fastmath::GPScalar evaluateBytecodePortable(const struct GPBytecode* program, int program_size, 
-                               PathProvider& pathProvider, AircraftState& aircraftState, 
-                               fastmath::GPScalar contextArg) {
-    const int MAX_STACK_SIZE = 256;
-    fastmath::GPScalar stack[MAX_STACK_SIZE];
+template <typename Scalar>
+Scalar evaluateBytecodeImpl(const GPBytecode* program, int program_size,
+                            PathProvider& pathProvider, AircraftState& aircraftState,
+                            Scalar contextArg) {
+    constexpr int MAX_STACK_SIZE = 256;
+    std::array<Scalar, MAX_STACK_SIZE> stack{};
     int stack_ptr = 0;
 
-    auto pushResult = [&](fastmath::GPScalar value) {
-        stack[stack_ptr++] = applyRangeLimit(value);
+    auto pushResult = [&](Scalar value) {
+        stack[stack_ptr++] = ScalarOps<Scalar>::applyRangeLimit(value);
     };
 
-    auto popScalar = [&]() -> fastmath::GPScalar {
+    auto popScalar = [&]() -> Scalar {
         return stack[--stack_ptr];
     };
-    
-    // Execute bytecode instructions
-    for (int i = 0; i < program_size; i++) {
-        const struct GPBytecode& instruction = program[i];
+
+    for (int i = 0; i < program_size; ++i) {
+        const GPBytecode& instruction = program[i];
         switch (instruction.opcode) {
             case ADD:
             case SUB:
             case MUL:
             case DIV:
             case EQ:
-            case GT:
-            case ATAN2:
-            case MIN:
-            case MAX: {
-                if (stack_ptr < 2) return fastmath::GPScalar::zero();
-                fastmath::GPScalar rhs = popScalar();
-                fastmath::GPScalar lhs = popScalar();
-                fastmath::GPScalar value = fastmath::GPScalar::zero();
+            case GT: {
+                if (stack_ptr < 2) {
+                    return ScalarOps<Scalar>::zero();
+                }
+                Scalar rhs = popScalar();
+                Scalar lhs = popScalar();
+                Scalar value = ScalarOps<Scalar>::zero();
                 switch (instruction.opcode) {
                     case ADD: value = lhs + rhs; break;
                     case SUB: value = lhs - rhs; break;
                     case MUL: value = lhs * rhs; break;
-                    case DIV: value = rhs.isZero() ? fastmath::GPScalar::zero() : lhs / rhs; break;
-                    case EQ:  value = (lhs == rhs) ? fastmath::GPScalar::fromInt(1) : fastmath::GPScalar::zero(); break;
-                    case GT:  value = (lhs > rhs) ? fastmath::GPScalar::fromInt(1) : fastmath::GPScalar::zero(); break;
-                    case ATAN2: value = fastmath::atan2Approx(lhs, rhs); break;
-                    case MIN: value = fastmath::min(lhs, rhs); break;
-                    case MAX: value = fastmath::max(lhs, rhs); break;
-                    default: break;
+                    case DIV: value = ScalarOps<Scalar>::isZero(rhs) ? ScalarOps<Scalar>::zero() : lhs / rhs; break;
+                    case EQ: value = (lhs == rhs) ? ScalarOps<Scalar>::fromDouble(1.0) : ScalarOps<Scalar>::zero(); break;
+                    case GT: value = (lhs > rhs) ? ScalarOps<Scalar>::fromDouble(1.0) : ScalarOps<Scalar>::zero(); break;
                 }
                 pushResult(value);
                 break;
             }
-
             case SIN:
             case COS:
             case ABS:
-            case SQRT:
-            case SETPITCH:
-            case SETROLL:
-            case SETTHROTTLE:
-            case GETDPHI:
-            case GETDTHETA:
-            case GETDTARGET: {
-                if (stack_ptr < 1) return fastmath::GPScalar::zero();
-                fastmath::GPScalar arg0 = popScalar();
-                fastmath::GPScalar value = fastmath::GPScalar::zero();
+        case SQRT:
+        case GETPITCH:
+        case GETROLL:
+        case GETTHROTTLE:
+        case GETVEL:
+        case SETPITCH:
+        case SETROLL:
+        case SETTHROTTLE:
+        case GETDPHI:
+        case GETDTHETA:
+        case GETDTARGET:
+        case GETDHOME:
+        case GETVELX:
+        case GETVELY:
+        case GETVELZ:
+        case GETALPHA:
+        case GETBETA:
+        case GETROLL_RAD:
+        case GETPITCH_RAD: {
+                Scalar localArgs[3];
+                Scalar* argPtr = nullptr;
+                if (instruction.argc > 0) {
+                    if (stack_ptr < instruction.argc) {
+                        return ScalarOps<Scalar>::zero();
+                    }
+                    for (int argIndex = instruction.argc - 1; argIndex >= 0; --argIndex) {
+                        localArgs[argIndex] = popScalar();
+                    }
+                    argPtr = localArgs;
+                }
+                Scalar value = evaluateGPOperatorImpl<Scalar>(
+                    instruction.opcode, pathProvider, aircraftState, argPtr, instruction.argc, contextArg);
+                pushResult(value);
+                break;
+            }
+            case CLAMP:
+            case MIN:
+            case MAX:
+            case ATAN2: {
+                if (stack_ptr < 2) {
+                    return ScalarOps<Scalar>::zero();
+                }
+                Scalar arg2 = popScalar();
+                Scalar arg1 = popScalar();
+                Scalar value = ScalarOps<Scalar>::zero();
                 switch (instruction.opcode) {
-                    case SIN: value = fastmath::sinApprox(arg0); break;
-                    case COS: value = fastmath::cosApprox(arg0); break;
-                    case ABS: value = arg0.abs(); break;
-                    case SQRT: value = fastmath::sqrtApprox(arg0); break;
-                    case SETPITCH:
-                        value = fastmath::GPScalar::fromDouble(aircraftState.setPitchCommand(arg0.toDouble()));
+                    case CLAMP: {
+                        if (stack_ptr < 1) {
+                            return ScalarOps<Scalar>::zero();
+                        }
+                        Scalar arg0 = popScalar();
+                        value = ScalarOps<Scalar>::clamp(arg0, arg1, arg2);
                         break;
-                    case SETROLL:
-                        value = fastmath::GPScalar::fromDouble(aircraftState.setRollCommand(arg0.toDouble()));
+                    }
+                    case MIN:
+                        value = ScalarOps<Scalar>::min(arg1, arg2);
                         break;
-                    case SETTHROTTLE:
-                        value = fastmath::GPScalar::fromDouble(aircraftState.setThrottleCommand(arg0.toDouble()));
+                    case MAX:
+                        value = ScalarOps<Scalar>::max(arg1, arg2);
                         break;
-                    case GETDPHI:
-                        value = executeGetDPhi(pathProvider, aircraftState, arg0);
-                        break;
-                    case GETDTHETA:
-                        value = executeGetDTheta(pathProvider, aircraftState, arg0);
-                        break;
-                    case GETDTARGET:
-                        value = executeGetDTarget(pathProvider, aircraftState, arg0);
-                        break;
-                    default:
+                    case ATAN2:
+                        value = ScalarOps<Scalar>::atan2(arg1, arg2);
                         break;
                 }
                 pushResult(value);
                 break;
             }
-
-            case IF:
-            case CLAMP: {
-                if (stack_ptr < 3) return fastmath::GPScalar::zero();
-                fastmath::GPScalar c = popScalar();
-                fastmath::GPScalar b = popScalar();
-                fastmath::GPScalar a = popScalar();
-                fastmath::GPScalar value = fastmath::GPScalar::zero();
-                if (instruction.opcode == IF) {
-                    value = (!a.isZero()) ? b : c;
-                } else {
-                    value = fastmath::clamp(a, b, c);
+            case IF: {
+                if (stack_ptr < 3) {
+                    return ScalarOps<Scalar>::zero();
                 }
-                pushResult(value);
+                Scalar falseBranch = popScalar();
+                Scalar trueBranch = popScalar();
+                Scalar condition = popScalar();
+                pushResult(ScalarOps<Scalar>::isZero(condition) ? falseBranch : trueBranch);
                 break;
             }
             case PROGN: {
-                if (stack_ptr < 2) return fastmath::GPScalar::zero();
-                fastmath::GPScalar last = popScalar();
-                popScalar(); // discard first
-                pushResult(last);
-                break;
-            }
-
-            case GETPITCH:
-                pushResult(aircraftState.getPitchCommandScalar());
-                break;
-            case GETROLL:
-                pushResult(aircraftState.getRollCommandScalar());
-                break;
-            case GETTHROTTLE:
-                pushResult(aircraftState.getThrottleCommandScalar());
-                break;
-            case GETVEL:
-                pushResult(aircraftState.getRelVelScalar());
-                break;
-            case GETVELX:
-                pushResult(fastmath::GPScalar::fromDouble(aircraftState.getVelocity().x()));
-                break;
-            case GETVELY:
-                pushResult(fastmath::GPScalar::fromDouble(aircraftState.getVelocity().y()));
-                break;
-            case GETVELZ:
-                pushResult(fastmath::GPScalar::fromDouble(aircraftState.getVelocity().z()));
-                break;
-            case GETDHOME:
-                pushResult(executeGetDHome(aircraftState));
-                break;
-            case GETALPHA: {
-                Eigen::Vector3d velocity_body = fastmath::rotateWorldToBody(
-                    aircraftState.getOrientation(), aircraftState.getVelocity());
-                pushResult(fastmath::atan2Approx(
-                    fastmath::GPScalar::fromDouble(-velocity_body.z()),
-                    fastmath::GPScalar::fromDouble(velocity_body.x())));
-                break;
-            }
-            case GETBETA: {
-                Eigen::Vector3d velocity_body = fastmath::rotateWorldToBody(
-                    aircraftState.getOrientation(), aircraftState.getVelocity());
-                pushResult(fastmath::atan2Approx(
-                    fastmath::GPScalar::fromDouble(velocity_body.y()),
-                    fastmath::GPScalar::fromDouble(velocity_body.x())));
-                break;
-            }
-            case GETROLL_RAD: {
-                double roll = fastmath::rollFromQuaternion(aircraftState.getOrientation());
-                pushResult(fastmath::GPScalar::fromDouble(roll));
-                break;
-            }
-            case GETPITCH_RAD: {
-                double pitch = fastmath::pitchFromQuaternion(aircraftState.getOrientation());
-                pushResult(fastmath::GPScalar::fromDouble(pitch));
+                if (stack_ptr < instruction.argc) {
+                    return ScalarOps<Scalar>::zero();
+                }
+                Scalar value = popScalar();
+                stack_ptr -= instruction.argc - 1;
+                pushResult(value);
                 break;
             }
             case OP_PI:
-                pushResult(fastmath::GPScalar::fromDouble(M_PI));
-                break;
             case ZERO:
-                pushResult(fastmath::GPScalar::zero());
-                break;
             case ONE:
-                pushResult(fastmath::GPScalar::fromInt(1));
+            case TWO: {
+                double literal = 0.0;
+                switch (instruction.opcode) {
+                    case OP_PI: literal = M_PI; break;
+                    case ZERO: literal = 0.0; break;
+                    case ONE: literal = 1.0; break;
+                    case TWO: literal = 2.0; break;
+                }
+                pushResult(ScalarOps<Scalar>::fromDouble(literal));
                 break;
-            case TWO:
-                pushResult(fastmath::GPScalar::fromInt(2));
-                break;
-
+            }
             default: {
-                fastmath::GPScalar value = evaluateGPOperator(instruction.opcode, pathProvider, aircraftState, nullptr, 0, contextArg);
+                Scalar value = evaluateGPOperatorImpl<Scalar>(
+                    instruction.opcode, pathProvider, aircraftState, nullptr, 0, contextArg);
                 pushResult(value);
                 break;
             }
         }
-        
-        if (stack_ptr >= MAX_STACK_SIZE) {
-#ifdef GP_BUILD
-            std::cerr << "Error: Stack overflow in bytecode execution" << std::endl;
-#endif
-            return fastmath::GPScalar::zero();
-        }
     }
 
-    if (stack_ptr != 1) {
-#ifdef GP_BUILD
-        std::cerr << "Error: Invalid stack state after bytecode execution (stack_ptr=" << stack_ptr << ")" << std::endl;
-#endif
-        return fastmath::GPScalar::zero();
+    if (stack_ptr == 0) {
+        return ScalarOps<Scalar>::zero();
     }
+    return stack[stack_ptr - 1];
+}
 
-    return applyRangeLimit(stack[0]);
+} // namespace
+
+
+fastmath::GPScalar evaluateGPOperator(int opcode, PathProvider& pathProvider,
+                         AircraftState& aircraftState,
+                         const fastmath::GPScalar* args, int argc, fastmath::GPScalar contextArg) {
+    return evaluateGPOperatorImpl<fastmath::GPScalar>(opcode, pathProvider, aircraftState, args, argc, contextArg);
+}
+
+double evaluateGPOperatorReference(int opcode, PathProvider& pathProvider,
+                                   AircraftState& aircraftState,
+                                   const double* args, int argc, double contextArg) {
+    return evaluateGPOperatorImpl<double>(opcode, pathProvider, aircraftState, args, argc, contextArg);
+}
+
+fastmath::GPScalar executeGetDPhi(PathProvider& pathProvider, AircraftState& aircraftState, fastmath::GPScalar arg) {
+    return executeGetDPhiImpl(pathProvider, aircraftState, arg);
+}
+
+fastmath::GPScalar executeGetDTheta(PathProvider& pathProvider, AircraftState& aircraftState, fastmath::GPScalar arg) {
+    return executeGetDThetaImpl(pathProvider, aircraftState, arg);
+}
+
+fastmath::GPScalar executeGetDTarget(PathProvider& pathProvider, AircraftState& aircraftState, fastmath::GPScalar arg) {
+    return executeGetDTargetImpl(pathProvider, aircraftState, arg);
+}
+
+fastmath::GPScalar executeGetDHome(AircraftState& aircraftState) {
+    return executeGetDHomeImpl<fastmath::GPScalar>(aircraftState);
+}
+
+fastmath::GPScalar evaluateBytecodePortable(const struct GPBytecode* program, int program_size,
+                               PathProvider& pathProvider, AircraftState& aircraftState,
+                               fastmath::GPScalar contextArg) {
+    return evaluateBytecodeImpl<fastmath::GPScalar>(program, program_size, pathProvider, aircraftState, contextArg);
+}
+
+double evaluateBytecodeReference(const struct GPBytecode* program, int program_size,
+                                 PathProvider& pathProvider, AircraftState& aircraftState,
+                                 double contextArg) {
+    return evaluateBytecodeImpl<double>(program, program_size, pathProvider, aircraftState, contextArg);
 }

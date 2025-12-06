@@ -15,6 +15,10 @@ public:
     static double evaluateGPBytecode(const std::vector<struct GPBytecode>& program, 
                                     std::vector<Path>& path, AircraftState& aircraftState, 
                                     double contextArg = 0.0);
+
+    static double evaluateGPBytecodeReference(const std::vector<struct GPBytecode>& program,
+                                              std::vector<Path>& path, AircraftState& aircraftState,
+                                              double contextArg = 0.0);
 };
 
 #endif
