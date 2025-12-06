@@ -130,9 +130,9 @@ private:
             case EQ: case GT: case ATAN2: case MIN: case MAX:
                 code << "    // " << opName << "\n";
                 code << "    {\n";
-                code << "        double args[2] = {stack[sp-2], stack[sp-1]};\n";
+                code << "        fastmath::GPScalar args[2] = {stack[sp-2], stack[sp-1]};\n";
                 code << "        sp -= 2;\n";
-                code << "        stack[sp++] = evaluateGPOperator(" << opcodeInt << ", pathProvider, aircraftState, args, 2, arg);\n";
+                code << "        stack[sp++] = evaluateGPOperator(" << opcodeInt << ", pathProvider, aircraftState, args, 2, context);\n";
                 code << "    }\n";
                 break;
                 
@@ -142,9 +142,9 @@ private:
             case GETDPHI: case GETDTHETA: case GETDTARGET:
                 code << "    // " << opName << "\n";
                 code << "    {\n";
-                code << "        double args[1] = {stack[sp-1]};\n";
+                code << "        fastmath::GPScalar args[1] = {stack[sp-1]};\n";
                 code << "        sp -= 1;\n";
-                code << "        stack[sp++] = evaluateGPOperator(" << opcodeInt << ", pathProvider, aircraftState, args, 1, arg);\n";
+                code << "        stack[sp++] = evaluateGPOperator(" << opcodeInt << ", pathProvider, aircraftState, args, 1, context);\n";
                 code << "    }\n";
                 break;
                 
@@ -152,9 +152,9 @@ private:
             case IF: case CLAMP:
                 code << "    // " << opName << "\n";
                 code << "    {\n";
-                code << "        double args[3] = {stack[sp-3], stack[sp-2], stack[sp-1]};\n";
+                code << "        fastmath::GPScalar args[3] = {stack[sp-3], stack[sp-2], stack[sp-1]};\n";
                 code << "        sp -= 3;\n";
-                code << "        stack[sp++] = evaluateGPOperator(" << opcodeInt << ", pathProvider, aircraftState, args, 3, arg);\n";
+                code << "        stack[sp++] = evaluateGPOperator(" << opcodeInt << ", pathProvider, aircraftState, args, 3, context);\n";
                 code << "    }\n";
                 break;
                 
@@ -162,15 +162,15 @@ private:
             case PROGN:
                 code << "    // PROGN\n";
                 code << "    {\n";
-                code << "        double args[2] = {stack[sp-2], stack[sp-1]};\n";
+                code << "        fastmath::GPScalar args[2] = {stack[sp-2], stack[sp-1]};\n";
                 code << "        sp -= 2;\n";
-                code << "        stack[sp++] = evaluateGPOperator(" << opcodeInt << ", pathProvider, aircraftState, args, 2, arg);\n";
+                code << "        stack[sp++] = evaluateGPOperator(" << opcodeInt << ", pathProvider, aircraftState, args, 2, context);\n";
                 code << "    }\n";
                 break;
                 
             // Zero-argument operations (terminals/sensors)
             default:
-                code << "    stack[sp++] = evaluateGPOperator(" << opcodeInt << ", pathProvider, aircraftState, nullptr, 0, arg); // " << opName << "\n";
+                code << "    stack[sp++] = evaluateGPOperator(" << opcodeInt << ", pathProvider, aircraftState, nullptr, 0, context); // " << opName << "\n";
                 break;
         }
     }
@@ -192,13 +192,15 @@ public:
         code << "//   Fitness: " << (header.fitness_int / 1000000.0) << "\n";
         code << "//   Bytecode Instructions: " << program_size << "\n";
         code << "//\n";
-        code << "#include \"gp_program.h\"\n\n";
+        code << "#include \"gp_program.h\"\n";
+        code << "#include \"fastmath/gp_scalar.h\"\n\n";
         
         code << "double " << functionName << "(PathProvider& pathProvider, AircraftState& aircraftState, double arg) {\n";
+        code << "    fastmath::GPScalar context = fastmath::GPScalar::fromDouble(arg);\n";
         
         // Analyze bytecode to determine max stack depth
         int maxStack = analyzeStackDepth(program, program_size);
-        code << "    double stack[" << maxStack << "];\n";
+        code << "    fastmath::GPScalar stack[" << maxStack << "];\n";
         code << "    int sp = 0;\n\n";
         
         // Generate unrolled execution
@@ -206,7 +208,7 @@ public:
             generateInstruction(code, program[i], i);
         }
         
-        code << "\n    return applyRangeLimit(stack[0]);\n";
+        code << "\n    return applyRangeLimit(stack[0]).toDouble();\n";
         code << "}\n";
         
         return code.str();

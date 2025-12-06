@@ -2,6 +2,7 @@
 #define GP_EVALUATOR_PORTABLE_H
 
 #include "aircraft_state.h"
+#include "fastmath/gp_scalar.h"
 
 #ifdef GP_BUILD
 #include "autoc.h"
@@ -34,28 +35,38 @@ struct GPBytecode {
 #endif
 
 // Single portable evaluation function that works everywhere
-double evaluateGPOperator(int opcode, PathProvider& pathProvider, 
+fastmath::GPScalar evaluateGPOperator(int opcode, PathProvider& pathProvider, 
                          AircraftState& aircraftState, 
-                         const double* args, int argc, double contextArg = 0.0);
+                         const fastmath::GPScalar* args, int argc, fastmath::GPScalar contextArg = fastmath::GPScalar::zero());
 
 // Navigation helpers - same logic, different path access
-double executeGetDPhi(PathProvider& pathProvider, AircraftState& aircraftState, double arg);
-double executeGetDTheta(PathProvider& pathProvider, AircraftState& aircraftState, double arg);
-double executeGetDTarget(PathProvider& pathProvider, AircraftState& aircraftState, double arg);
-double executeGetDHome(AircraftState& aircraftState);
+fastmath::GPScalar executeGetDPhi(PathProvider& pathProvider, AircraftState& aircraftState, fastmath::GPScalar arg);
+fastmath::GPScalar executeGetDTheta(PathProvider& pathProvider, AircraftState& aircraftState, fastmath::GPScalar arg);
+fastmath::GPScalar executeGetDTarget(PathProvider& pathProvider, AircraftState& aircraftState, fastmath::GPScalar arg);
+fastmath::GPScalar executeGetDHome(AircraftState& aircraftState);
 
 // Range limiting - identical across platforms
-inline double applyRangeLimit(double value) {
+inline fastmath::GPScalar applyRangeLimit(fastmath::GPScalar value) {
     const double RANGELIMIT = 1000000.0;
-    if (value < -RANGELIMIT) return -RANGELIMIT;
-    if (value > RANGELIMIT) return RANGELIMIT;
-    if (ABS_DEF(value) < 0.000001) return 0.0;
+    double asDouble = value.toDouble();
+    if (asDouble < -RANGELIMIT) {
+        fastmath::recordRangeClamp();
+        return fastmath::GPScalar::fromDouble(-RANGELIMIT);
+    }
+    if (asDouble > RANGELIMIT) {
+        fastmath::recordRangeClamp();
+        return fastmath::GPScalar::fromDouble(RANGELIMIT);
+    }
+    if (value.abs() < fastmath::GPScalar::fromDouble(0.000001)) {
+        fastmath::recordZeroSnap();
+        return fastmath::GPScalar::zero();
+    }
     return value;
 }
 
 // Stack-based bytecode evaluation using portable operators
-double evaluateBytecodePortable(const GPBytecode* program, int program_size, 
+fastmath::GPScalar evaluateBytecodePortable(const GPBytecode* program, int program_size, 
                                PathProvider& pathProvider, AircraftState& aircraftState, 
-                               double contextArg = 0.0);
+                               fastmath::GPScalar contextArg = fastmath::GPScalar::zero());
 
 #endif

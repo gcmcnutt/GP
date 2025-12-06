@@ -8,6 +8,7 @@ find_package(AWSSDK REQUIRED COMPONENTS core s3)
 
 option(USE_SANITIZER "Build with Address Sanitizer" OFF)
 option(ENABLE_PROFILING "Build with frame pointers and debug info for perf/FlameGraph" OFF)
+option(GP_FASTMATH_TRACE "Enable FastMath instrumentation logs" OFF)
 
 set(CMAKE_EXE_LINKER_FLAGS "-no-pie")
 
@@ -34,6 +35,14 @@ add_executable(minisim minisim.cc minisim.h aircraft_state.h autoc.h autoc-eval.
 add_executable(renderer renderer.cc renderer.h minisim.h aircraft_state.h autoc.h config_manager.cc config_manager.h)
 add_executable(gpextractor gpextractor.cc minisim.h aircraft_state.h config_manager.cc config_manager.h autoc-eval.cc gp_evaluator_portable.cc gp_evaluator_portable.h gp_evaluator_desktop.cc gp_evaluator_desktop.h)
 add_executable(bytecode2cpp bytecode2cpp.cc gp_bytecode.cc gp_bytecode.h gp_evaluator_portable.cc gp_evaluator_portable.h gp_evaluator_desktop.cc gp_evaluator_desktop.h config_manager.cc config_manager.h)
+
+if(GP_FASTMATH_TRACE)
+    target_compile_definitions(autoc PRIVATE GP_FASTMATH_TRACE)
+    target_compile_definitions(minisim PRIVATE GP_FASTMATH_TRACE)
+    target_compile_definitions(renderer PRIVATE GP_FASTMATH_TRACE)
+    target_compile_definitions(gpextractor PRIVATE GP_FASTMATH_TRACE)
+    target_compile_definitions(bytecode2cpp PRIVATE GP_FASTMATH_TRACE)
+endif()
 
 target_link_libraries(autoc gp ${Boost_LIBRARIES} Eigen3::Eigen ${AWSSDK_LIBRARIES})
 target_link_libraries(minisim gp ${Boost_LIBRARIES} Eigen3::Eigen)

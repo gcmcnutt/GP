@@ -6,7 +6,7 @@ double GPEvaluatorEmbedded::evaluateGPSimple(AircraftState& aircraftState, const
     SinglePathProvider pathProvider(currentPath, aircraftState.getThisPathIndex());
     
     // Use portable bytecode evaluator - this is the core evaluation path
-    return evaluateBytecodePortable(program, program_size, pathProvider, aircraftState, arg);
+    return evaluateBytecodePortable(program, program_size, pathProvider, aircraftState, fastmath::GPScalar::fromDouble(arg)).toDouble();
 }
 
 SinglePathProvider GPEvaluatorEmbedded::createPathProvider(const Path& currentPath, int currentIndex) {

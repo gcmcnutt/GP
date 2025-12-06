@@ -3,6 +3,7 @@
 #define AIRCRAFT_STATE_H
 
 #include <cmath>
+#include "fastmath/gp_scalar.h"
 
 #ifdef GP_BUILD
 #include <Eigen/Dense>
@@ -194,12 +195,23 @@ inline int getPathIndex(PathProvider& pathProvider, AircraftState& aircraftState
 struct AircraftState {
   public:
 
-    AircraftState() {}
+    AircraftState() 
+      : thisPathIndex(0), dRelVel(0.0), velocity(Eigen::Vector3d::Zero()),
+        aircraft_orientation(Eigen::Quaterniond::Identity()), position(Eigen::Vector3d::Zero()),
+        simTimeMsec(0), pitchCommand(0.0), rollCommand(0.0), throttleCommand(0.0),
+        pitchCommandScalar(fastmath::GPScalar::zero()), rollCommandScalar(fastmath::GPScalar::zero()),
+        throttleCommandScalar(fastmath::GPScalar::zero()),
+        relVelScalar(fastmath::GPScalar::zero()) {}
+
     AircraftState(int thisPathIndex, double relVel, Eigen::Vector3d vel, Eigen::Quaterniond orientation,
       Eigen::Vector3d pos, double pc, double rc, double tc,
       unsigned long int timeMsec)
       : thisPathIndex(thisPathIndex), dRelVel(relVel), velocity(vel), aircraft_orientation(orientation), position(pos), simTimeMsec(timeMsec),
-      pitchCommand(pc), rollCommand(rc), throttleCommand(tc) {
+      pitchCommand(pc), rollCommand(rc), throttleCommand(tc),
+      pitchCommandScalar(fastmath::GPScalar::fromDouble(pc)),
+      rollCommandScalar(fastmath::GPScalar::fromDouble(rc)),
+      throttleCommandScalar(fastmath::GPScalar::fromDouble(tc)),
+      relVelScalar(fastmath::GPScalar::fromDouble(relVel)) {
     }
 
     // generate setters and getters
@@ -207,7 +219,11 @@ struct AircraftState {
     void setThisPathIndex(int index) { thisPathIndex = index; }
 
     double getRelVel() const { return dRelVel; }
-    void setRelVel(double relVel) { dRelVel = relVel; }
+    fastmath::GPScalar getRelVelScalar() const { return relVelScalar; }
+    void setRelVel(double relVel) { 
+      dRelVel = relVel; 
+      relVelScalar = fastmath::GPScalar::fromDouble(relVel);
+    }
     
     Eigen::Vector3d getVelocity() const { return velocity; }
     void setVelocity(const Eigen::Vector3d& vel) { velocity = vel; }
@@ -222,11 +238,26 @@ struct AircraftState {
     void setSimTimeMsec(unsigned long int timeMsec) { simTimeMsec = timeMsec; }
 
     double getPitchCommand() const { return pitchCommand; }
-    double setPitchCommand(double pitch) { return (pitchCommand = CLAMP_DEF(pitch, -1.0, 1.0)); }
+    fastmath::GPScalar getPitchCommandScalar() const { return pitchCommandScalar; }
+    double setPitchCommand(double pitch) { 
+      pitchCommand = CLAMP_DEF(pitch, -1.0, 1.0); 
+      pitchCommandScalar = fastmath::GPScalar::fromDouble(pitchCommand);
+      return pitchCommand;
+    }
     double getRollCommand() const { return rollCommand; }
-    double setRollCommand(double roll) { return (rollCommand = CLAMP_DEF(roll, -1.0, 1.0)); }
+    fastmath::GPScalar getRollCommandScalar() const { return rollCommandScalar; }
+    double setRollCommand(double roll) { 
+      rollCommand = CLAMP_DEF(roll, -1.0, 1.0); 
+      rollCommandScalar = fastmath::GPScalar::fromDouble(rollCommand);
+      return rollCommand;
+    }
     double getThrottleCommand() const { return throttleCommand; }
-    double setThrottleCommand(double throttle) { return (throttleCommand = CLAMP_DEF(throttle, -1.0, 1.0)); }
+    fastmath::GPScalar getThrottleCommandScalar() const { return throttleCommandScalar; }
+    double setThrottleCommand(double throttle) { 
+      throttleCommand = CLAMP_DEF(throttle, -1.0, 1.0); 
+      throttleCommandScalar = fastmath::GPScalar::fromDouble(throttleCommand);
+      return throttleCommand;
+    }
 
     void minisimAdvanceState(double dt) {
       double dtSec = dt / 1000.0;
@@ -242,6 +273,7 @@ struct AircraftState {
       // throttle =  0.0 → 1.0x base velocity (20 m/s)
       // throttle = +1.0 → 1.5x base velocity (30 m/s)
       dRelVel = SIM_INITIAL_VELOCITY * (1.0 + throttleCommand * 0.5);
+      relVelScalar = fastmath::GPScalar::fromDouble(dRelVel);
 
       // Convert pitch and roll updates to quaternions (in the body frame)
       Eigen::Quaterniond delta_roll_quat(Eigen::AngleAxisd(delta_roll, Eigen::Vector3d::UnitX()));
@@ -277,6 +309,10 @@ struct AircraftState {
     double pitchCommand;
     double rollCommand;
     double throttleCommand;
+    fastmath::GPScalar pitchCommandScalar;
+    fastmath::GPScalar rollCommandScalar;
+    fastmath::GPScalar throttleCommandScalar;
+    fastmath::GPScalar relVelScalar;
 
 #ifdef GP_BUILD
     friend class boost::serialization::access;

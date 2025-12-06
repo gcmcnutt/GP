@@ -114,19 +114,25 @@ double MyGene::evaluate(std::vector<Path>& path, MyGP& run, double arg)
 {
   // Create path provider for this evaluation
   VectorPathProvider pathProvider(path, aircraftState.getThisPathIndex());
+  fastmath::GPScalar contextScalar = fastmath::GPScalar::fromDouble(arg);
   
   // For leaf nodes (terminals), evaluate directly
   if (containerSize() == 0) {
-    return evaluateGPOperator(node->value(), pathProvider, aircraftState, nullptr, 0, arg);
+    return evaluateGPOperator(node->value(), pathProvider, aircraftState, nullptr, 0, contextScalar).toDouble();
   }
   
   // For function nodes, evaluate children first
-  double childArgs[3] = {0.0, 0.0, 0.0}; // Max 3 args (IF, CLAMP)
+  fastmath::GPScalar childArgs[3] = {
+    fastmath::GPScalar::zero(),
+    fastmath::GPScalar::zero(),
+    fastmath::GPScalar::zero()
+  }; // Max 3 args (IF, CLAMP)
   int numArgs = containerSize();
   
   for (int i = 0; i < numArgs && i < 3; i++) {
-    childArgs[i] = NthMyChild(i)->evaluate(path, run, arg);
+    double childValue = NthMyChild(i)->evaluate(path, run, arg);
+    childArgs[i] = fastmath::GPScalar::fromDouble(childValue);
   }
   
-  return evaluateGPOperator(node->value(), pathProvider, aircraftState, childArgs, numArgs, arg);
+  return evaluateGPOperator(node->value(), pathProvider, aircraftState, childArgs, numArgs, contextScalar).toDouble();
 }

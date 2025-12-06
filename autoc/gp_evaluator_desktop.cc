@@ -12,7 +12,7 @@ double GPEvaluatorDesktop::evaluateGPBytecode(const std::vector<struct GPBytecod
     // Create path provider and evaluate using desktop implementation
     VectorPathProvider pathProvider(path, aircraftState.getThisPathIndex());
     return evaluateBytecodePortable(program.data(), program.size(), 
-                                   pathProvider, aircraftState, contextArg);
+                                   pathProvider, aircraftState, fastmath::GPScalar::fromDouble(contextArg)).toDouble();
 }
 
 // Desktop evaluator is now just a wrapper around the portable implementation

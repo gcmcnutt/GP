@@ -7,7 +7,7 @@ double GPEvaluatorCRRCSim::evaluateBytecodeForCRRCSim(const GPBytecode* program,
     VectorPathProvider pathProvider(path, aircraftState.getThisPathIndex());
     
     // Use portable bytecode evaluator
-    return evaluateBytecodePortable(program, program_size, pathProvider, aircraftState, arg);
+    return evaluateBytecodePortable(program, program_size, pathProvider, aircraftState, fastmath::GPScalar::fromDouble(arg)).toDouble();
 }
 
 void GPEvaluatorCRRCSim::convertFromBoostBytecode(const void* boostBytecode, int boost_size,

@@ -18,6 +18,7 @@
 #include "minisim.h"
 #include "autoc.h"
 #include "gp_bytecode.h"
+#include "fastmath/metrics.h"
 
 using namespace std;
 using boost::asio::ip::tcp;
@@ -253,6 +254,11 @@ public:
       // always send our state -- covers initial state
       // evalResults.dump(std::cout);
       sendRPC(socket_, evalResults);
+#ifdef GP_FASTMATH_TRACE
+      double evalCount = static_cast<double>(evalResults.pathList.size());
+      if (evalCount <= 0.0) evalCount = 1.0;
+      fastmath::logFastMathMetrics("minisim", std::cout, evalCount);
+#endif
 
       // prepare results for next cycle
       evalResults.pathList.clear();
