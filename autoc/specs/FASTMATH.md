@@ -24,9 +24,10 @@ Transcendentals (software, using float)
 
 ## Strategy
 We need to make changes to several code bases
-- Change ***all*** double to float around the evaluator -- including fitness functions, path generators, transports/serialization, and Eigen types (flip Eigen to float first, not double)
+- Change ***all*** double to float around the evaluator -- including fitness functions, path generators, transports/serialization, and Eigen types (flip Eigen to float first, not double). Always stick to `gp_scalar` and cast legacy inputs at the edge.
 - Examine places where we can share a divisor to minimise the use to divide
   - in some places we may want an accerated reciprocal operation if it winds up being better than divide
+- Prefer multiply-by-inverse over divide where it’s safe/clear (e.g., use `* 0.01f` instead of `/ 100.0f` in coordinate conversions).
 - Change all transcendentals and perhaps sqrt to lookup tables (no enable/disable flags; just switch to LUT-backed paths — YOLO it)
 - Do direct minimal conversions of the quaternion calculations
 - Convert all transports to and from evaluator to be float given we really don't even need to compute double precision at all (especially all the boost serializations)
@@ -35,7 +36,8 @@ We need to make changes to several code bases
 - Validation/measurement:
   - Use gp_scalar/gp_vec3/gp_quat everywhere (Eigen now float-only); any legacy inputs get cast on entry rather than flowing as double
   - GTest functional checks cover every GP op (math, LUT trig, side-effects) using small synthesized values; no float-vs-double comparisons
-  - We don’t need micro-benchmarks of the bytecode evaluator; just watch macro-level sims/sec (minisim currently ~150–200/s) and crash/nan counts
+  - We don’t need micro-benchmarks of the bytecode evaluator; just watch macro-level sims/sec (minisim ~150–200/s on laptop) and crash/nan counts
+  - CRRCSim AUTOC plugin now uses float/LUT GP stack; desktop runs show ~50 sims/sec on 4c laptop (4–8 threads similar)
 
 ## Components
 - ~/GP/autoc/
@@ -48,9 +50,10 @@ We need to make changes to several code bases
   - autoc.ini is the execution configuration we edit often for various training runs
 - ~/crsim/crrcsim-0.9.13/
   - src/modinput_dev/inputdev_autoc is the interface library from the GP to the simulator
-  - autoc_config.xml is the execution configuration of the sim
+  - src/modinput_dev/inputdev_autoc is now float-only and uses the shared LUT ops; autoc_config.xml stays as-is for scenarios
 - ~/xiao-gp/src
   - msplink.cpp is the primary interface to and from inav (which we won't change but is at ~/inav)
+  - bytecode2cpp-generated program is already unrolled float code; main loop uses the LUT-backed evaluator helpers
 
 ## Steps
 - Identify code in GP that needs to change and strike double everywhere possible (transcendentals, Eigen, transport, fitness)
@@ -60,3 +63,4 @@ We need to make changes to several code bases
   - tighten Eigen usage or hand-roll equivalents where it helps
 - First get things working with minisim, then with crrcsim, then finally with xiao; watch sims/sec instead of micro-benching the bytecode path
 - Add Gtest-based functional checks for each node/op (add, divide, trig, side-effect nodes, stack order) comparing to the canonical float operations on small synthesized values; no float-vs-double comparisons
+- Opcode dispatch note: interpreter still uses a switch/dispatch per opcode; xiao-gp’s generated code is already unrolled. If we chase more CPU wins, consider a jump-table or fully unrolled emitted C for desktop/minisim too, but weigh i-cache size (1050 steps) vs branch cost on nRF52840.
