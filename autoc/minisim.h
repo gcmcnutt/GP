@@ -31,33 +31,33 @@ using boost::format;
 namespace boost {
   namespace serialization {
 
-    // Serialization for Eigen::Vector3d
+    // Serialization for float-based Eigen vector/quaternion used by GP eval
     template<class Archive>
-    void serialize(Archive& ar, Eigen::Vector3d& v, const unsigned int version)
+    void serialize(Archive& ar, gp_vec3& v, const unsigned int version)
     {
       ar& boost::serialization::make_array(v.data(), 3);
     }
 
-    // Serialization for Eigen::Quaterniond
+    // Serialization for Eigen::Quaternion<float>
     template<class Archive>
-    void save(Archive& ar, const Eigen::Quaterniond& q, const unsigned int version)
+    void save(Archive& ar, const gp_quat& q, const unsigned int version)
     {
       ar& boost::serialization::make_array(q.coeffs().data(), 4);
     }
 
     template<class Archive>
-    void load(Archive& ar, Eigen::Quaterniond& q, const unsigned int version)
+    void load(Archive& ar, gp_quat& q, const unsigned int version)
     {
-      Eigen::Vector4d coeffs;
+      Eigen::Matrix<gp_scalar, 4, 1> coeffs;
       ar& boost::serialization::make_array(coeffs.data(), 4);
-      q = Eigen::Quaterniond(coeffs[3], coeffs[0], coeffs[1], coeffs[2]);
+      q = gp_quat(coeffs[3], coeffs[0], coeffs[1], coeffs[2]);
     }
 
   } // namespace serialization
 } // namespace boost
 
 // This macro tells boost to use the save/load functions we just defined for Quaterniond
-BOOST_SERIALIZATION_SPLIT_FREE(Eigen::Quaterniond)
+BOOST_SERIALIZATION_SPLIT_FREE(gp_quat)
 
 
 /*
@@ -217,13 +217,13 @@ struct EvalResults {
     for (int i = 0; i < aircraftStateList.size(); i++) {
       for (int j = 0; j < aircraftStateList.at(i).size(); j++) {
         AircraftState aircraftState = aircraftStateList.at(i).at(j);
-        Eigen::Quaterniond orientQuat = aircraftState.getOrientation();
-        if (!std::isnan(orientQuat.norm()) && std::abs(orientQuat.norm() - 1.0) > 1e-6) {
-          orientQuat.normalize();
+        gp_quat orientQuatF = aircraftState.getOrientation();
+        if (!std::isnan(orientQuatF.norm()) && std::abs(orientQuatF.norm() - 1.0f) > 1e-6f) {
+          orientQuatF.normalize();
         }
 
-        Eigen::Vector3d euler = orientQuat.toRotationMatrix().eulerAngles(2, 1, 0);
-        Eigen::Vector3d eulerWrapped;
+        Eigen::Matrix<gp_scalar, 3, 1> euler = orientQuatF.toRotationMatrix().eulerAngles(2, 1, 0);
+        gp_vec3 eulerWrapped;
         for (int axis = 0; axis < 3; ++axis) {
           eulerWrapped[axis] = std::atan2(std::sin(euler[axis]), std::cos(euler[axis]));
         }
@@ -235,7 +235,7 @@ struct EvalResults {
           % aircraftState.getThisPathIndex()
           % aircraftState.getPosition()[0] % aircraftState.getPosition()[1] % aircraftState.getPosition()[2]
           % eulerWrapped.x() % eulerWrapped.y() % eulerWrapped.z()
-          % orientQuat.w() % orientQuat.x() % orientQuat.y() % orientQuat.z()
+          % orientQuatF.w() % orientQuatF.x() % orientQuatF.y() % orientQuatF.z()
           % aircraftState.getRelVel()
           % aircraftState.getPitchCommand()
           % aircraftState.getRollCommand()

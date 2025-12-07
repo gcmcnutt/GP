@@ -139,29 +139,29 @@ public:
         std::vector<AircraftState> aircraftStateSteps;
 
         // random initial orientation
-        Eigen::Quaterniond aircraft_orientation;
-        Eigen::Vector3d initialPosition;
+        gp_quat aircraft_orientation;
+        gp_vec3 initialPosition;
         {
-          aircraft_orientation = Eigen::Quaterniond::UnitRandom();
+          aircraft_orientation = gp_quat::UnitRandom();
 
-          initialPosition = Eigen::Vector3d((((double)GPrand() / RAND_MAX) - 0.5) * SIM_INITIAL_LOCATION_DITHER,
-            (((double)GPrand() / RAND_MAX) - 0.5) * SIM_INITIAL_LOCATION_DITHER,
-            SIM_INITIAL_ALTITUDE - ((double)GPrand() / RAND_MAX) * SIM_INITIAL_LOCATION_DITHER);
+          initialPosition = gp_vec3((((gp_scalar)GPrand() / RAND_MAX) - 0.5f) * SIM_INITIAL_LOCATION_DITHER,
+            (((gp_scalar)GPrand() / RAND_MAX) - 0.5f) * SIM_INITIAL_LOCATION_DITHER,
+            SIM_INITIAL_ALTITUDE - ((gp_scalar)GPrand() / RAND_MAX) * SIM_INITIAL_LOCATION_DITHER);
 
           // override orientation of aircraft to be upright and level
-          aircraft_orientation = Eigen::Quaterniond(Eigen::AngleAxisd(M_PI, Eigen::Vector3d::UnitZ())) *
-            Eigen::Quaterniond(Eigen::AngleAxisd(0, Eigen::Vector3d::UnitY())) *
-            Eigen::Quaterniond(Eigen::AngleAxisd(0, Eigen::Vector3d::UnitX()));
+          aircraft_orientation = gp_quat(Eigen::AngleAxis<gp_scalar>(static_cast<gp_scalar>(M_PI), gp_vec3::UnitZ())) *
+            gp_quat(Eigen::AngleAxis<gp_scalar>(0, gp_vec3::UnitY())) *
+            gp_quat(Eigen::AngleAxis<gp_scalar>(0, gp_vec3::UnitX()));
 
           // override position of aircraft to be at the origin
-          initialPosition = Eigen::Vector3d(-2.19, 5.49, -36.93);
+          initialPosition = gp_vec3(static_cast<gp_scalar>(-2.19f), static_cast<gp_scalar>(5.49f), static_cast<gp_scalar>(-36.93f));
         }
 
         // compute initial velocity vector based on aircraft orientation (keeping minisim simple)
-        Eigen::Vector3d initial_velocity = aircraft_orientation * Eigen::Vector3d(SIM_INITIAL_VELOCITY, 0, 0);
+        gp_vec3 initial_velocity = aircraft_orientation * gp_vec3(SIM_INITIAL_VELOCITY, 0.0f, 0.0f);
         
         // reset sim state
-        aircraftState = AircraftState{ 0, SIM_INITIAL_VELOCITY, initial_velocity, aircraft_orientation, initialPosition, 0.0, 0.0, SIM_INITIAL_THROTTLE, 0 };
+        aircraftState = AircraftState{ 0, SIM_INITIAL_VELOCITY, initial_velocity, aircraft_orientation, initialPosition, 0.0f, 0.0f, SIM_INITIAL_THROTTLE, 0 };
 
         // Record initial aircraft state at time 0 to match path start
         aircraftStateSteps.push_back(aircraftState);
@@ -192,12 +192,12 @@ public:
 #endif
 
           // Store control values before evaluation for comparison
-          double pre_roll = aircraftState.getRollCommand();
-          double pre_pitch = aircraftState.getPitchCommand();
-          double pre_throttle = aircraftState.getThrottleCommand();
+          gp_scalar pre_roll = aircraftState.getRollCommand();
+          gp_scalar pre_pitch = aircraftState.getPitchCommand();
+          gp_scalar pre_throttle = aircraftState.getThrottleCommand();
           
           // run the controller (GP tree or bytecode interpreter) - BOTH NOW HAVE SAME BASELINE
-          double evaluation_result = 0.0;
+          gp_scalar evaluation_result = 0.0f;
           if (isGPTreeData) {
             evaluation_result = gp.NthMyGene(0)->evaluate(path, gp, 0);
           } else if (isBytecodeData) {
@@ -214,7 +214,7 @@ public:
           aircraftState.setSimTimeMsec(duration_msec);
 
           // did we crash?
-          double distanceFromOrigin = std::sqrt(aircraftState.getPosition()[0] * aircraftState.getPosition()[0] +
+          gp_scalar distanceFromOrigin = std::sqrt(aircraftState.getPosition()[0] * aircraftState.getPosition()[0] +
             aircraftState.getPosition()[1] * aircraftState.getPosition()[1]);
           if (aircraftState.getPosition()[2] < (SIM_MAX_ELEVATION) || // too high
             aircraftState.getPosition()[2] > (SIM_MIN_ELEVATION) || // too low

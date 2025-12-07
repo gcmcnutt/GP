@@ -82,14 +82,14 @@ public:
     
     // Get program information
     const GPBytecodeHeader& getHeader() const { return header; }
-    double getFitness() const { return header.fitness_int / 1000000.0; }
+    gp_scalar getFitness() const { return header.fitness_int / 1000000.0f; }
     uint32_t getLength() const { return header.length; }
     uint32_t getDepth() const { return header.depth; }
     const std::string getS3Key() const { return std::string(header.s3_key); }
     uint32_t getGeneration() const { return header.generation; }
     
     // Main evaluation function - compatible with autoc's existing interface
-    double evaluate(AircraftState& aircraftState, std::vector<Path>& path, double arg);
+    gp_scalar evaluate(AircraftState& aircraftState, std::vector<Path>& path, gp_scalar arg);
     
     // Debug functions
     void printProgram() const;

@@ -6,9 +6,9 @@ void GPEvaluatorDesktop::convertBytecode(const std::vector<struct GPBytecode>& g
     portableBytecode = gpBytecode;
 }
 
-double GPEvaluatorDesktop::evaluateGPBytecode(const std::vector<struct GPBytecode>& program, 
+gp_scalar GPEvaluatorDesktop::evaluateGPBytecode(const std::vector<struct GPBytecode>& program, 
                                              std::vector<Path>& path, AircraftState& aircraftState, 
-                                             double contextArg) {
+                                             gp_scalar contextArg) {
     // Create path provider and evaluate using desktop implementation
     VectorPathProvider pathProvider(path, aircraftState.getThisPathIndex());
     return evaluateBytecodePortable(program.data(), program.size(), 

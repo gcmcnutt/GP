@@ -8,24 +8,24 @@
 // Forward declarations
 struct WorkerContext;
 
-#define FITNESS_DISTANCE_WEIGHT 1.5
-#define FITNESS_ALIGNMENT_WEIGHT 1.3
-#define FITNESS_CONTROL_WEIGHT 1.0
+#define FITNESS_DISTANCE_WEIGHT 1.5f
+#define FITNESS_ALIGNMENT_WEIGHT 1.3f
+#define FITNESS_CONTROL_WEIGHT 1.0f
 
 // Movement efficiency penalty constants - reduced for better exploration
-#define CONTROL_SATURATION_THRESHOLD 0.9
-#define CONTROL_SATURATION_PENALTY 5.0
-#define CONTROL_RATE_PENALTY 2.0
-#define MOVEMENT_EFFICIENCY_WEIGHT 1.5
-#define MOVEMENT_EFFICIENCY_MAX_PENALTY 8.0
+#define CONTROL_SATURATION_THRESHOLD 0.9f
+#define CONTROL_SATURATION_PENALTY 5.0f
+#define CONTROL_RATE_PENALTY 2.0f
+#define MOVEMENT_EFFICIENCY_WEIGHT 1.5f
+#define MOVEMENT_EFFICIENCY_MAX_PENALTY 8.0f
 
 // Cross-track and attitude penalties
-#define CROSS_TRACK_WEIGHT 1.2
-#define CROSS_TRACK_SIGN_THRESHOLD 1.0
-#define CROSS_TRACK_OSC_WEIGHT 1.4
-#define ORIENTATION_TANGENT_WEIGHT 1.1
-#define ORIENTATION_UP_WEIGHT 1.3
-#define PATH_UP_INVERSION_PENALTY 75.0
+#define CROSS_TRACK_WEIGHT 1.2f
+#define CROSS_TRACK_SIGN_THRESHOLD 1.0f
+#define CROSS_TRACK_OSC_WEIGHT 1.4f
+#define ORIENTATION_TANGENT_WEIGHT 1.1f
+#define ORIENTATION_UP_WEIGHT 1.3f
+#define PATH_UP_INVERSION_PENALTY 75.0f
 
 struct WindScenarioConfig {
   unsigned int windSeed = 0;
@@ -105,7 +105,7 @@ public:
 
   // Tree evaluation (not mandatory, but somehow the trees must be
   // parsed to evaluate the fitness)
-  double evaluate(std::vector<Path>& path, MyGP& gp, double arg);
+  gp_scalar evaluate(std::vector<Path>& path, MyGP& gp, gp_scalar arg);
 
   // Load and save (not mandatory)
   MyGene() {}

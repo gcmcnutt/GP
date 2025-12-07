@@ -130,7 +130,7 @@ private:
             case EQ: case GT: case ATAN2: case MIN: case MAX:
                 code << "    // " << opName << "\n";
                 code << "    {\n";
-                code << "        double args[2] = {stack[sp-2], stack[sp-1]};\n";
+                code << "        gp_scalar args[2] = {stack[sp-2], stack[sp-1]};\n";
                 code << "        sp -= 2;\n";
                 code << "        stack[sp++] = evaluateGPOperator(" << opcodeInt << ", pathProvider, aircraftState, args, 2, arg);\n";
                 code << "    }\n";
@@ -142,7 +142,7 @@ private:
             case GETDPHI: case GETDTHETA: case GETDTARGET:
                 code << "    // " << opName << "\n";
                 code << "    {\n";
-                code << "        double args[1] = {stack[sp-1]};\n";
+                code << "        gp_scalar args[1] = {stack[sp-1]};\n";
                 code << "        sp -= 1;\n";
                 code << "        stack[sp++] = evaluateGPOperator(" << opcodeInt << ", pathProvider, aircraftState, args, 1, arg);\n";
                 code << "    }\n";
@@ -152,7 +152,7 @@ private:
             case IF: case CLAMP:
                 code << "    // " << opName << "\n";
                 code << "    {\n";
-                code << "        double args[3] = {stack[sp-3], stack[sp-2], stack[sp-1]};\n";
+                code << "        gp_scalar args[3] = {stack[sp-3], stack[sp-2], stack[sp-1]};\n";
                 code << "        sp -= 3;\n";
                 code << "        stack[sp++] = evaluateGPOperator(" << opcodeInt << ", pathProvider, aircraftState, args, 3, arg);\n";
                 code << "    }\n";
@@ -162,7 +162,7 @@ private:
             case PROGN:
                 code << "    // PROGN\n";
                 code << "    {\n";
-                code << "        double args[2] = {stack[sp-2], stack[sp-1]};\n";
+                code << "        gp_scalar args[2] = {stack[sp-2], stack[sp-1]};\n";
                 code << "        sp -= 2;\n";
                 code << "        stack[sp++] = evaluateGPOperator(" << opcodeInt << ", pathProvider, aircraftState, args, 2, arg);\n";
                 code << "    }\n";
@@ -189,16 +189,16 @@ public:
         code << "//   Generation: " << header.generation << "\n";
         code << "//   Original Length: " << header.length << "\n";
         code << "//   Original Depth: " << header.depth << "\n";
-        code << "//   Fitness: " << (header.fitness_int / 1000000.0) << "\n";
+        code << "//   Fitness: " << (header.fitness_int / 1000000.0f) << "\n";
         code << "//   Bytecode Instructions: " << program_size << "\n";
         code << "//\n";
         code << "#include \"gp_program.h\"\n\n";
         
-        code << "double " << functionName << "(PathProvider& pathProvider, AircraftState& aircraftState, double arg) {\n";
+        code << "gp_scalar " << functionName << "(PathProvider& pathProvider, AircraftState& aircraftState, gp_scalar arg) {\n";
         
         // Analyze bytecode to determine max stack depth
         int maxStack = analyzeStackDepth(program, program_size);
-        code << "    double stack[" << maxStack << "];\n";
+        code << "    gp_scalar stack[" << maxStack << "];\n";
         code << "    int sp = 0;\n\n";
         
         // Generate unrolled execution
@@ -224,7 +224,7 @@ public:
         code << "//   Generation: " << header.generation << "\n";
         code << "//   Original Length: " << header.length << "\n";
         code << "//   Original Depth: " << header.depth << "\n";
-        code << "//   Fitness: " << (header.fitness_int / 1000000.0) << "\n";
+        code << "//   Fitness: " << (header.fitness_int / 1000000.0f) << "\n";
         code << "//   Bytecode Instructions: " << program_size << "\n";
         code << "//\n";
         code << "#include \"gp_program.h\"\n\n";
@@ -252,7 +252,7 @@ public:
         code << "static const int embedded_gp_bytecode_size = " << program_size << ";\n\n";
         
         // Generate evaluation function that uses bytecode interpreter
-        code << "double " << functionName << "(PathProvider& pathProvider, AircraftState& aircraftState, double arg) {\n";
+        code << "gp_scalar " << functionName << "(PathProvider& pathProvider, AircraftState& aircraftState, gp_scalar arg) {\n";
         code << "    // Use portable bytecode evaluator for consistent behavior\n";
         code << "    return evaluateBytecodePortable(embedded_gp_bytecode, embedded_gp_bytecode_size, pathProvider, aircraftState, arg);\n";
         code << "}\n";

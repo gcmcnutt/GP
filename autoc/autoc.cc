@@ -148,25 +148,25 @@ void rebuildGenerationScenarios(const std::vector<std::vector<Path>>& basePaths)
 }
 
 struct PathFrame {
-  Eigen::Vector3d tangent = Eigen::Vector3d::UnitX();
-  Eigen::Vector3d insideNormal = Eigen::Vector3d::UnitZ();
-  Eigen::Vector3d binormal = Eigen::Vector3d::UnitY();
+  gp_vec3 tangent = gp_vec3::UnitX();
+  gp_vec3 insideNormal = gp_vec3::UnitZ();
+  gp_vec3 binormal = gp_vec3::UnitY();
 };
 
-static Eigen::Vector3d safeSegmentDirection(const std::vector<Path>& path, int idxA, int idxB) {
+static gp_vec3 safeSegmentDirection(const std::vector<Path>& path, int idxA, int idxB) {
   if (path.empty()) {
-    return Eigen::Vector3d::UnitX();
+    return gp_vec3::UnitX();
   }
   const int last = static_cast<int>(path.size()) - 1;
   idxA = std::clamp(idxA, 0, last);
   idxB = std::clamp(idxB, 0, last);
   if (idxA == idxB) {
-    return Eigen::Vector3d::UnitX();
+    return gp_vec3::UnitX();
   }
-  Eigen::Vector3d delta = path[idxB].start - path[idxA].start;
-  const double norm = delta.norm();
-  if (norm < 1e-5) {
-    return Eigen::Vector3d::UnitX();
+  gp_vec3 delta = path[idxB].start - path[idxA].start;
+  const gp_scalar norm = delta.norm();
+  if (norm < static_cast<gp_scalar>(1e-5)) {
+    return gp_vec3::UnitX();
   }
   return delta / norm;
 }
@@ -183,36 +183,36 @@ static PathFrame computePathFrame(const std::vector<Path>& path, int index) {
   const int nextIdx = std::min(clamped + 1, last);
 
   frame.tangent = safeSegmentDirection(path, clamped, nextIdx);
-  Eigen::Vector3d prevDir = safeSegmentDirection(path, prevIdx, clamped);
-  Eigen::Vector3d nextDir = safeSegmentDirection(path, clamped, nextIdx);
+  gp_vec3 prevDir = safeSegmentDirection(path, prevIdx, clamped);
+  gp_vec3 nextDir = safeSegmentDirection(path, clamped, nextIdx);
 
-  Eigen::Vector3d curvature = nextDir - prevDir;
+  gp_vec3 curvature = nextDir - prevDir;
   // Remove any component that lies along the tangent
   curvature -= curvature.dot(frame.tangent) * frame.tangent;
 
-  if (curvature.norm() < 1e-5) {
-    curvature = frame.tangent.cross(Eigen::Vector3d::UnitZ());
-    if (curvature.norm() < 1e-5) {
-      curvature = frame.tangent.cross(Eigen::Vector3d::UnitY());
+  if (curvature.norm() < static_cast<gp_scalar>(1e-5)) {
+    curvature = frame.tangent.cross(gp_vec3::UnitZ());
+    if (curvature.norm() < static_cast<gp_scalar>(1e-5)) {
+      curvature = frame.tangent.cross(gp_vec3::UnitY());
     }
   }
-  if (curvature.norm() < 1e-5) {
-    curvature = Eigen::Vector3d::UnitZ();
+  if (curvature.norm() < static_cast<gp_scalar>(1e-5)) {
+    curvature = gp_vec3::UnitZ();
   }
   frame.insideNormal = curvature.normalized();
 
   // Ensure the normal truly points "inside" the current turn (toward curvature)
-  const Eigen::Vector3d rawCurvature = nextDir - prevDir;
-  if (rawCurvature.norm() > 1e-5 && rawCurvature.dot(frame.insideNormal) < 0.0) {
+  const gp_vec3 rawCurvature = nextDir - prevDir;
+  if (rawCurvature.norm() > static_cast<gp_scalar>(1e-5) && rawCurvature.dot(frame.insideNormal) < 0.0f) {
     frame.insideNormal = -frame.insideNormal;
   }
 
   frame.binormal = frame.tangent.cross(frame.insideNormal);
-  if (frame.binormal.norm() < 1e-5) {
-    frame.binormal = frame.tangent.cross(Eigen::Vector3d::UnitX());
+  if (frame.binormal.norm() < static_cast<gp_scalar>(1e-5)) {
+    frame.binormal = frame.tangent.cross(gp_vec3::UnitX());
   }
-  if (frame.binormal.norm() < 1e-5) {
-    frame.binormal = Eigen::Vector3d::UnitY();
+  if (frame.binormal.norm() < static_cast<gp_scalar>(1e-5)) {
+    frame.binormal = gp_vec3::UnitY();
   }
   frame.binormal.normalize();
 
@@ -358,14 +358,14 @@ public:
         }
         for (int start = 0; start < containerSize(); start += demeSize) {
           int end = std::min(start + demeSize, containerSize());
-          double bestFitness = std::numeric_limits<double>::infinity();
+          gp_scalar bestFitness = std::numeric_limits<gp_scalar>::infinity();
           int bestIndex = start;
           for (int idx = start; idx < end; ++idx) {
             MyGP* candidate = NthMyGP(idx);
             if (!candidate) {
               continue;
             }
-            double fitness = candidate->getFitness();
+            gp_scalar fitness = static_cast<gp_scalar>(candidate->getFitness());
             if (!std::isfinite(fitness)) {
               continue;
             }
@@ -387,7 +387,7 @@ public:
       MyGP* best = nullptr;
 
       if (!generationScenarios.empty()) {
-        double bestAggregatedFitness = std::numeric_limits<double>::infinity();
+        gp_scalar bestAggregatedFitness = std::numeric_limits<gp_scalar>::infinity();
         EvalResults* previousCollector = activeEvalCollector;
 
         for (int candidateIndex : candidateIndices) {
@@ -404,7 +404,7 @@ public:
           aggregatedEvalResults.scenario.windSeed = 0;
           activeEvalCollector = &aggregatedEvalResults;
 
-          double cumulativeFitness = 0.0;
+          gp_scalar cumulativeFitness = 0.0f;
           size_t scenariosEvaluated = 0;
 
           for (size_t scenarioIdx = 0; scenarioIdx < generationScenarios.size(); ++scenarioIdx) {
@@ -413,16 +413,16 @@ public:
               candidate->evalTask(context);
             });
             threadPool->wait_for_tasks();
-            cumulativeFitness += candidate->getFitness();
+            cumulativeFitness += static_cast<gp_scalar>(candidate->getFitness());
             ++scenariosEvaluated;
           }
 
           candidate->setScenarioIndex(originalScenarioIndex);
           candidate->setBakeoffMode(false);
 
-          double averageFitness = scenariosEvaluated > 0
-            ? cumulativeFitness / static_cast<double>(scenariosEvaluated)
-            : std::numeric_limits<double>::infinity();
+          gp_scalar averageFitness = scenariosEvaluated > 0
+            ? cumulativeFitness / static_cast<gp_scalar>(scenariosEvaluated)
+            : std::numeric_limits<gp_scalar>::infinity();
 
           if (averageFitness < bestAggregatedFitness) {
             bestAggregatedFitness = averageFitness;
@@ -609,25 +609,25 @@ void MyGP::evalTask(WorkerContext& context)
     }
 
     // compute this path fitness
-    double localFitness = 0;
+    gp_scalar localFitness = 0.0f;
     int stepIndex = 0; // where are we on the flight path?
 
     // error accumulators
-    double distance_error_sum = 0;
-    double angle_error_sum = 0;
-    double movement_efficiency_sum = 0;
-    double cross_track_error_sum = 0;
-    double cross_track_osc_sum = 0;
+    gp_scalar distance_error_sum = 0.0f;
+    gp_scalar angle_error_sum = 0.0f;
+    gp_scalar movement_efficiency_sum = 0.0f;
+    gp_scalar cross_track_error_sum = 0.0f;
+    gp_scalar cross_track_osc_sum = 0.0f;
     int cross_track_osc_events = 0;
-    double orientation_alignment_sum = 0;
-    double prev_cross_track_signed = 0;
+    gp_scalar orientation_alignment_sum = 0.0f;
+    gp_scalar prev_cross_track_signed = 0.0f;
     bool has_prev_cross_track = false;
     int simulation_steps = 0;
 
     // initial states
-    double roll_prev = aircraftState.at(stepIndex).getRollCommand();
-    double pitch_prev = aircraftState.at(stepIndex).getPitchCommand();
-    double throttle_prev = aircraftState.at(stepIndex).getThrottleCommand();
+    gp_scalar roll_prev = aircraftState.at(stepIndex).getRollCommand();
+    gp_scalar pitch_prev = aircraftState.at(stepIndex).getPitchCommand();
+    gp_scalar throttle_prev = aircraftState.at(stepIndex).getThrottleCommand();
 
     // now walk next steps of actual path
     while (++stepIndex < aircraftState.size()) {
@@ -638,50 +638,50 @@ void MyGP::evalTask(WorkerContext& context)
       PathFrame frame = computePathFrame(path, pathIndex);
       int nextIndex = std::min(pathIndex + 1, static_cast<int>(path.size()) - 1);
 
-      Eigen::Vector3d aircraftPosition = stepAircraftState.getPosition();
+      gp_vec3 aircraftPosition = stepAircraftState.getPosition();
 
       // Compute the distance between the aircraft and the goal
-      double distanceFromGoal = (currentPathPoint.start - aircraftPosition).norm();
-      distanceFromGoal = distanceFromGoal * 100.0 / (2 * SIM_PATH_RADIUS_LIMIT);
+      gp_scalar distanceFromGoal = (currentPathPoint.start - aircraftPosition).norm();
+      distanceFromGoal = distanceFromGoal * static_cast<gp_scalar>(100.0f) / (static_cast<gp_scalar>(2.0f) * SIM_PATH_RADIUS_LIMIT);
 
       // Compute vector from me to target using local Frenet frame to avoid gimbal issues
-      Eigen::Vector3d target_direction = path.at(nextIndex).start - currentPathPoint.start;
-      if (target_direction.norm() < 1e-5) {
+      gp_vec3 target_direction = path.at(nextIndex).start - currentPathPoint.start;
+      if (target_direction.norm() < static_cast<gp_scalar>(1e-5)) {
         target_direction = frame.tangent;
       }
-      Eigen::Vector3d aircraft_to_target = currentPathPoint.start - aircraftPosition;
-      double angle_rad = 0.0;
-      double angle_denom = target_direction.norm() * aircraft_to_target.norm();
-      if (angle_denom > 1e-5) {
-        angle_rad = std::acos(std::clamp(target_direction.dot(aircraft_to_target) / angle_denom, -1.0, 1.0));
+      gp_vec3 aircraft_to_target = currentPathPoint.start - aircraftPosition;
+      gp_scalar angle_rad = 0.0f;
+      gp_scalar angle_denom = target_direction.norm() * aircraft_to_target.norm();
+      if (angle_denom > static_cast<gp_scalar>(1e-5)) {
+        angle_rad = std::acos(std::clamp(target_direction.dot(aircraft_to_target) / angle_denom, -1.0f, 1.0f));
       }
-      angle_rad = angle_rad * 100.0 / M_PI;
+      angle_rad = angle_rad * static_cast<gp_scalar>(100.0f) / static_cast<gp_scalar>(M_PI);
 
-      Eigen::Quaterniond craftOrientation = stepAircraftState.getOrientation();
-      Eigen::Vector3d aircraftForward = craftOrientation * Eigen::Vector3d::UnitX();
-      Eigen::Vector3d aircraftUp = craftOrientation * Eigen::Vector3d::UnitZ();
+      gp_quat craftOrientation = stepAircraftState.getOrientation();
+      gp_vec3 aircraftForward = craftOrientation * gp_vec3::UnitX();
+      gp_vec3 aircraftUp = craftOrientation * gp_vec3::UnitZ();
 
-      double crossTrackPercentForLog = 0.0;
-      double oscillationPercentForLog = 0.0;
-      double orientationPenaltyForLog = 0.0;
+      gp_scalar crossTrackPercentForLog = 0.0f;
+      gp_scalar oscillationPercentForLog = 0.0f;
+      gp_scalar orientationPenaltyForLog = 0.0f;
 
       // Cross-track error measured in the plane perpendicular to the tangent
-      Eigen::Vector3d craftOffset = aircraftPosition - currentPathPoint.start;
-      Eigen::Vector3d lateral = craftOffset - frame.tangent * craftOffset.dot(frame.tangent);
-      double crossTrackSigned = lateral.dot(frame.insideNormal);
-      double crossTrackMagnitude = lateral.norm();
-      if (SIM_PATH_RADIUS_LIMIT > 0.0) {
-        crossTrackPercentForLog = (crossTrackMagnitude * 100.0) / SIM_PATH_RADIUS_LIMIT;
+      gp_vec3 craftOffset = aircraftPosition - currentPathPoint.start;
+      gp_vec3 lateral = craftOffset - frame.tangent * craftOffset.dot(frame.tangent);
+      gp_scalar crossTrackSigned = lateral.dot(frame.insideNormal);
+      gp_scalar crossTrackMagnitude = lateral.norm();
+      if (SIM_PATH_RADIUS_LIMIT > 0.0f) {
+        crossTrackPercentForLog = (crossTrackMagnitude * static_cast<gp_scalar>(100.0f)) / SIM_PATH_RADIUS_LIMIT;
         cross_track_error_sum += pow(crossTrackPercentForLog, CROSS_TRACK_WEIGHT);
       }
 
-      double oscillationPercent = 0.0;
+      gp_scalar oscillationPercent = 0.0f;
       bool oscillationTriggered = false;
       if (has_prev_cross_track) {
         if ((crossTrackSigned > CROSS_TRACK_SIGN_THRESHOLD && prev_cross_track_signed < -CROSS_TRACK_SIGN_THRESHOLD) ||
             (crossTrackSigned < -CROSS_TRACK_SIGN_THRESHOLD && prev_cross_track_signed > CROSS_TRACK_SIGN_THRESHOLD)) {
-          double denomOsc = std::max(1.0, 2.0 * SIM_PATH_RADIUS_LIMIT);
-          oscillationPercent = (std::abs(prev_cross_track_signed) + std::abs(crossTrackSigned)) * 100.0 / denomOsc;
+          gp_scalar denomOsc = std::max(1.0f, static_cast<gp_scalar>(2.0f) * SIM_PATH_RADIUS_LIMIT);
+          oscillationPercent = (std::abs(prev_cross_track_signed) + std::abs(crossTrackSigned)) * static_cast<gp_scalar>(100.0f) / denomOsc;
           cross_track_osc_sum += pow(oscillationPercent, CROSS_TRACK_OSC_WEIGHT);
           cross_track_osc_events++;
           oscillationTriggered = true;
@@ -692,48 +692,48 @@ void MyGP::evalTask(WorkerContext& context)
       has_prev_cross_track = true;
 
       // Quaternion-based orientation alignment (avoid gimbal lock)
-      double forwardDot = std::clamp(aircraftForward.dot(frame.tangent), -1.0, 1.0);
-      double upDot = std::clamp(aircraftUp.dot(frame.insideNormal), -1.0, 1.0);
-      double forwardAngle = std::acos(forwardDot);
-      double upAngle = std::acos(upDot);
-      double forwardPercent = (forwardAngle * 100.0) / M_PI;
-      double upPercent = (upAngle * 100.0) / M_PI;
-      double orientationStep = pow(forwardPercent, ORIENTATION_TANGENT_WEIGHT) +
+      gp_scalar forwardDot = std::clamp(aircraftForward.dot(frame.tangent), -1.0f, 1.0f);
+      gp_scalar upDot = std::clamp(aircraftUp.dot(frame.insideNormal), -1.0f, 1.0f);
+      gp_scalar forwardAngle = std::acos(forwardDot);
+      gp_scalar upAngle = std::acos(upDot);
+      gp_scalar forwardPercent = (forwardAngle * static_cast<gp_scalar>(100.0f)) / static_cast<gp_scalar>(M_PI);
+      gp_scalar upPercent = (upAngle * static_cast<gp_scalar>(100.0f)) / static_cast<gp_scalar>(M_PI);
+      gp_scalar orientationStep = pow(forwardPercent, ORIENTATION_TANGENT_WEIGHT) +
                                pow(upPercent, ORIENTATION_UP_WEIGHT);
-      double inversionPenalty = (upDot < 0.0) ? (-upDot) * PATH_UP_INVERSION_PENALTY : 0.0;
+      gp_scalar inversionPenalty = (upDot < 0.0f) ? (-upDot) * PATH_UP_INVERSION_PENALTY : 0.0f;
       orientation_alignment_sum += orientationStep + inversionPenalty;
       orientationPenaltyForLog = orientationStep + inversionPenalty;
 
       // Movement efficiency: compare aircraft movement to optimal path movement
-      double movement_efficiency = 0.0;
+      gp_scalar movement_efficiency = 0.0f;
       if (stepIndex > 1 && pathIndex < path.size() - 1) {
         // Aircraft movement since last step
-        Eigen::Vector3d aircraft_movement = stepAircraftState.getPosition() - aircraftState.at(stepIndex-1).getPosition();
-        double aircraft_distance = aircraft_movement.norm();
+        gp_vec3 aircraft_movement = stepAircraftState.getPosition() - aircraftState.at(stepIndex-1).getPosition();
+        gp_scalar aircraft_distance = aircraft_movement.norm();
         
         // Optimal path movement (direction from current waypoint to next)
         int movementNextIndex = std::min(pathIndex + 1, static_cast<int>(path.size()) - 1);
-        Eigen::Vector3d path_direction = path.at(movementNextIndex).start - path.at(pathIndex).start;
-        if (path_direction.norm() < 1e-5) {
+        gp_vec3 path_direction = path.at(movementNextIndex).start - path.at(pathIndex).start;
+        if (path_direction.norm() < static_cast<gp_scalar>(1e-5)) {
           path_direction = frame.tangent;
         } else {
           path_direction.normalize();
         }
-        double optimal_distance = aircraft_distance; // Same distance, optimal direction
+        gp_scalar optimal_distance = aircraft_distance; // Same distance, optimal direction
         
-        if (aircraft_distance > 0.1) { // Avoid division by zero
+        if (aircraft_distance > static_cast<gp_scalar>(0.1f)) { // Avoid division by zero
           // Compare directions: dot product shows alignment (-1 to +1)
-          double direction_alignment = aircraft_movement.normalized().dot(path_direction);
+          gp_scalar direction_alignment = aircraft_movement.normalized().dot(path_direction);
           
           // Movement efficiency penalty: 0 = perfect alignment, 2 = opposite direction
-          movement_efficiency = (1.0 - direction_alignment); // 0 to 2 range
+          movement_efficiency = (static_cast<gp_scalar>(1.0f) - direction_alignment); // 0 to 2 range
           
           // Additional penalty for excessive turning/rolling
-          double current_roll = abs(stepAircraftState.getRollCommand());
-          double current_pitch = abs(stepAircraftState.getPitchCommand());
+          gp_scalar current_roll = abs(stepAircraftState.getRollCommand());
+          gp_scalar current_pitch = abs(stepAircraftState.getPitchCommand());
           
           // Control saturation penalty - heavily penalize near ±1.0 commands
-          double saturation_penalty = 0.0;
+          gp_scalar saturation_penalty = 0.0f;
           if (current_roll > CONTROL_SATURATION_THRESHOLD) {
             saturation_penalty += (current_roll - CONTROL_SATURATION_THRESHOLD) * CONTROL_SATURATION_PENALTY;
           }
@@ -742,26 +742,26 @@ void MyGP::evalTask(WorkerContext& context)
           }
           
           // Control rate penalty - penalize rapid changes (bang-bang behavior)
-          double roll_change = abs(stepAircraftState.getRollCommand() - roll_prev);
-          double pitch_change = abs(stepAircraftState.getPitchCommand() - pitch_prev);
-          double control_rate_penalty = (roll_change + pitch_change) * CONTROL_RATE_PENALTY;
+          gp_scalar roll_change = abs(stepAircraftState.getRollCommand() - roll_prev);
+          gp_scalar pitch_change = abs(stepAircraftState.getPitchCommand() - pitch_prev);
+          gp_scalar control_rate_penalty = (roll_change + pitch_change) * CONTROL_RATE_PENALTY;
           
           // Estimate "optimal" control needed for this path segment
           // Simple model: straight segments need minimal control, curves need some roll
-          Eigen::Vector3d prev_path_dir = (pathIndex > 0) ?
+          gp_vec3 prev_path_dir = (pathIndex > 0) ?
             (path.at(pathIndex).start - path.at(pathIndex-1).start) : path_direction;
-          if (prev_path_dir.norm() < 1e-5) {
+          if (prev_path_dir.norm() < static_cast<gp_scalar>(1e-5)) {
             prev_path_dir = frame.tangent;
           } else {
             prev_path_dir.normalize();
           }
-          double path_curvature = (1.0 - prev_path_dir.dot(path_direction)); // 0 to 2
-          double optimal_roll = path_curvature * 0.3; // Scale to reasonable roll estimate
-          double optimal_pitch = 0.1; // Assume minimal pitch needed
+          gp_scalar path_curvature = (static_cast<gp_scalar>(1.0f) - prev_path_dir.dot(path_direction)); // 0 to 2
+          gp_scalar optimal_roll = path_curvature * static_cast<gp_scalar>(0.3f); // Scale to reasonable roll estimate
+          gp_scalar optimal_pitch = static_cast<gp_scalar>(0.1f); // Assume minimal pitch needed
           
           // Penalty for excessive control relative to path requirements
-          double control_excess = (current_roll - optimal_roll) + (current_pitch - optimal_pitch);
-          control_excess = std::max(0.0, control_excess); // Only penalize excess, not deficit
+          gp_scalar control_excess = (current_roll - optimal_roll) + (current_pitch - optimal_pitch);
+          control_excess = std::max(static_cast<gp_scalar>(0.0f), control_excess); // Only penalize excess, not deficit
           
           movement_efficiency += control_excess * 0.5; // Add control excess penalty
           movement_efficiency += saturation_penalty; // Add saturation penalty
@@ -769,7 +769,7 @@ void MyGP::evalTask(WorkerContext& context)
         }
       }
       // Normalize to [100:0] scale - increased max penalty due to saturation/rate penalties  
-      movement_efficiency = movement_efficiency * 100.0 / MOVEMENT_EFFICIENCY_MAX_PENALTY;
+      movement_efficiency = movement_efficiency * static_cast<gp_scalar>(100.0f) / static_cast<gp_scalar>(MOVEMENT_EFFICIENCY_MAX_PENALTY);
 
       // ready for next cycle
       roll_prev = stepAircraftState.getRollCommand();
@@ -791,24 +791,24 @@ void MyGP::evalTask(WorkerContext& context)
         }
 
         // convert aircraft_orientaton to euler
-        Eigen::Matrix3d rotMatrix = craftOrientation.toRotationMatrix();
+        Eigen::Matrix3f rotMatrix = craftOrientation.toRotationMatrix();
 
         // Extract Euler angles
         // Note: atan2 returns angle in range [-pi, pi]
-        Eigen::Vector3d euler;
+        gp_vec3 euler;
 
         // Handle special case near pitch = ±90° (gimbal lock)
-        if (std::abs(rotMatrix(2, 0)) > 0.99999) {
+        if (std::abs(rotMatrix(2, 0)) > static_cast<gp_scalar>(0.99999f)) {
           // Gimbal lock case
           euler[0] = 0; // Roll becomes undefined, set to zero
 
           // Determine pitch based on r31 sign
           if (rotMatrix(2, 0) > 0) {
-            euler[1] = -M_PI / 2; // pitch = -90°
+            euler[1] = -static_cast<gp_scalar>(M_PI / 2.0);
             euler[2] = -atan2(rotMatrix(1, 2), rotMatrix(0, 2)); // yaw
           }
           else {
-            euler[1] = M_PI / 2;  // pitch = 90°
+            euler[1] = static_cast<gp_scalar>(M_PI / 2.0);
             euler[2] = atan2(rotMatrix(1, 2), rotMatrix(0, 2)); // yaw
           }
         }
@@ -820,25 +820,25 @@ void MyGP::evalTask(WorkerContext& context)
         }
 
         // Calculate body-frame velocity for GP operators
-        Eigen::Vector3d velocity_body = stepAircraftState.getOrientation().inverse() *
-                                         stepAircraftState.getVelocity();
+        gp_vec3 velocity_body = stepAircraftState.getOrientation().inverse() *
+                                 stepAircraftState.getVelocity();
 
         // Calculate GP operator values (matching GP/autoc/gp_operators.h)
-        double alpha_deg = atan2(-velocity_body.z(), velocity_body.x()) * 180.0 / M_PI;  // GETALPHA
-        double beta_deg = atan2(velocity_body.y(), velocity_body.x()) * 180.0 / M_PI;    // GETBETA
+        gp_scalar alpha_deg = atan2(-velocity_body.z(), velocity_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);  // GETALPHA
+        gp_scalar beta_deg = atan2(velocity_body.y(), velocity_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);    // GETBETA
 
         // Calculate angle to target in body frame (GETDTHETA, GETDPHI)
-        Eigen::Vector3d craftToTarget = path.at(pathIndex).start - stepAircraftState.getPosition();
-        Eigen::Vector3d target_body = stepAircraftState.getOrientation().inverse() * craftToTarget;
-        double dtheta_deg = atan2(-target_body.z(), target_body.x()) * 180.0 / M_PI;    // GETDTHETA
-        double dphi_deg = atan2(target_body.y(), target_body.x()) * 180.0 / M_PI;       // GETDPHI
+        gp_vec3 craftToTarget = path.at(pathIndex).start - stepAircraftState.getPosition();
+        gp_vec3 target_body = stepAircraftState.getOrientation().inverse() * craftToTarget;
+        gp_scalar dtheta_deg = atan2(-target_body.z(), target_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);    // GETDTHETA
+        gp_scalar dphi_deg = atan2(target_body.y(), target_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);       // GETDPHI
 
         // Distance to home (GETDHOME)
-        Eigen::Vector3d home(0, 0, SIM_INITIAL_ALTITUDE);
-        double dhome = (home - stepAircraftState.getPosition()).norm();
+        gp_vec3 home(0, 0, SIM_INITIAL_ALTITUDE);
+        gp_scalar dhome = (home - stepAircraftState.getPosition()).norm();
 
         // Get raw quaternion
-        Eigen::Quaterniond q = craftOrientation;
+        gp_quat q = craftOrientation;
 
         char outbuf[1600]; // XXX use c++20
         sprintf(outbuf, "%06llu %06llu %03d/%02d:%04d: %06ld %3d % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.4f % 7.4f % 7.4f % 7.4f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.2f % 7.2f % 7.2f\n",
@@ -878,14 +878,14 @@ void MyGP::evalTask(WorkerContext& context)
     }
 
     // tally up the normlized fitness based on steps and progress
-    double normalized_distance_error = (distance_error_sum / simulation_steps);
-    double normalized_angle_align = (angle_error_sum / simulation_steps);
-    double normalized_movement_efficiency = (movement_efficiency_sum / simulation_steps);
-    double normalized_cross_track = (cross_track_error_sum / simulation_steps);
-    double normalized_cross_track_osc = cross_track_osc_events > 0
+    gp_scalar normalized_distance_error = (distance_error_sum / simulation_steps);
+    gp_scalar normalized_angle_align = (angle_error_sum / simulation_steps);
+    gp_scalar normalized_movement_efficiency = (movement_efficiency_sum / simulation_steps);
+    gp_scalar normalized_cross_track = (cross_track_error_sum / simulation_steps);
+    gp_scalar normalized_cross_track_osc = cross_track_osc_events > 0
       ? (cross_track_osc_sum / cross_track_osc_events)
-      : 0.0;
-    double normalized_orientation_penalty = (orientation_alignment_sum / simulation_steps);
+      : 0.0f;
+    gp_scalar normalized_orientation_penalty = (orientation_alignment_sum / simulation_steps);
     localFitness = normalized_distance_error + normalized_angle_align + normalized_movement_efficiency
       + normalized_cross_track + normalized_cross_track_osc + normalized_orientation_penalty;
 
@@ -894,7 +894,7 @@ void MyGP::evalTask(WorkerContext& context)
     }
 
     if (crashReason != CrashReason::None) {
-      double fractional_distance_remaining = 1.0 - path.at(aircraftState.back().getThisPathIndex()).distanceFromStart / path.back().distanceFromStart;
+      gp_scalar fractional_distance_remaining = static_cast<gp_scalar>(1.0f) - path.at(aircraftState.back().getThisPathIndex()).distanceFromStart / path.back().distanceFromStart;
       localFitness += SIM_CRASH_PENALTY * fractional_distance_remaining;
     }
 
@@ -1003,10 +1003,12 @@ int main(int argc, char** argv)
   uint64_t lastSimRunCount = 0;
   auto logGenerationStats = [&](int genIndex) {
     auto now = std::chrono::steady_clock::now();
-    double deltaSec = std::chrono::duration<double>(now - lastThroughputTime).count();
+    gp_scalar deltaSec = std::chrono::duration<gp_scalar>(now - lastThroughputTime).count();
     uint64_t currentRuns = globalSimRunCounter.load(std::memory_order_relaxed);
     uint64_t deltaRuns = currentRuns - lastSimRunCount;
-    double rate = (deltaSec > 0.0) ? static_cast<double>(deltaRuns) / deltaSec : 0.0;
+    gp_scalar rate = (deltaSec > static_cast<gp_scalar>(0.0f))
+      ? static_cast<gp_scalar>(deltaRuns) / deltaSec
+      : static_cast<gp_scalar>(0.0f);
     bout << std::fixed << std::setprecision(2)
          << "#GenSimStats gen=" << genIndex
          << " sims=" << deltaRuns
@@ -1137,23 +1139,23 @@ int main(int argc, char** argv)
             windSeed = context.evalResults.scenarioList.at(i).windSeed;
           }
 
-          double localFitness = 0;
+          gp_scalar localFitness = 0;
           int stepIndex = 0;
           
-          double distance_error_sum = 0;
-          double angle_error_sum = 0;
-          double movement_efficiency_sum = 0;
-          double cross_track_error_sum = 0;
-          double cross_track_osc_sum = 0;
+          gp_scalar distance_error_sum = 0;
+          gp_scalar angle_error_sum = 0;
+          gp_scalar movement_efficiency_sum = 0;
+          gp_scalar cross_track_error_sum = 0;
+          gp_scalar cross_track_osc_sum = 0;
           int cross_track_osc_events = 0;
-          double orientation_alignment_sum = 0;
-          double prev_cross_track_signed = 0;
+          gp_scalar orientation_alignment_sum = 0;
+          gp_scalar prev_cross_track_signed = 0;
           bool has_prev_cross_track = false;
           int simulation_steps = 0;
           
-          double roll_prev = aircraftState.at(stepIndex).getRollCommand();
-          double pitch_prev = aircraftState.at(stepIndex).getPitchCommand();
-          double throttle_prev = aircraftState.at(stepIndex).getThrottleCommand();
+          gp_scalar roll_prev = aircraftState.at(stepIndex).getRollCommand();
+          gp_scalar pitch_prev = aircraftState.at(stepIndex).getPitchCommand();
+          gp_scalar throttle_prev = aircraftState.at(stepIndex).getThrottleCommand();
           
           while (++stepIndex < aircraftState.size()) {
             auto& stepAircraftState = aircraftState.at(stepIndex);
@@ -1163,46 +1165,49 @@ int main(int argc, char** argv)
             PathFrame frame = computePathFrame(path, pathIndex);
             int nextIndex = std::min(pathIndex + 1, static_cast<int>(path.size()) - 1);
             
-            Eigen::Vector3d aircraftPosition = stepAircraftState.getPosition();
-            double distanceFromGoal = (currentPathPoint.start - aircraftPosition).norm();
-            distanceFromGoal = distanceFromGoal * 100.0 / (2 * SIM_PATH_RADIUS_LIMIT);
+            gp_vec3 aircraftPosition = stepAircraftState.getPosition();
+            gp_scalar distanceFromGoal = (currentPathPoint.start - aircraftPosition).norm();
+            distanceFromGoal = distanceFromGoal * static_cast<gp_scalar>(100.0f) / (static_cast<gp_scalar>(2.0f) * SIM_PATH_RADIUS_LIMIT);
             
-            Eigen::Vector3d target_direction = path.at(nextIndex).start - currentPathPoint.start;
-            if (target_direction.norm() < 1e-5) {
+            gp_vec3 target_direction = path.at(nextIndex).start - currentPathPoint.start;
+            if (target_direction.norm() < static_cast<gp_scalar>(1e-5f)) {
               target_direction = frame.tangent;
             }
-            Eigen::Vector3d aircraft_to_target = currentPathPoint.start - aircraftPosition;
-            double angle_rad = 0.0;
-            double angle_denom = target_direction.norm() * aircraft_to_target.norm();
-            if (angle_denom > 1e-5) {
-              angle_rad = std::acos(std::clamp(target_direction.dot(aircraft_to_target) / angle_denom, -1.0, 1.0));
+            gp_vec3 aircraft_to_target = currentPathPoint.start - aircraftPosition;
+            gp_scalar angle_rad = 0.0f;
+            gp_scalar angle_denom = target_direction.norm() * aircraft_to_target.norm();
+            if (angle_denom > static_cast<gp_scalar>(1e-5f)) {
+              angle_rad = static_cast<gp_scalar>(
+                std::acos(std::clamp(target_direction.dot(aircraft_to_target) / angle_denom,
+                                     static_cast<gp_scalar>(-1.0f),
+                                     static_cast<gp_scalar>(1.0f))));
             }
-            angle_rad = angle_rad * 100.0 / M_PI;
+            angle_rad = angle_rad * static_cast<gp_scalar>(100.0f) / static_cast<gp_scalar>(M_PI);
 
-            Eigen::Quaterniond craftOrientation = stepAircraftState.getOrientation();
-            Eigen::Vector3d aircraftForward = craftOrientation * Eigen::Vector3d::UnitX();
-            Eigen::Vector3d aircraftUp = craftOrientation * Eigen::Vector3d::UnitZ();
+            gp_quat craftOrientation = stepAircraftState.getOrientation();
+            gp_vec3 aircraftForward = craftOrientation * gp_vec3::UnitX();
+            gp_vec3 aircraftUp = craftOrientation * gp_vec3::UnitZ();
 
-            double crossTrackPercentForLog = 0.0;
-            double oscillationPercentForLog = 0.0;
-            double orientationPenaltyForLog = 0.0;
+            gp_scalar crossTrackPercentForLog = 0.0f;
+            gp_scalar oscillationPercentForLog = 0.0f;
+            gp_scalar orientationPenaltyForLog = 0.0f;
 
-            Eigen::Vector3d craftOffset = aircraftPosition - currentPathPoint.start;
-            Eigen::Vector3d lateral = craftOffset - frame.tangent * craftOffset.dot(frame.tangent);
-            double crossTrackSigned = lateral.dot(frame.insideNormal);
-            double crossTrackMagnitude = lateral.norm();
-            if (SIM_PATH_RADIUS_LIMIT > 0.0) {
-              crossTrackPercentForLog = (crossTrackMagnitude * 100.0) / SIM_PATH_RADIUS_LIMIT;
+            gp_vec3 craftOffset = aircraftPosition - currentPathPoint.start;
+            gp_vec3 lateral = craftOffset - frame.tangent * craftOffset.dot(frame.tangent);
+            gp_scalar crossTrackSigned = lateral.dot(frame.insideNormal);
+            gp_scalar crossTrackMagnitude = lateral.norm();
+            if (SIM_PATH_RADIUS_LIMIT > static_cast<gp_scalar>(0.0f)) {
+              crossTrackPercentForLog = (crossTrackMagnitude * static_cast<gp_scalar>(100.0f)) / SIM_PATH_RADIUS_LIMIT;
               cross_track_error_sum += pow(crossTrackPercentForLog, CROSS_TRACK_WEIGHT);
             }
 
-            double oscillationPercent = 0.0;
+            gp_scalar oscillationPercent = 0.0f;
             bool oscillationTriggered = false;
             if (has_prev_cross_track) {
               if ((crossTrackSigned > CROSS_TRACK_SIGN_THRESHOLD && prev_cross_track_signed < -CROSS_TRACK_SIGN_THRESHOLD) ||
                   (crossTrackSigned < -CROSS_TRACK_SIGN_THRESHOLD && prev_cross_track_signed > CROSS_TRACK_SIGN_THRESHOLD)) {
-                double denomOsc = std::max(1.0, 2.0 * SIM_PATH_RADIUS_LIMIT);
-                oscillationPercent = (std::abs(prev_cross_track_signed) + std::abs(crossTrackSigned)) * 100.0 / denomOsc;
+                gp_scalar denomOsc = std::max(static_cast<gp_scalar>(1.0f), static_cast<gp_scalar>(2.0f) * SIM_PATH_RADIUS_LIMIT);
+                oscillationPercent = (std::abs(prev_cross_track_signed) + std::abs(crossTrackSigned)) * static_cast<gp_scalar>(100.0f) / denomOsc;
                 cross_track_osc_sum += pow(oscillationPercent, CROSS_TRACK_OSC_WEIGHT);
                 cross_track_osc_events++;
                 oscillationTriggered = true;
@@ -1212,48 +1217,46 @@ int main(int argc, char** argv)
             prev_cross_track_signed = crossTrackSigned;
             has_prev_cross_track = true;
 
-            double forwardDot = std::clamp(aircraftForward.dot(frame.tangent), -1.0, 1.0);
-            double upDot = std::clamp(aircraftUp.dot(frame.insideNormal), -1.0, 1.0);
-            double forwardAngle = std::acos(forwardDot);
-            double upAngle = std::acos(upDot);
-            double forwardPercent = (forwardAngle * 100.0) / M_PI;
-            double upPercent = (upAngle * 100.0) / M_PI;
-            double orientationStep = pow(forwardPercent, ORIENTATION_TANGENT_WEIGHT) +
-                                     pow(upPercent, ORIENTATION_UP_WEIGHT);
-            double inversionPenalty = (upDot < 0.0) ? (-upDot) * PATH_UP_INVERSION_PENALTY : 0.0;
+            gp_scalar forwardDot = std::clamp(aircraftForward.dot(frame.tangent), static_cast<gp_scalar>(-1.0f), static_cast<gp_scalar>(1.0f));
+            gp_scalar upDot = std::clamp(aircraftUp.dot(frame.insideNormal), static_cast<gp_scalar>(-1.0f), static_cast<gp_scalar>(1.0f));
+            gp_scalar forwardAngle = static_cast<gp_scalar>(std::acos(forwardDot));
+            gp_scalar upAngle = static_cast<gp_scalar>(std::acos(upDot));
+            gp_scalar forwardPercent = (forwardAngle * static_cast<gp_scalar>(100.0f)) / static_cast<gp_scalar>(M_PI);
+            gp_scalar upPercent = (upAngle * static_cast<gp_scalar>(100.0f)) / static_cast<gp_scalar>(M_PI);
+            gp_scalar orientationStep = pow(forwardPercent, ORIENTATION_TANGENT_WEIGHT) +
+                                        pow(upPercent, ORIENTATION_UP_WEIGHT);
+            gp_scalar inversionPenalty = (upDot < static_cast<gp_scalar>(0.0f)) ? (-upDot) * PATH_UP_INVERSION_PENALTY : static_cast<gp_scalar>(0.0f);
             orientation_alignment_sum += orientationStep + inversionPenalty;
             orientationPenaltyForLog = orientationStep + inversionPenalty;
             
             // Movement efficiency: compare aircraft movement to optimal path movement
-            double movement_efficiency = 0.0;
+            gp_scalar movement_efficiency = 0.0f;
             if (stepIndex > 1 && pathIndex < path.size() - 1) {
               // Aircraft movement since last step
-              Eigen::Vector3d aircraft_movement = stepAircraftState.getPosition() - aircraftState.at(stepIndex-1).getPosition();
-              double aircraft_distance = aircraft_movement.norm();
+              gp_vec3 aircraft_movement = stepAircraftState.getPosition() - aircraftState.at(stepIndex-1).getPosition();
+              gp_scalar aircraft_distance = aircraft_movement.norm();
               
               // Optimal path movement (direction from current waypoint to next)
               int movementNextIndex = std::min(pathIndex + 1, static_cast<int>(path.size()) - 1);
-              Eigen::Vector3d path_direction = path.at(movementNextIndex).start - path.at(pathIndex).start;
-              if (path_direction.norm() < 1e-5) {
+              gp_vec3 path_direction = path.at(movementNextIndex).start - path.at(pathIndex).start;
+              if (path_direction.norm() < static_cast<gp_scalar>(1e-5f)) {
                 path_direction = frame.tangent;
               } else {
                 path_direction.normalize();
               }
-              double optimal_distance = aircraft_distance; // Same distance, optimal direction
-              
-              if (aircraft_distance > 0.1) { // Avoid division by zero
+              if (aircraft_distance > static_cast<gp_scalar>(0.1f)) { // Avoid division by zero
                 // Compare directions: dot product shows alignment (-1 to +1)
-                double direction_alignment = aircraft_movement.normalized().dot(path_direction);
+                gp_scalar direction_alignment = aircraft_movement.normalized().dot(path_direction);
                 
                 // Movement efficiency penalty: 0 = perfect alignment, 2 = opposite direction
-                movement_efficiency = (1.0 - direction_alignment); // 0 to 2 range
+                movement_efficiency = (static_cast<gp_scalar>(1.0f) - direction_alignment); // 0 to 2 range
                 
                 // Additional penalty for excessive turning/rolling
-                double current_roll = abs(stepAircraftState.getRollCommand());
-                double current_pitch = abs(stepAircraftState.getPitchCommand());
+                gp_scalar current_roll = abs(stepAircraftState.getRollCommand());
+                gp_scalar current_pitch = abs(stepAircraftState.getPitchCommand());
                 
                 // Control saturation penalty - heavily penalize near ±1.0 commands
-                double saturation_penalty = 0.0;
+                gp_scalar saturation_penalty = 0.0f;
                 if (current_roll > CONTROL_SATURATION_THRESHOLD) {
                   saturation_penalty += (current_roll - CONTROL_SATURATION_THRESHOLD) * CONTROL_SATURATION_PENALTY;
                 }
@@ -1262,34 +1265,34 @@ int main(int argc, char** argv)
                 }
                 
                 // Control rate penalty - penalize rapid changes (bang-bang behavior)
-                double roll_change = abs(stepAircraftState.getRollCommand() - roll_prev);
-                double pitch_change = abs(stepAircraftState.getPitchCommand() - pitch_prev);
-                double control_rate_penalty = (roll_change + pitch_change) * CONTROL_RATE_PENALTY;
+                gp_scalar roll_change = abs(stepAircraftState.getRollCommand() - roll_prev);
+                gp_scalar pitch_change = abs(stepAircraftState.getPitchCommand() - pitch_prev);
+                gp_scalar control_rate_penalty = (roll_change + pitch_change) * CONTROL_RATE_PENALTY;
                 
                 // Estimate "optimal" control needed for this path segment
                 // Simple model: straight segments need minimal control, curves need some roll
-                Eigen::Vector3d prev_path_dir = (pathIndex > 0) ?
+                gp_vec3 prev_path_dir = (pathIndex > 0) ?
                   (path.at(pathIndex).start - path.at(pathIndex-1).start) : path_direction;
-                if (prev_path_dir.norm() < 1e-5) {
+                if (prev_path_dir.norm() < static_cast<gp_scalar>(1e-5f)) {
                   prev_path_dir = frame.tangent;
                 } else {
                   prev_path_dir.normalize();
                 }
-                double path_curvature = (1.0 - prev_path_dir.dot(path_direction)); // 0 to 2
-                double optimal_roll = path_curvature * 0.3; // Scale to reasonable roll estimate
-                double optimal_pitch = 0.1; // Assume minimal pitch needed
+                gp_scalar path_curvature = (static_cast<gp_scalar>(1.0f) - prev_path_dir.dot(path_direction)); // 0 to 2
+                gp_scalar optimal_roll = path_curvature * static_cast<gp_scalar>(0.3f); // Scale to reasonable roll estimate
+                gp_scalar optimal_pitch = static_cast<gp_scalar>(0.1f); // Assume minimal pitch needed
                 
                 // Penalty for excessive control relative to path requirements
-                double control_excess = (current_roll - optimal_roll) + (current_pitch - optimal_pitch);
-                control_excess = std::max(0.0, control_excess); // Only penalize excess, not deficit
+                gp_scalar control_excess = (current_roll - optimal_roll) + (current_pitch - optimal_pitch);
+                control_excess = std::max(static_cast<gp_scalar>(0.0f), control_excess); // Only penalize excess, not deficit
                 
-                movement_efficiency += control_excess * 0.5; // Add control excess penalty
+                movement_efficiency += control_excess * static_cast<gp_scalar>(0.5f); // Add control excess penalty
                 movement_efficiency += saturation_penalty; // Add saturation penalty
                 movement_efficiency += control_rate_penalty; // Add rate change penalty
               }
             }
             // Normalize to [100:0] scale - increased max penalty due to saturation/rate penalties  
-            movement_efficiency = movement_efficiency * 100.0 / MOVEMENT_EFFICIENCY_MAX_PENALTY;
+            movement_efficiency = movement_efficiency * static_cast<gp_scalar>(100.0f) / static_cast<gp_scalar>(MOVEMENT_EFFICIENCY_MAX_PENALTY);
             
             roll_prev = stepAircraftState.getRollCommand();
             pitch_prev = stepAircraftState.getPitchCommand();
@@ -1307,16 +1310,16 @@ int main(int argc, char** argv)
                 fout << "Pth:Step:   Time Idx  totDist   pathX    pathY    pathZ        X        Y        Z       dr       dp       dy   relVel     roll    pitch    power    distP   angleP  movEffP      qw      qx      qy      qz   vxBody   vyBody   vzBody    alpha     beta   dtheta    dphi   dhome   xtrkP   xOscP orientP\n";
               }
               
-              Eigen::Matrix3d rotMatrix = craftOrientation.toRotationMatrix();
-              Eigen::Vector3d euler;
+              Eigen::Matrix3f rotMatrix = craftOrientation.toRotationMatrix();
+              gp_vec3 euler;
               
-              if (std::abs(rotMatrix(2, 0)) > 0.99999) {
+              if (std::abs(rotMatrix(2, 0)) > static_cast<gp_scalar>(0.99999f)) {
                 euler[0] = 0;
                 if (rotMatrix(2, 0) > 0) {
-                  euler[1] = -M_PI / 2;
+                  euler[1] = -static_cast<gp_scalar>(M_PI / 2.0);
                   euler[2] = -atan2(rotMatrix(1, 2), rotMatrix(0, 2));
                 } else {
-                  euler[1] = M_PI / 2;
+                  euler[1] = static_cast<gp_scalar>(M_PI / 2.0);
                   euler[2] = atan2(rotMatrix(1, 2), rotMatrix(0, 2));
                 }
               } else {
@@ -1326,25 +1329,25 @@ int main(int argc, char** argv)
               }
 
               // Calculate body-frame velocity for GP operators
-              Eigen::Vector3d velocity_body = stepAircraftState.getOrientation().inverse() *
-                                               stepAircraftState.getVelocity();
+              gp_vec3 velocity_body = stepAircraftState.getOrientation().inverse() *
+                                       stepAircraftState.getVelocity();
 
               // Calculate GP operator values (matching GP/autoc/gp_operators.h)
-              double alpha_deg = atan2(-velocity_body.z(), velocity_body.x()) * 180.0 / M_PI;  // GETALPHA
-              double beta_deg = atan2(velocity_body.y(), velocity_body.x()) * 180.0 / M_PI;    // GETBETA
+              gp_scalar alpha_deg = atan2(-velocity_body.z(), velocity_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);  // GETALPHA
+              gp_scalar beta_deg = atan2(velocity_body.y(), velocity_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);    // GETBETA
 
               // Calculate angle to target in body frame (GETDTHETA, GETDPHI)
-              Eigen::Vector3d craftToTarget = path.at(pathIndex).start - stepAircraftState.getPosition();
-              Eigen::Vector3d target_body = stepAircraftState.getOrientation().inverse() * craftToTarget;
-              double dtheta_deg = atan2(-target_body.z(), target_body.x()) * 180.0 / M_PI;    // GETDTHETA
-              double dphi_deg = atan2(target_body.y(), target_body.x()) * 180.0 / M_PI;       // GETDPHI
+              gp_vec3 craftToTarget = path.at(pathIndex).start - stepAircraftState.getPosition();
+              gp_vec3 target_body = stepAircraftState.getOrientation().inverse() * craftToTarget;
+              gp_scalar dtheta_deg = atan2(-target_body.z(), target_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);    // GETDTHETA
+              gp_scalar dphi_deg = atan2(target_body.y(), target_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);       // GETDPHI
 
               // Distance to home (GETDHOME)
-              Eigen::Vector3d home(0, 0, SIM_INITIAL_ALTITUDE);
-              double dhome = (home - stepAircraftState.getPosition()).norm();
+              gp_vec3 home(0, 0, SIM_INITIAL_ALTITUDE);
+              gp_scalar dhome = (home - stepAircraftState.getPosition()).norm();
 
               // Get raw quaternion
-              Eigen::Quaterniond q = craftOrientation;
+              gp_quat q = craftOrientation;
 
               char outbuf[1500];
               sprintf(outbuf, "%03d:%04d: %06ld %3d % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.4f % 7.4f % 7.4f % 7.4f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.2f % 7.2f % 7.2f\n",
@@ -1381,14 +1384,14 @@ int main(int argc, char** argv)
             }
           }
           
-          double normalized_distance_error = (distance_error_sum / simulation_steps);
-          double normalized_angle_align = (angle_error_sum / simulation_steps);
-          double normalized_movement_efficiency = (movement_efficiency_sum / simulation_steps);
-          double normalized_cross_track = (cross_track_error_sum / simulation_steps);
-          double normalized_cross_track_osc = cross_track_osc_events > 0
+          gp_scalar normalized_distance_error = (distance_error_sum / simulation_steps);
+          gp_scalar normalized_angle_align = (angle_error_sum / simulation_steps);
+          gp_scalar normalized_movement_efficiency = (movement_efficiency_sum / simulation_steps);
+          gp_scalar normalized_cross_track = (cross_track_error_sum / simulation_steps);
+          gp_scalar normalized_cross_track_osc = cross_track_osc_events > 0
             ? (cross_track_osc_sum / cross_track_osc_events)
-            : 0.0;
-          double normalized_orientation_penalty = (orientation_alignment_sum / simulation_steps);
+            : static_cast<gp_scalar>(0.0f);
+          gp_scalar normalized_orientation_penalty = (orientation_alignment_sum / simulation_steps);
           localFitness = normalized_distance_error + normalized_angle_align + normalized_movement_efficiency
             + normalized_cross_track + normalized_cross_track_osc + normalized_orientation_penalty;
           
@@ -1397,7 +1400,7 @@ int main(int argc, char** argv)
           }
           
           if (crashReason != CrashReason::None) {
-            double fractional_distance_remaining = 1.0 - path.at(aircraftState.back().getThisPathIndex()).distanceFromStart / path.back().distanceFromStart;
+            gp_scalar fractional_distance_remaining = static_cast<gp_scalar>(1.0f) - path.at(aircraftState.back().getThisPathIndex()).distanceFromStart / path.back().distanceFromStart;
             localFitness += SIM_CRASH_PENALTY * fractional_distance_remaining;
           }
           
@@ -1410,7 +1413,7 @@ int main(int argc, char** argv)
         fitnessValid = 1;
       }
       
-      double getFinalFitness() const { return stdFitness; }
+      gp_scalar getFinalFitness() const { return static_cast<gp_scalar>(stdFitness); }
     };
     
     // Serialize the bytecode interpreter for transport to simulators
@@ -1438,7 +1441,7 @@ int main(int argc, char** argv)
     activeEvalCollector = &aggregatedEvalResults;
     
     evaluationProgress.store(0);
-    double cumulativeFitness = 0.0;
+    gp_scalar cumulativeFitness = 0.0f;
     size_t scenariosEvaluated = 0;
     
     for (size_t scenarioIdx = 0; scenarioIdx < generationScenarios.size(); ++scenarioIdx) {
@@ -1464,7 +1467,7 @@ int main(int argc, char** argv)
     activeEvalCollector = previousCollector;
     printEval = false;
     
-    double averageFitness = scenariosEvaluated > 0 ? cumulativeFitness / static_cast<double>(scenariosEvaluated) : 0.0;
+    gp_scalar averageFitness = scenariosEvaluated > 0 ? cumulativeFitness / static_cast<gp_scalar>(scenariosEvaluated) : static_cast<gp_scalar>(0.0f);
     *logger.info() << "Aggregated results: paths=" << aggregatedEvalResults.pathList.size()
                    << " states=" << aggregatedEvalResults.aircraftStateList.size() << endl;
     bestOfEvalResults = aggregatedEvalResults;
@@ -1563,8 +1566,8 @@ int main(int argc, char** argv)
   }
 
   uint64_t totalRuns = globalSimRunCounter.load(std::memory_order_relaxed);
-  double durationSec = std::chrono::duration<double>(std::chrono::steady_clock::now() - runStartTime).count();
-  double simsPerSec = (durationSec > 0.0) ? static_cast<double>(totalRuns) / durationSec : 0.0;
+  gp_scalar durationSec = std::chrono::duration<gp_scalar>(std::chrono::steady_clock::now() - runStartTime).count();
+  gp_scalar simsPerSec = (durationSec > static_cast<gp_scalar>(0.0f)) ? static_cast<gp_scalar>(totalRuns) / durationSec : static_cast<gp_scalar>(0.0f);
   bout << "#SimRuns " << totalRuns << " DurationSec " << durationSec << std::endl;
   bout.flush();
   *logger.info() << std::fixed << std::setprecision(2)

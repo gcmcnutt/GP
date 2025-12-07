@@ -5,22 +5,23 @@
 #include <vector>
 
 #include "minisim.h"
+#include "gp_types.h"
 
 #define NUM_SEGMENTS_PER_PATH 16
 
-Eigen::Vector3d randomPointInCylinder(double radius, double height, double base = SIM_INITIAL_ALTITUDE);
-Eigen::Vector3d cubicInterpolate(const Eigen::Vector3d& p0, const Eigen::Vector3d& p1, const Eigen::Vector3d& p2, const Eigen::Vector3d& p3, double t);
-std::vector<std::vector<Path>> generateSmoothPaths(char* method, int numPaths, double radius, double height);
+gp_vec3 randomPointInCylinder(gp_scalar radius, gp_scalar height, gp_scalar base = SIM_INITIAL_ALTITUDE);
+gp_vec3 cubicInterpolate(const gp_vec3& p0, const gp_vec3& p1, const gp_vec3& p2, const gp_vec3& p3, gp_scalar t);
+std::vector<std::vector<Path>> generateSmoothPaths(char* method, int numPaths, gp_scalar radius, gp_scalar height);
 
 class GeneratorMethod {
 public:
   virtual ~GeneratorMethod() = default;
-  virtual std::vector<Path> method(int pathIndex, double radius, double height, double base) = 0;
+  virtual std::vector<Path> method(int pathIndex, gp_scalar radius, gp_scalar height, gp_scalar base) = 0;
 };
 
 class GenerateRandom : public GeneratorMethod {
-  std::vector<Path> method(int pathIndex, double radius, double height, double base) override {
-    std::vector<Eigen::Vector3d> controlPoints;
+  std::vector<Path> method(int pathIndex, gp_scalar radius, gp_scalar height, gp_scalar base) override {
+    std::vector<gp_vec3> controlPoints;
     std::vector<Path> path;
     int numPoints = NUM_SEGMENTS_PER_PATH;
 
@@ -30,31 +31,31 @@ class GenerateRandom : public GeneratorMethod {
     }
 
     // Ensure the path is continuous by looping through control points
-    double odometer = 0;
-    double turnmeter = 0;
-    Eigen::Vector3d lastPoint;
-    Eigen::Vector3d lastDirection;
+    gp_scalar odometer = 0;
+    gp_scalar turnmeter = 0;
+    gp_vec3 lastPoint;
+    gp_vec3 lastDirection;
     bool first = true;
 
     for (size_t i = 1; i < controlPoints.size() - 3; ++i) {
-      for (double t = 0; t <= 1; t += 0.05) {
-        Eigen::Vector3d interpolatedPoint = cubicInterpolate(controlPoints[i - 1], controlPoints[i], controlPoints[i + 1], controlPoints[i + 2], t);
-        Eigen::Vector3d newDirection;
+      for (gp_scalar t = 0; t <= 1; t += static_cast<gp_scalar>(0.05f)) {
+        gp_vec3 interpolatedPoint = cubicInterpolate(controlPoints[i - 1], controlPoints[i], controlPoints[i + 1], controlPoints[i + 2], t);
+        gp_vec3 newDirection;
 
         if (!first) {
           // Compute the new distance
-          double newDistance = (interpolatedPoint - lastPoint).norm();
+          gp_scalar newDistance = (interpolatedPoint - lastPoint).norm();
 
           // Compute new new direction
           newDirection = (interpolatedPoint - lastPoint).normalized();
 
           // difference to prior direction
-          double dVector = lastDirection.dot(newDirection);
-          double dAngle = std::acos(std::clamp(dVector / (lastDirection.norm() * newDirection.norm()), -1.0, 1.0));
+          gp_scalar dVector = lastDirection.dot(newDirection);
+          gp_scalar dAngle = std::acos(std::clamp(dVector / (lastDirection.norm() * newDirection.norm()), -1.0f, 1.0f));
 
           // add next segment with simulation timestamp
-          double simTimeMsec = (odometer / SIM_RABBIT_VELOCITY) * 1000.0;
-          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), odometer, turnmeter, simTimeMsec };
+          gp_scalar simTimeMsec = (odometer / SIM_RABBIT_VELOCITY) * static_cast<gp_scalar>(1000.0f);
+          Path pathSegment = Path(interpolatedPoint, gp_vec3::UnitX(), odometer, turnmeter, simTimeMsec);
           path.push_back(pathSegment);
 
           odometer += newDistance;
@@ -80,58 +81,58 @@ class GenerateRandom : public GeneratorMethod {
 };
 
 class GenerateClassic : public GeneratorMethod {
-  std::vector<Path> method(int pathIndex, double radius, double height, double base) override {
-    std::vector<Eigen::Vector3d> controlPoints;
+  std::vector<Path> method(int pathIndex, gp_scalar radius, gp_scalar height, gp_scalar base) override {
+    std::vector<gp_vec3> controlPoints;
     std::vector<Path> path;
     int numPoints = NUM_SEGMENTS_PER_PATH;
 
     controlPoints.push_back({ 0, 0, base });
 
     // Sin
-    double x, y, z;
+    gp_scalar x, y, z;
     for (size_t i = 0; i < numPoints; ++i) {
-      x = -(cos(2 * M_PI * i / numPoints) * SIM_PATH_BOUNDS / 2 - SIM_PATH_BOUNDS / 2);
-      y = sin(2 * M_PI * i / numPoints) * SIM_PATH_BOUNDS / 2;
-      z = base - i;
-      controlPoints.push_back(Eigen::Vector3d(x, y, z));
+      x = -(std::cos(static_cast<gp_scalar>(2 * M_PI) * static_cast<gp_scalar>(i) / static_cast<gp_scalar>(numPoints)) * SIM_PATH_BOUNDS / static_cast<gp_scalar>(2.0f) - SIM_PATH_BOUNDS / static_cast<gp_scalar>(2.0f));
+      y = std::sin(static_cast<gp_scalar>(2 * M_PI) * static_cast<gp_scalar>(i) / static_cast<gp_scalar>(numPoints)) * SIM_PATH_BOUNDS / static_cast<gp_scalar>(2.0f);
+      z = base - static_cast<gp_scalar>(i);
+      controlPoints.push_back(gp_vec3(x, y, z));
     }
 
-    double lastX = x;
-    double lastY = y;
-    double lastZ = z;
+    gp_scalar lastX = x;
+    gp_scalar lastY = y;
+    gp_scalar lastZ = z;
     for (size_t i = 0; i < numPoints; ++i) {
-      y = lastX + sin(2 * M_PI * i / numPoints) * SIM_PATH_BOUNDS / 3;
-      z = lastZ - SIM_PATH_BOUNDS / 2 + cos(2 * M_PI * i / numPoints) * SIM_PATH_BOUNDS / 2;
-      x = lastY - i;
-      controlPoints.push_back(Eigen::Vector3d(x, y, z));
+      y = lastX + std::sin(static_cast<gp_scalar>(2 * M_PI) * static_cast<gp_scalar>(i) / static_cast<gp_scalar>(numPoints)) * SIM_PATH_BOUNDS / static_cast<gp_scalar>(3.0f);
+      z = lastZ - SIM_PATH_BOUNDS / static_cast<gp_scalar>(2.0f) + std::cos(static_cast<gp_scalar>(2 * M_PI) * static_cast<gp_scalar>(i) / static_cast<gp_scalar>(numPoints)) * SIM_PATH_BOUNDS / static_cast<gp_scalar>(2.0f);
+      x = lastY - static_cast<gp_scalar>(i);
+      controlPoints.push_back(gp_vec3(x, y, z));
     }
 
     // Ensure the path is continuous by looping through control points
-    double odometer = 0;
-    double turnmeter = 0;
-    Eigen::Vector3d lastPoint;
-    Eigen::Vector3d lastDirection;
+    gp_scalar odometer = 0;
+    gp_scalar turnmeter = 0;
+    gp_vec3 lastPoint;
+    gp_vec3 lastDirection;
     bool first = true;
 
     for (size_t i = 1; i < controlPoints.size() - 3; ++i) {
-      for (double t = 0; t <= 1; t += 0.05) {
-        Eigen::Vector3d interpolatedPoint = cubicInterpolate(controlPoints[i - 1], controlPoints[i], controlPoints[i + 1], controlPoints[i + 2], t);
-        Eigen::Vector3d newDirection;
+      for (gp_scalar t = 0; t <= 1; t += static_cast<gp_scalar>(0.05f)) {
+        gp_vec3 interpolatedPoint = cubicInterpolate(controlPoints[i - 1], controlPoints[i], controlPoints[i + 1], controlPoints[i + 2], t);
+        gp_vec3 newDirection;
 
         if (!first) {
           // Compute the new distance
-          double newDistance = (interpolatedPoint - lastPoint).norm();
+          gp_scalar newDistance = (interpolatedPoint - lastPoint).norm();
 
           // Compute new new direction
           newDirection = (interpolatedPoint - lastPoint).normalized();
 
           // difference to prior direction
-          double dVector = lastDirection.dot(newDirection);
-          double dAngle = std::acos(std::clamp(dVector / (lastDirection.norm() * newDirection.norm()), -1.0, 1.0));
+          gp_scalar dVector = lastDirection.dot(newDirection);
+          gp_scalar dAngle = std::acos(std::clamp(dVector / (lastDirection.norm() * newDirection.norm()), -1.0f, 1.0f));
 
           // add next segment with simulation timestamp
-          double simTimeMsec = (odometer / SIM_RABBIT_VELOCITY) * 1000.0;
-          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), odometer, turnmeter, simTimeMsec };
+          gp_scalar simTimeMsec = (odometer / SIM_RABBIT_VELOCITY) * static_cast<gp_scalar>(1000.0f);
+          Path pathSegment = Path(interpolatedPoint, gp_vec3::UnitX(), odometer, turnmeter, simTimeMsec);
           path.push_back(pathSegment);
 
           odometer += newDistance;
@@ -167,110 +168,116 @@ enum PathType {
 };
 
 class GenerateComputedPaths : public GeneratorMethod {
-  std::vector<Path> method(int pathIndex, double radius, double height, double base) override {
+  std::vector<Path> method(int pathIndex, gp_scalar radius, gp_scalar height, gp_scalar base) override {
     std::vector<Path> path;
 
     PathType pathType = static_cast<PathType>(pathIndex % static_cast<int>(PathType::END_MARKER));
 
     switch(pathType) {
       case PathType::HorizontalCircle: {
-        double cSize = 0.8 * radius;
-        for (double turn = 0; turn < M_PI * 2; turn += 0.05) {
-          Eigen::Vector3d interpolatedPoint = { cSize * cos(turn), cSize * sin(turn), base - SIM_INITIAL_LOCATION_DITHER };
-          double simTimeMsecLocal = (turn * radius / SIM_RABBIT_VELOCITY) * 1000.0;
-          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), turn * radius, 0.0, simTimeMsecLocal };
+        gp_scalar cSize = static_cast<gp_scalar>(0.8f) * radius;
+        for (gp_scalar turn = 0; turn < static_cast<gp_scalar>(M_PI * 2.0); turn += static_cast<gp_scalar>(0.05f)) {
+          gp_vec3 interpolatedPoint = { cSize * std::cos(turn), cSize * std::sin(turn), base - SIM_INITIAL_LOCATION_DITHER };
+          gp_scalar simTimeMsecLocal = (turn * radius / SIM_RABBIT_VELOCITY) * static_cast<gp_scalar>(1000.0f);
+          Path pathSegment = Path(interpolatedPoint, gp_vec3::UnitX(), turn * radius, 0.0f, simTimeMsecLocal);
           path.push_back(pathSegment);
         }
         break;
       }
       case PathType::VerticalCircle: {
-        double cSize = 0.8 * radius;
-        for (double turn = 0; turn < M_PI * 2; turn += 0.05) {
-          Eigen::Vector3d interpolatedPoint = { cSize * cos(turn), 0.0, base - SIM_INITIAL_LOCATION_DITHER - cSize * sin(turn)};
-          double simTimeMsecLocal = (turn * cSize / SIM_RABBIT_VELOCITY) * 1000.0;
-          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), turn * cSize, 0.0, simTimeMsecLocal };
+        gp_scalar cSize = static_cast<gp_scalar>(0.8f) * radius;
+        for (gp_scalar turn = 0; turn < static_cast<gp_scalar>(M_PI * 2.0); turn += static_cast<gp_scalar>(0.05f)) {
+          gp_vec3 interpolatedPoint = { cSize * std::cos(turn), 0.0f, base - SIM_INITIAL_LOCATION_DITHER - cSize * std::sin(turn)};
+          gp_scalar simTimeMsecLocal = (turn * cSize / SIM_RABBIT_VELOCITY) * static_cast<gp_scalar>(1000.0f);
+          Path pathSegment = Path(interpolatedPoint, gp_vec3::UnitX(), turn * cSize, 0.0f, simTimeMsecLocal);
           path.push_back(pathSegment);
         }
         break;
       }
       case PathType::FigureEight: {
-        double cSize = 0.4 * radius;
-        for (double turn = 0; turn < M_PI * 2; turn += 0.05) {
-          Eigen::Vector3d interpolatedPoint = { (cSize * cos(turn)) - cSize, 0.0, base - SIM_INITIAL_LOCATION_DITHER - (cSize * sin(turn))};
-          double simTimeMsecLocal = ((turn * cSize) / SIM_RABBIT_VELOCITY) * 1000.0;
-          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), (turn * cSize), 0.0, simTimeMsecLocal };
+        gp_scalar cSize = static_cast<gp_scalar>(0.4f) * radius;
+        for (gp_scalar turn = 0; turn < static_cast<gp_scalar>(M_PI * 2.0); turn += static_cast<gp_scalar>(0.05f)) {
+          gp_vec3 interpolatedPoint = { (cSize * std::cos(turn)) - cSize, 0.0f, base - SIM_INITIAL_LOCATION_DITHER - (cSize * std::sin(turn))};
+          gp_scalar simTimeMsecLocal = ((turn * cSize) / SIM_RABBIT_VELOCITY) * static_cast<gp_scalar>(1000.0f);
+          Path pathSegment = Path(interpolatedPoint, gp_vec3::UnitX(), (turn * cSize), 0.0f, simTimeMsecLocal);
           path.push_back(pathSegment);
         }
-        for (double turn = 0; turn < M_PI * 2; turn += 0.05) {
-          Eigen::Vector3d interpolatedPoint = { (-cSize * cos(turn)) + cSize, 0.0, base - SIM_INITIAL_LOCATION_DITHER - (cSize * sin(turn))};
-          double simTimeMsecLocal = (((turn * cSize) + (M_PI * 2 * cSize)) / SIM_RABBIT_VELOCITY) * 1000.0;
-          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), (turn * cSize) + (M_PI * 2 * cSize), 0.0, simTimeMsecLocal };
+        for (gp_scalar turn = 0; turn < static_cast<gp_scalar>(M_PI * 2.0); turn += static_cast<gp_scalar>(0.05f)) {
+          gp_vec3 interpolatedPoint = { (-cSize * std::cos(turn)) + cSize, 0.0f, base - SIM_INITIAL_LOCATION_DITHER - (cSize * std::sin(turn))};
+          gp_scalar simTimeMsecLocal = (((turn * cSize) + (static_cast<gp_scalar>(M_PI * 2.0) * cSize)) / SIM_RABBIT_VELOCITY) * static_cast<gp_scalar>(1000.0f);
+          Path pathSegment = Path(interpolatedPoint, gp_vec3::UnitX(), (turn * cSize) + (static_cast<gp_scalar>(M_PI * 2.0) * cSize), 0.0f, simTimeMsecLocal);
           path.push_back(pathSegment);
         }
         break;
       }
       case PathType::HorizontalSquare: {
-        double sSize = 0.7 * radius;
-        for (double span = -sSize; span < sSize; span += 0.1) {
-          Eigen::Vector3d interpolatedPoint = { span, -sSize, base - SIM_INITIAL_LOCATION_DITHER };
-          double simTimeMsecLocal = (span / SIM_RABBIT_VELOCITY) * 1000.0;
-          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), span, 0.0, simTimeMsecLocal };
+        gp_scalar sSize = static_cast<gp_scalar>(0.7f) * radius;
+        for (gp_scalar span = -sSize; span < sSize; span += static_cast<gp_scalar>(0.1f)) {
+          gp_vec3 interpolatedPoint = { span, -sSize, base - SIM_INITIAL_LOCATION_DITHER };
+          gp_scalar simTimeMsecLocal = (span / SIM_RABBIT_VELOCITY) * static_cast<gp_scalar>(1000.0f);
+          Path pathSegment = Path(interpolatedPoint, gp_vec3::UnitX(), span, 0.0f, simTimeMsecLocal);
           path.push_back(pathSegment);
         }  
-        for (double span = -sSize; span < sSize; span += 0.1) {
-          Eigen::Vector3d interpolatedPoint = { sSize, span, base - SIM_INITIAL_LOCATION_DITHER };
-          double simTimeMsecLocal = ((2 * sSize + span) / SIM_RABBIT_VELOCITY) * 1000.0;
-          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), 2 * sSize + span, 0.0, simTimeMsecLocal };
+        for (gp_scalar span = -sSize; span < sSize; span += static_cast<gp_scalar>(0.1f)) {
+          gp_vec3 interpolatedPoint = { sSize, span, base - SIM_INITIAL_LOCATION_DITHER };
+          gp_scalar simTimeMsecLocal = ((static_cast<gp_scalar>(2.0f) * sSize + span) / SIM_RABBIT_VELOCITY) * static_cast<gp_scalar>(1000.0f);
+          Path pathSegment = Path(interpolatedPoint, gp_vec3::UnitX(), static_cast<gp_scalar>(2.0f) * sSize + span, 0.0f, simTimeMsecLocal);
           path.push_back(pathSegment);
         } 
-        for (double span = -sSize; span < sSize; span += 0.1) {
-          Eigen::Vector3d interpolatedPoint = { -span, sSize, base - SIM_INITIAL_LOCATION_DITHER };
-          double simTimeMsecLocal = ((4 * sSize + span) / SIM_RABBIT_VELOCITY) * 1000.0;
-          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), 4 * sSize + span, 0.0, simTimeMsecLocal };
+        for (gp_scalar span = -sSize; span < sSize; span += static_cast<gp_scalar>(0.1f)) {
+          gp_vec3 interpolatedPoint = { -span, sSize, base - SIM_INITIAL_LOCATION_DITHER };
+          gp_scalar simTimeMsecLocal = ((static_cast<gp_scalar>(4.0f) * sSize + span) / SIM_RABBIT_VELOCITY) * static_cast<gp_scalar>(1000.0f);
+          Path pathSegment = Path(interpolatedPoint, gp_vec3::UnitX(), static_cast<gp_scalar>(4.0f) * sSize + span, 0.0f, simTimeMsecLocal);
           path.push_back(pathSegment);
         }  
-        for (double span = -sSize; span < sSize; span += 0.1) {
-          Eigen::Vector3d interpolatedPoint = { -sSize, -span, base - SIM_INITIAL_LOCATION_DITHER };
-          double simTimeMsecLocal = ((6 * sSize + span) / SIM_RABBIT_VELOCITY) * 1000.0;
-          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), 6 * sSize + span, 0.0, simTimeMsecLocal };
+        for (gp_scalar span = -sSize; span < sSize; span += static_cast<gp_scalar>(0.1f)) {
+          gp_vec3 interpolatedPoint = { -sSize, -span, base - SIM_INITIAL_LOCATION_DITHER };
+          gp_scalar simTimeMsecLocal = ((static_cast<gp_scalar>(6.0f) * sSize + span) / SIM_RABBIT_VELOCITY) * static_cast<gp_scalar>(1000.0f);
+          Path pathSegment = Path(interpolatedPoint, gp_vec3::UnitX(), static_cast<gp_scalar>(6.0f) * sSize + span, 0.0f, simTimeMsecLocal);
           path.push_back(pathSegment);
         }      
         break;
       }
       case PathType::VerticalSquare: {
-        double sSize = 0.7 * radius;
-        for (double span = -sSize; span < sSize; span += 0.1) {
-          Eigen::Vector3d interpolatedPoint = { span, 0, base - SIM_INITIAL_LOCATION_DITHER - sSize };
-          double simTimeMsecLocal = (span / SIM_RABBIT_VELOCITY) * 1000.0;
-          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), span, 0.0, simTimeMsecLocal };
+        gp_scalar sSize = static_cast<gp_scalar>(0.7f) * radius;
+        for (gp_scalar span = -sSize; span < sSize; span += static_cast<gp_scalar>(0.1f)) {
+          gp_vec3 interpolatedPoint = { span, 0.0f, base - SIM_INITIAL_LOCATION_DITHER - sSize };
+          gp_scalar simTimeMsecLocal = (span / SIM_RABBIT_VELOCITY) * static_cast<gp_scalar>(1000.0f);
+          Path pathSegment = Path(interpolatedPoint, gp_vec3::UnitX(), span, 0.0f, simTimeMsecLocal);
           path.push_back(pathSegment);
         }  
-        for (double span = -sSize; span < sSize; span += 0.1) {
-          Eigen::Vector3d interpolatedPoint = { sSize, 0, base - SIM_INITIAL_LOCATION_DITHER + span };
-          double simTimeMsecLocal = ((2 * sSize + span) / SIM_RABBIT_VELOCITY) * 1000.0;
-          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), 2 * sSize + span, 0.0, simTimeMsecLocal };
+        for (gp_scalar span = -sSize; span < sSize; span += static_cast<gp_scalar>(0.1f)) {
+          gp_vec3 interpolatedPoint = { sSize, 0.0f, base - SIM_INITIAL_LOCATION_DITHER + span };
+          gp_scalar simTimeMsecLocal = ((static_cast<gp_scalar>(2.0f) * sSize + span) / SIM_RABBIT_VELOCITY) * static_cast<gp_scalar>(1000.0f);
+          Path pathSegment = Path(interpolatedPoint, gp_vec3::UnitX(), static_cast<gp_scalar>(2.0f) * sSize + span, 0.0f, simTimeMsecLocal);
           path.push_back(pathSegment);
         } 
-        for (double span = -sSize; span < sSize; span += 0.1) {
-          Eigen::Vector3d interpolatedPoint = { -span, 0, base - SIM_INITIAL_LOCATION_DITHER + sSize };
-          double simTimeMsecLocal = ((4 * sSize + span) / SIM_RABBIT_VELOCITY) * 1000.0;
-          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), 4 * sSize + span, 0.0, simTimeMsecLocal };
+        for (gp_scalar span = -sSize; span < sSize; span += static_cast<gp_scalar>(0.1f)) {
+          gp_vec3 interpolatedPoint = { -span, 0.0f, base - SIM_INITIAL_LOCATION_DITHER + sSize };
+          gp_scalar simTimeMsecLocal = ((static_cast<gp_scalar>(4.0f) * sSize + span) / SIM_RABBIT_VELOCITY) * static_cast<gp_scalar>(1000.0f);
+          Path pathSegment = Path(interpolatedPoint, gp_vec3::UnitX(), static_cast<gp_scalar>(4.0f) * sSize + span, 0.0f, simTimeMsecLocal);
           path.push_back(pathSegment);
         }  
-        for (double span = -sSize; span < sSize; span += 0.1) {
-          Eigen::Vector3d interpolatedPoint = { -sSize, 0, base - SIM_INITIAL_LOCATION_DITHER -span };
-          double simTimeMsecLocal = ((6 * sSize + span) / SIM_RABBIT_VELOCITY) * 1000.0;
-          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), 6 * sSize + span, 0.0, simTimeMsecLocal };
+        for (gp_scalar span = -sSize; span < sSize; span += static_cast<gp_scalar>(0.1f)) {
+          gp_vec3 interpolatedPoint = { -sSize, 0.0f, base - SIM_INITIAL_LOCATION_DITHER - span };
+          gp_scalar simTimeMsecLocal = ((static_cast<gp_scalar>(6.0f) * sSize + span) / SIM_RABBIT_VELOCITY) * static_cast<gp_scalar>(1000.0f);
+          Path pathSegment = Path(interpolatedPoint, gp_vec3::UnitX(), static_cast<gp_scalar>(6.0f) * sSize + span, 0.0f, simTimeMsecLocal);
           path.push_back(pathSegment);
         }      
         break;
       }
       case PathType::FortyFiveLoop: {
-        double cSize = 0.8 * radius;
-        for (double turn = 0; turn < M_PI * 2; turn += 0.05) {
-          Eigen::Vector3d interpolatedPoint = { cSize * cos(turn), cSize * sin(turn), base - SIM_INITIAL_LOCATION_DITHER - cSize * sin(turn)};
-          double simTimeMsecLocal = (turn * cSize / SIM_RABBIT_VELOCITY) * 1000.0;
-          Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), turn * cSize, 0.0, simTimeMsecLocal };
+        gp_scalar cSize = static_cast<gp_scalar>(0.8f) * radius;
+        for (gp_scalar turn = 0; turn < static_cast<gp_scalar>(M_PI * 2.0); turn += static_cast<gp_scalar>(0.05f)) {
+          gp_vec3 interpolatedPoint = { cSize * std::cos(turn), cSize * std::sin(turn), base - SIM_INITIAL_LOCATION_DITHER };
+          gp_scalar simTimeMsecLocal = (turn * cSize / SIM_RABBIT_VELOCITY) * static_cast<gp_scalar>(1000.0f);
+          Path pathSegment = Path(interpolatedPoint, gp_vec3::UnitX(), turn * cSize, 0.0f, simTimeMsecLocal);
+          path.push_back(pathSegment);
+        }
+        for (gp_scalar turn = 0; turn < static_cast<gp_scalar>(M_PI * 2.0); turn += static_cast<gp_scalar>(0.05f)) {
+          gp_vec3 interpolatedPoint = { cSize * std::cos(turn + static_cast<gp_scalar>(M_PI / 4)), cSize * std::sin(turn + static_cast<gp_scalar>(M_PI / 4)), base - SIM_INITIAL_LOCATION_DITHER };
+          gp_scalar simTimeMsecLocal = ((turn * cSize) + (static_cast<gp_scalar>(M_PI) * cSize / static_cast<gp_scalar>(2.0f))) / SIM_RABBIT_VELOCITY * static_cast<gp_scalar>(1000.0f);
+          Path pathSegment = Path(interpolatedPoint, gp_vec3::UnitX(), (turn * cSize) + (static_cast<gp_scalar>(M_PI) * cSize / static_cast<gp_scalar>(2.0f)), 0.0f, simTimeMsecLocal);
           path.push_back(pathSegment);
         }
         break;
@@ -286,16 +293,16 @@ class GenerateComputedPaths : public GeneratorMethod {
 };
 
 class GenerateLine : public GeneratorMethod {
-  std::vector<Path> method(int pathIndex, double radius, double height, double base) override {
+  std::vector<Path> method(int pathIndex, gp_scalar radius, gp_scalar height, gp_scalar base) override {
 
     std::vector<Path> path;
-    double distance = 0.0;
-    for (double i = -SIM_PATH_RADIUS_LIMIT; i <= SIM_PATH_RADIUS_LIMIT; i += 5) {
-      Eigen::Vector3d interpolatedPoint = { -30, i, SIM_INITIAL_ALTITUDE };
-      double simTimeMsecLocal = (distance / SIM_RABBIT_VELOCITY) * 1000.0;
-      Path pathSegment = { interpolatedPoint, Eigen::Vector3d::UnitX(), distance, 0.0, simTimeMsecLocal };
+    gp_scalar distance = 0.0f;
+    for (gp_scalar i = -SIM_PATH_RADIUS_LIMIT; i <= SIM_PATH_RADIUS_LIMIT; i += static_cast<gp_scalar>(5.0f)) {
+      gp_vec3 interpolatedPoint = { static_cast<gp_scalar>(-30.0f), i, SIM_INITIAL_ALTITUDE };
+      gp_scalar simTimeMsecLocal = (distance / SIM_RABBIT_VELOCITY) * static_cast<gp_scalar>(1000.0f);
+      Path pathSegment = Path(interpolatedPoint, gp_vec3::UnitX(), distance, 0.0f, simTimeMsecLocal);
       path.push_back(pathSegment);
-      distance += 5;
+      distance += static_cast<gp_scalar>(5.0f);
     }
     return path;
   }
@@ -303,82 +310,40 @@ class GenerateLine : public GeneratorMethod {
 
 class GenerateLongSequential : public GeneratorMethod {
 public:
-  std::vector<Path> method(int pathIndex, double radius, double height, double base) override {
+  std::vector<Path> method(int pathIndex, gp_scalar radius, gp_scalar height, gp_scalar base) override {
     std::vector<Path> longPath;
-    double totalDistance = 0.0;
+    gp_scalar totalDistance = 0.0f;
 
     // Origin point and radius
-    Eigen::Vector3d origin(0, 0, SIM_INITIAL_ALTITUDE);
-    double loopRadius = 20.0;
-
-    // // 1. VERTICAL LOOP - Enter at origin heading south, pitch up through full loop
-    // // Start at origin, loop goes down first then up and around
-    // for (double turn = 0; turn < M_PI * 2; turn += 0.05) {
-    //   Eigen::Vector3d circleCenter = origin + Eigen::Vector3d(0, 0, -loopRadius);
-    //   // Start at origin (turn=0): point at center + (0, 0, radius), heading south
-    //   Eigen::Vector3d point = circleCenter + Eigen::Vector3d(-loopRadius * sin(turn), 0, loopRadius * cos(turn));
-    //   double distance = (longPath.empty() ? 0 : (point - longPath.back().start).norm());
-    //   totalDistance += distance;
-    //   double simTimeMsecLocal = (totalDistance / SIM_RABBIT_VELOCITY) * 1000.0;
-    //   Path pathSegment = { point, Eigen::Vector3d::UnitX(), totalDistance, 0.0, simTimeMsecLocal };
-    //   longPath.push_back(pathSegment);
-    // }
+    gp_vec3 origin(0.0f, 0.0f, SIM_INITIAL_ALTITUDE);
+    gp_scalar loopRadius = static_cast<gp_scalar>(20.0f);
 
     // 2. LEFT HORIZONTAL LOOP - Start at origin heading south, turn left (counter-clockwise)
     // Circle center to the west of origin so we turn left around it  
-    for (double turn = 0; turn < M_PI * 2; turn += 0.05) {
-      Eigen::Vector3d circleCenter = origin + Eigen::Vector3d(0, -loopRadius, 0);
+    for (gp_scalar turn = 0; turn < static_cast<gp_scalar>(M_PI * 2.0); turn += static_cast<gp_scalar>(0.05f)) {
+      gp_vec3 circleCenter = origin + gp_vec3(0.0f, -loopRadius, 0.0f);
       // Start at origin (turn=0): point at center + (-radius, 0, 0), heading south
-      Eigen::Vector3d point = circleCenter + Eigen::Vector3d(-loopRadius * sin(turn), loopRadius * cos(turn), 0);
-      double distance = (longPath.empty() ? 0 : (point - longPath.back().start).norm());
+      gp_vec3 point = circleCenter + gp_vec3(-loopRadius * std::sin(turn), loopRadius * std::cos(turn), 0.0f);
+      gp_scalar distance = (longPath.empty() ? 0.0f : (point - longPath.back().start).norm());
       totalDistance += distance;
-      double simTimeMsecLocal = (totalDistance / SIM_RABBIT_VELOCITY) * 1000.0;
-      Path pathSegment = { point, Eigen::Vector3d::UnitX(), totalDistance, 0.0, simTimeMsecLocal };
+      gp_scalar simTimeMsecLocal = (totalDistance / SIM_RABBIT_VELOCITY) * static_cast<gp_scalar>(1000.0f);
+      Path pathSegment = Path(point, gp_vec3::UnitX(), totalDistance, 0.0f, simTimeMsecLocal);
       longPath.push_back(pathSegment);
     }
 
     
     // 3. RIGHT HORIZONTAL LOOP - Start at origin heading south, turn right (clockwise)  
     // Circle center to the east of origin so we turn right around it
-    for (double turn = 0; turn < M_PI * 2; turn += 0.05) {
-      Eigen::Vector3d circleCenter = origin + Eigen::Vector3d(0, loopRadius, 0);
+    for (gp_scalar turn = 0; turn < static_cast<gp_scalar>(M_PI * 2.0); turn += static_cast<gp_scalar>(0.05f)) {
+      gp_vec3 circleCenter = origin + gp_vec3(0.0f, loopRadius, 0.0f);
       // Start at origin (turn=π): point at center + (-radius, 0, 0), heading south
-      Eigen::Vector3d point = circleCenter + Eigen::Vector3d(-loopRadius * sin(turn), -loopRadius * cos(turn), 0);
-      double distance = (point - longPath.back().start).norm();
+      gp_vec3 point = circleCenter + gp_vec3(-loopRadius * std::sin(turn), -loopRadius * std::cos(turn), 0.0f);
+      gp_scalar distance = (point - longPath.back().start).norm();
       totalDistance += distance;
-      double simTimeMsecLocal = (totalDistance / SIM_RABBIT_VELOCITY) * 1000.0;
-      Path pathSegment = { point, Eigen::Vector3d::UnitX(), totalDistance, 0.0, simTimeMsecLocal };
+      gp_scalar simTimeMsecLocal = (totalDistance / SIM_RABBIT_VELOCITY) * static_cast<gp_scalar>(1000.0f);
+      Path pathSegment = Path(point, gp_vec3::UnitX(), totalDistance, 0.0f, simTimeMsecLocal);
       longPath.push_back(pathSegment);
     }
-
-    // STILL COMMENTED OUT: Keep remaining loops for later testing
-    /*
-    // 4. RIGHT TILT LOOP - Roll right 45°, pitch up through tilted circle
-    // Same as vertical loop is good enough, not rotated just stretched in y
-    for (double turn = 0; turn < M_PI * 2; turn += 0.05) {
-      Eigen::Vector3d circleCenter = origin + Eigen::Vector3d(0, loopRadius, -loopRadius);
-      // Start at origin (turn=π): point at center + (0, 0, radius), heading south
-      Eigen::Vector3d point = circleCenter + Eigen::Vector3d(-loopRadius * sin(turn), -loopRadius * cos(turn), loopRadius * cos(turn));
-      double distance = (longPath.empty() ? 0 : (point - longPath.back().start).norm());
-      totalDistance += distance;
-      double simTimeMsecLocal = (totalDistance / SIM_RABBIT_VELOCITY) * 1000.0;
-      Path pathSegment = { point, Eigen::Vector3d::UnitX(), totalDistance, 0.0, simTimeMsecLocal };
-      longPath.push_back(pathSegment);
-    }
-
-    // 5. LEFT TILT LOOP - Roll left 45°, pitch up through tilted circle
-    // Start at origin, perform vertical loop tilted 45° to the left (toward -Y/west)
-    for (double turn = 0; turn < M_PI * 2; turn += 0.05) {
-      Eigen::Vector3d circleCenter = origin + Eigen::Vector3d(0, -loopRadius, -loopRadius);
-      // Start at origin (turn=π): point at center + (0, 0, radius), heading south
-      Eigen::Vector3d point = circleCenter + Eigen::Vector3d(-loopRadius * sin(turn), loopRadius * cos(turn), loopRadius * cos(turn));
-      double distance = (longPath.empty() ? 0 : (point - longPath.back().start).norm());
-      totalDistance += distance;
-      double simTimeMsecLocal = (totalDistance / SIM_RABBIT_VELOCITY) * 1000.0;
-      Path pathSegment = { point, Eigen::Vector3d::UnitX(), totalDistance, 0.0, simTimeMsecLocal };
-      longPath.push_back(pathSegment);
-    }
-    */
 
     return longPath;
   }

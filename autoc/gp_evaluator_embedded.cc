@@ -1,7 +1,7 @@
 #include "gp_evaluator_embedded.h"
 
-double GPEvaluatorEmbedded::evaluateGPSimple(AircraftState& aircraftState, const Path& currentPath, 
-                                           const GPBytecode* program, int program_size, double arg) {
+gp_scalar GPEvaluatorEmbedded::evaluateGPSimple(AircraftState& aircraftState, const Path& currentPath, 
+                                           const GPBytecode* program, int program_size, gp_scalar arg) {
     // Create single-path provider for embedded use
     SinglePathProvider pathProvider(currentPath, aircraftState.getThisPathIndex());
     

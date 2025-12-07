@@ -10,8 +10,8 @@
 class GPEvaluatorEmbedded {
 public:
     // Simple evaluation function for embedded use - delegates to portable evaluator
-    static double evaluateGPSimple(AircraftState& aircraftState, const Path& currentPath, 
-                                  const GPBytecode* program, int program_size, double arg = 0.0);
+    static gp_scalar evaluateGPSimple(AircraftState& aircraftState, const Path& currentPath, 
+                                  const GPBytecode* program, int program_size, gp_scalar arg = 0.0f);
     
     // Helper to create single path provider
     static SinglePathProvider createPathProvider(const Path& currentPath, int currentIndex);

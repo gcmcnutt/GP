@@ -8,9 +8,9 @@
 class GPEvaluatorCRRCSim {
 public:
     // Evaluate using portable bytecode with CRRCSim path format
-    static double evaluateBytecodeForCRRCSim(const GPBytecode* program, int program_size,
+    static gp_scalar evaluateBytecodeForCRRCSim(const GPBytecode* program, int program_size,
                                             std::vector<Path>& path, AircraftState& aircraftState, 
-                                            double arg = 0.0);
+                                            gp_scalar arg = 0.0f);
     
     // Convert boost serialized bytecode to portable format
     // (This would be used when CRRCSim receives bytecode via RPC)

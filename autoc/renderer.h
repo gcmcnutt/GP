@@ -34,7 +34,7 @@
 #include <vtkAppendPolyData.h>
 #include <vtkTubeFilter.h>
 #include <vtkRibbonFilter.h>
-#include <vtkDoubleArray.h>
+#include <vtkFloatArray.h>
 #include <vtkPointData.h>
 #include <vtkTextActor.h>
 #include <vtkTextProperty.h>
@@ -77,7 +77,7 @@ public:
   void initialize();
   bool isRunning();
   bool updateGenerationDisplay(int genNumber);
-  void updateTextDisplay(int generation, double fitness);
+  void updateTextDisplay(int generation, gp_scalar fitness);
   void jumpToNewestGeneration();
   void jumpToOldestGeneration();
   void nextTest();
@@ -102,7 +102,7 @@ public:
   
   // Store current generation and fitness for resize updates
   int currentGeneration = 0;
-  double currentFitness = 0.0;
+  gp_scalar currentFitness = 0.0f;
   
   // Test span navigation state
   std::vector<TestSpan> testSpans;
@@ -111,18 +111,18 @@ public:
   bool inDecodeMode = false;
   bool focusMode = false;
   int focusArenaIndex = 0;
-  std::array<double,3> focusCameraPosition{0.0,0.0,0.0};
-  std::array<double,3> focusCameraFocalPoint{0.0,0.0,0.0};
-  std::array<double,3> focusCameraViewUp{0.0,0.0,-1.0};
+  std::array<gp_scalar,3> focusCameraPosition{0.0f,0.0f,0.0f};
+  std::array<gp_scalar,3> focusCameraFocalPoint{0.0f,0.0f,0.0f};
+  std::array<gp_scalar,3> focusCameraViewUp{0.0f,0.0f,-1.0f};
   
   // Animation state
   bool isPlaybackActive = false;
   bool isPlaybackPaused = false;
   std::chrono::steady_clock::time_point animationStartTime;
   std::chrono::steady_clock::time_point pauseStartTime;
-  std::chrono::duration<double> totalPausedTime = std::chrono::duration<double>::zero();
-  double animationSpeed = 1.0; // seconds per animation second
-  double totalAnimationDuration = 10.0; // total animation duration in seconds
+  std::chrono::duration<gp_scalar> totalPausedTime = std::chrono::duration<gp_scalar>::zero();
+  gp_scalar animationSpeed = 1.0f; // seconds per animation second
+  gp_scalar totalAnimationDuration = 10.0f; // total animation duration in seconds
   unsigned long animationTimerId = 0; // VTK timer ID for animation
 
   vtkSmartPointer<vtkRenderWindow> renderWindow;
@@ -155,22 +155,22 @@ private:
   vtkSmartPointer<vtkActor2D> stopwatchActor;
   vtkSmartPointer<vtkTextActor> stopwatchTimeActor;
   bool stopwatchVisible = false;
-  double stopwatchTime = 0.0;
+  gp_scalar stopwatchTime = 0.0f;
 
-  Eigen::Vector3d renderingOffset(int i); // locate a coordinate offset for our rendering screen
-  vtkSmartPointer<vtkPolyData> createPointSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> points);
-  vtkSmartPointer<vtkPolyData> createPointSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> points, double timeProgress);
-  vtkSmartPointer<vtkPolyData> createSegmentSet(Eigen::Vector3d offset, const std::vector<AircraftState> state, const std::vector<Eigen::Vector3d> end);
-  vtkSmartPointer<vtkPolyData> createSegmentSet(Eigen::Vector3d offset, const std::vector<AircraftState> state, const std::vector<Eigen::Vector3d> end, double timeProgress);
-  vtkSmartPointer<vtkPolyData> createTapeSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> points, const std::vector<Eigen::Vector3d> normals);
-  vtkSmartPointer<vtkPolyData> createTapeSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> points, const std::vector<Eigen::Vector3d> normals, double timeProgress);
-  std::vector<Eigen::Vector3d> pathToVector(const std::vector<Path> path);
-  std::vector<Eigen::Vector3d> stateToVector(const std::vector<AircraftState> path);
-  std::vector<Eigen::Vector3d> stateToOrientation(const std::vector<AircraftState> state);
-  double extractFitnessFromGP(const std::vector<char>& gpData);
-  void createHighlightedFlightTapes(Eigen::Vector3d offset);
+  gp_vec3 renderingOffset(int i); // locate a coordinate offset for our rendering screen
+  vtkSmartPointer<vtkPolyData> createPointSet(gp_vec3 offset, const std::vector<gp_vec3> points);
+  vtkSmartPointer<vtkPolyData> createPointSet(gp_vec3 offset, const std::vector<gp_vec3> points, gp_scalar timeProgress);
+  vtkSmartPointer<vtkPolyData> createSegmentSet(gp_vec3 offset, const std::vector<AircraftState> state, const std::vector<gp_vec3> end);
+  vtkSmartPointer<vtkPolyData> createSegmentSet(gp_vec3 offset, const std::vector<AircraftState> state, const std::vector<gp_vec3> end, gp_scalar timeProgress);
+  vtkSmartPointer<vtkPolyData> createTapeSet(gp_vec3 offset, const std::vector<gp_vec3> points, const std::vector<gp_vec3> normals);
+  vtkSmartPointer<vtkPolyData> createTapeSet(gp_vec3 offset, const std::vector<gp_vec3> points, const std::vector<gp_vec3> normals, gp_scalar timeProgress);
+  std::vector<gp_vec3> pathToVector(const std::vector<Path> path);
+  std::vector<gp_vec3> stateToVector(const std::vector<AircraftState> path);
+  std::vector<gp_vec3> stateToOrientation(const std::vector<AircraftState> state);
+  gp_scalar extractFitnessFromGP(const std::vector<char>& gpData);
+  void createHighlightedFlightTapes(gp_vec3 offset);
   void createStopwatch();
-  void updateStopwatch(double currentTime);
+  void updateStopwatch(gp_scalar currentTime);
   void setFocusArena(int arenaIdx);
 };
 

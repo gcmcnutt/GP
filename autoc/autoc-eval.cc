@@ -103,30 +103,30 @@ void createNodeSet(GPAdfNodeSet& adfNs)
 
 
 // Legacy getIndex function - now delegates to portable implementation
-int getIndex(std::vector<Path>& path, MyGP& gp, double arg) {
+int getIndex(std::vector<Path>& path, MyGP& gp, gp_scalar arg) {
   VectorPathProvider pathProvider(path, aircraftState.getThisPathIndex());
   return getPathIndex(pathProvider, aircraftState, arg);
 }
 
 // This function evaluates the fitness of a genetic tree using the portable evaluator.
 // This maintains compatibility while delegating to the portable implementation.
-double MyGene::evaluate(std::vector<Path>& path, MyGP& run, double arg)
+gp_scalar MyGene::evaluate(std::vector<Path>& path, MyGP& run, gp_scalar arg)
 {
   // Create path provider for this evaluation
   VectorPathProvider pathProvider(path, aircraftState.getThisPathIndex());
   
   // For leaf nodes (terminals), evaluate directly
   if (containerSize() == 0) {
-    return evaluateGPOperator(node->value(), pathProvider, aircraftState, nullptr, 0, arg);
+    return evaluateGPOperator(node->value(), pathProvider, aircraftState, nullptr, 0, static_cast<gp_scalar>(arg));
   }
   
   // For function nodes, evaluate children first
-  double childArgs[3] = {0.0, 0.0, 0.0}; // Max 3 args (IF, CLAMP)
+  gp_scalar childArgs[3] = {0.0f, 0.0f, 0.0f}; // Max 3 args (IF, CLAMP)
   int numArgs = containerSize();
   
   for (int i = 0; i < numArgs && i < 3; i++) {
-    childArgs[i] = NthMyChild(i)->evaluate(path, run, arg);
+    childArgs[i] = static_cast<gp_scalar>(NthMyChild(i)->evaluate(path, run, arg));
   }
   
-  return evaluateGPOperator(node->value(), pathProvider, aircraftState, childArgs, numArgs, arg);
+  return evaluateGPOperator(node->value(), pathProvider, aircraftState, childArgs, numArgs, static_cast<gp_scalar>(arg));
 }

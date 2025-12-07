@@ -1,7 +1,8 @@
 #include "gp_evaluator_portable.h"
+#include <array>
 #include <cmath>
 
-#ifdef GP_BUILD
+#if defined(GP_BUILD) && !defined(GP_TEST)
 #include "gp_bytecode.h"  // Full GPBytecode definition for GP builds
 #endif
 
@@ -9,10 +10,97 @@
 #include <iostream>
 #endif
 
-double evaluateGPOperator(int opcode, PathProvider& pathProvider, 
+namespace {
+constexpr gp_scalar GP_PI = static_cast<gp_scalar>(M_PI);
+constexpr gp_scalar GP_TWO_PI = GP_PI * static_cast<gp_scalar>(2.0f);
+constexpr gp_scalar GP_HALF_PI = GP_PI * static_cast<gp_scalar>(0.5f);
+
+// Sine/cosine lookup
+constexpr int SIN_COS_LUT_SIZE = 512;
+std::array<gp_scalar, SIN_COS_LUT_SIZE + 1> SIN_LUT{};
+bool SIN_LUT_INIT = false;
+
+inline gp_scalar wrapAngle(gp_scalar angle) {
+    gp_scalar wrapped = std::fmod(angle, GP_TWO_PI);
+    if (wrapped < 0) wrapped += GP_TWO_PI;
+    return wrapped;
+}
+
+inline void initTrigLut() {
+    if (SIN_LUT_INIT) return;
+    for (int i = 0; i <= SIN_COS_LUT_SIZE; ++i) {
+        gp_scalar angle = GP_TWO_PI * static_cast<gp_scalar>(i) / static_cast<gp_scalar>(SIN_COS_LUT_SIZE);
+        SIN_LUT[i] = std::sin(angle);
+    }
+    SIN_LUT_INIT = true;
+}
+
+inline gp_scalar fastSin(gp_scalar angle) {
+    initTrigLut();
+    gp_scalar wrapped = wrapAngle(angle);
+    gp_scalar scaled = wrapped * (static_cast<gp_scalar>(SIN_COS_LUT_SIZE) / GP_TWO_PI);
+    int i0 = static_cast<int>(scaled);
+    gp_scalar frac = scaled - static_cast<gp_scalar>(i0);
+    int i1 = (i0 + 1 <= SIN_COS_LUT_SIZE) ? i0 + 1 : 0;
+    return SIN_LUT[i0] + (SIN_LUT[i1] - SIN_LUT[i0]) * frac;
+}
+
+inline gp_scalar fastCos(gp_scalar angle) {
+    return fastSin(angle + GP_HALF_PI);
+}
+
+// atan lookup for ratio in [0,1], mirrored for other quadrants
+constexpr int ATAN_LUT_SIZE = 512;
+std::array<gp_scalar, ATAN_LUT_SIZE + 1> ATAN_LUT{};
+bool ATAN_LUT_INIT = false;
+
+inline void initAtanLut() {
+    if (ATAN_LUT_INIT) return;
+    for (int i = 0; i <= ATAN_LUT_SIZE; ++i) {
+        gp_scalar t = static_cast<gp_scalar>(i) / static_cast<gp_scalar>(ATAN_LUT_SIZE);
+        ATAN_LUT[i] = std::atan(t);
+    }
+    ATAN_LUT_INIT = true;
+}
+
+inline gp_scalar fastAtan(gp_scalar r) {
+    initAtanLut();
+    gp_scalar t = ABS_DEF(r);
+    gp_scalar scaled = t * static_cast<gp_scalar>(ATAN_LUT_SIZE);
+    if (scaled >= ATAN_LUT_SIZE) {
+        return (r < 0.0f ? -ATAN_LUT[ATAN_LUT_SIZE] : ATAN_LUT[ATAN_LUT_SIZE]);
+    }
+    int i0 = static_cast<int>(scaled);
+    gp_scalar frac = scaled - static_cast<gp_scalar>(i0);
+    gp_scalar a0 = ATAN_LUT[i0];
+    gp_scalar a1 = ATAN_LUT[i0 + 1];
+    gp_scalar angle = a0 + (a1 - a0) * frac;
+    return (r < 0.0f) ? -angle : angle;
+}
+
+inline gp_scalar fastAtan2(gp_scalar y, gp_scalar x) {
+    if (ABS_DEF(x) < static_cast<gp_scalar>(1e-6f) && ABS_DEF(y) < static_cast<gp_scalar>(1e-6f)) {
+        return 0.0f;
+    }
+
+    if (ABS_DEF(x) > ABS_DEF(y)) {
+        gp_scalar angle = fastAtan(y / x);
+        if (x < 0.0f) {
+            angle += (y >= 0.0f ? GP_PI : -GP_PI);
+        }
+        return angle;
+    } else {
+        gp_scalar angle = fastAtan(x / y);
+        gp_scalar base = (y > 0.0f) ? GP_HALF_PI : -GP_HALF_PI;
+        return base - angle;
+    }
+}
+}  // namespace
+
+gp_scalar evaluateGPOperator(int opcode, PathProvider& pathProvider, 
                          AircraftState& aircraftState,
-                         const double* args, int argc, double contextArg) {
-    double result = 0.0;
+                         const gp_scalar* args, int argc, gp_scalar contextArg) {
+    gp_scalar result = 0.0f;
     
     switch (opcode) {
         // Math operators - identical on all platforms
@@ -70,13 +158,13 @@ double evaluateGPOperator(int opcode, PathProvider& pathProvider,
         
         // Trigonometry - use C math library (available on all platforms)
         case SIN: 
-            result = sin(args[0]); 
+            result = fastSin(args[0]); 
             break;
         case COS: 
-            result = cos(args[0]); 
+            result = fastCos(args[0]); 
             break;
         case ATAN2: 
-            result = ATAN2_DEF(args[0], args[1]); 
+            result = fastAtan2(args[0], args[1]); 
             break;
         
         // Math helpers - use platform macros  
@@ -87,7 +175,7 @@ double evaluateGPOperator(int opcode, PathProvider& pathProvider,
             result = ABS_DEF(args[0]); 
             break;
         case SQRT: 
-            result = (args[0] >= 0) ? SQRT_DEF(args[0]) : 0.0; 
+            result = (args[0] >= 0) ? SQRT_DEF(args[0]) : 0.0f; 
             break;
         case MIN: 
             result = MIN_DEF(args[0], args[1]); 
@@ -101,10 +189,10 @@ double evaluateGPOperator(int opcode, PathProvider& pathProvider,
             result = args[0] ? args[1] : args[2]; 
             break;
         case EQ: 
-            result = (args[0] == args[1]) ? 1.0 : 0.0; 
+            result = (args[0] == args[1]) ? 1.0f : 0.0f; 
             break;
         case GT: 
-            result = (args[0] > args[1]) ? 1.0 : 0.0; 
+            result = (args[0] > args[1]) ? 1.0f : 0.0f; 
             break;
         case PROGN: 
             result = args[1]; // Return second arg, ignore first
@@ -112,16 +200,16 @@ double evaluateGPOperator(int opcode, PathProvider& pathProvider,
         
         // Constants
         case OP_PI:
-            result = M_PI; 
+            result = GP_PI; 
             break;
         case ZERO: 
-            result = 0.0; 
+            result = 0.0f; 
             break;
         case ONE: 
-            result = 1.0; 
+            result = 1.0f; 
             break;
         case TWO: 
-            result = 2.0; 
+            result = 2.0f; 
             break;
         
         // Velocity/attitude sensors
@@ -137,30 +225,30 @@ double evaluateGPOperator(int opcode, PathProvider& pathProvider,
         
         case GETALPHA: {
             // Transform actual velocity vector to body frame
-            Eigen::Vector3d velocity_body = aircraftState.getOrientation().inverse() * aircraftState.getVelocity();
+            gp_vec3 velocity_body = aircraftState.getOrientation().inverse() * aircraftState.getVelocity();
             // Angle of attack is angle between velocity and body X axis (forward)
-            result = ATAN2_DEF(-velocity_body.z(), velocity_body.x());
+            result = fastAtan2(-velocity_body.z(), velocity_body.x());
             break;
         }
         
         case GETBETA: {
             // Transform actual velocity vector to body frame
-            Eigen::Vector3d velocity_body = aircraftState.getOrientation().inverse() * aircraftState.getVelocity();
+            gp_vec3 velocity_body = aircraftState.getOrientation().inverse() * aircraftState.getVelocity();
             // Sideslip is angle between velocity and body XZ plane
-            result = ATAN2_DEF(velocity_body.y(), velocity_body.x());
+            result = fastAtan2(velocity_body.y(), velocity_body.x());
             break;
         }
         
         case GETROLL_RAD: {
             // Convert quaternion to Euler angles using standard aerospace convention
-            Eigen::Vector3d euler = aircraftState.getOrientation().toRotationMatrix().eulerAngles(2, 1, 0);
+            gp_vec3 euler = aircraftState.getOrientation().toRotationMatrix().eulerAngles(2, 1, 0);
             result = euler[2]; // Roll angle (rotation around X-axis)
             break;
         }
         
         case GETPITCH_RAD: {
             // Convert quaternion to Euler angles using standard aerospace convention
-            Eigen::Vector3d euler = aircraftState.getOrientation().toRotationMatrix().eulerAngles(2, 1, 0);
+            gp_vec3 euler = aircraftState.getOrientation().toRotationMatrix().eulerAngles(2, 1, 0);
             result = euler[1]; // Pitch angle (rotation around Y-axis)
             break;
         }
@@ -176,62 +264,62 @@ double evaluateGPOperator(int opcode, PathProvider& pathProvider,
     return applyRangeLimit(result);
 }
 
-double executeGetDPhi(PathProvider& pathProvider, AircraftState& aircraftState, double arg) {
+gp_scalar executeGetDPhi(PathProvider& pathProvider, AircraftState& aircraftState, gp_scalar arg) {
     // Calculate the vector from craft to target in world frame
     int idx = getPathIndex(pathProvider, aircraftState, arg);
-    Eigen::Vector3d craftToTarget = pathProvider.getPath(idx).start - aircraftState.getPosition();
+    gp_vec3 craftToTarget = pathProvider.getPath(idx).start - aircraftState.getPosition();
     
     // Transform the craft-to-target vector to body frame
-    Eigen::Vector3d target_local = aircraftState.getOrientation().inverse() * craftToTarget;
+    gp_vec3 target_local = aircraftState.getOrientation().inverse() * craftToTarget;
     
     // Project the craft-to-target vector onto the body YZ plane
-    Eigen::Vector3d projectedVector(0, target_local.y(), target_local.z());
+    gp_vec3 projectedVector(0.0f, target_local.y(), target_local.z());
     
     // Calculate the angle between the projected vector and the body Z-axis
-    return ATAN2_DEF(projectedVector.y(), -projectedVector.z());
+    return fastAtan2(projectedVector.y(), -projectedVector.z());
 }
 
-double executeGetDTheta(PathProvider& pathProvider, AircraftState& aircraftState, double arg) {
+gp_scalar executeGetDTheta(PathProvider& pathProvider, AircraftState& aircraftState, gp_scalar arg) {
     // Calculate the vector from craft to target in world frame
     int idx = getPathIndex(pathProvider, aircraftState, arg);
-    Eigen::Vector3d craftToTarget = pathProvider.getPath(idx).start - aircraftState.getPosition();
+    gp_vec3 craftToTarget = pathProvider.getPath(idx).start - aircraftState.getPosition();
     
     // Transform the craft-to-target vector to body frame
-    Eigen::Vector3d target_local = aircraftState.getOrientation().inverse() * craftToTarget;
+    gp_vec3 target_local = aircraftState.getOrientation().inverse() * craftToTarget;
     
     // Project the craft-to-target vector onto the body YZ plane
-    Eigen::Vector3d projectedVector(0, target_local.y(), target_local.z());
+    gp_vec3 projectedVector(0.0f, target_local.y(), target_local.z());
     
     // Calculate the angle between the projected vector and the body Z-axis
-    double rollEstimate = ATAN2_DEF(projectedVector.y(), -projectedVector.z());
+    gp_scalar rollEstimate = fastAtan2(projectedVector.y(), -projectedVector.z());
     
     // *** PITCH: Calculate the vector from craft to target in world frame if it did rotate
-    Eigen::Quaterniond rollRotation(Eigen::AngleAxisd(rollEstimate, Eigen::Vector3d::UnitX()));
-    Eigen::Quaterniond virtualOrientation = aircraftState.getOrientation() * rollRotation;
+    gp_quat rollRotation(Eigen::AngleAxis<gp_scalar>(rollEstimate, gp_vec3::UnitX()));
+    gp_quat virtualOrientation = aircraftState.getOrientation() * rollRotation;
     
     // Transform target vector to new virtual orientation
-    Eigen::Vector3d newLocalTargetVector = virtualOrientation.inverse() * craftToTarget;
+    gp_vec3 newLocalTargetVector = virtualOrientation.inverse() * craftToTarget;
     
     // Calculate pitch angle
-    return ATAN2_DEF(-newLocalTargetVector.z(), newLocalTargetVector.x());
+    return fastAtan2(-newLocalTargetVector.z(), newLocalTargetVector.x());
 }
 
-double executeGetDTarget(PathProvider& pathProvider, AircraftState& aircraftState, double arg) {
+gp_scalar executeGetDTarget(PathProvider& pathProvider, AircraftState& aircraftState, gp_scalar arg) {
     int idx = getPathIndex(pathProvider, aircraftState, arg);
-    double distance = (pathProvider.getPath(idx).start - aircraftState.getPosition()).norm();
-    return CLAMP_DEF((distance - 10) / aircraftState.getRelVel(), -1.0, 1.0);
+    gp_scalar distance = (pathProvider.getPath(idx).start - aircraftState.getPosition()).norm();
+    return CLAMP_DEF((distance - static_cast<gp_scalar>(10.0f)) / aircraftState.getRelVel(), -1.0f, 1.0f);
 }
 
-double executeGetDHome(AircraftState& aircraftState) {
-    return (Eigen::Vector3d(0, 0, SIM_INITIAL_ALTITUDE) - aircraftState.getPosition()).norm();
+gp_scalar executeGetDHome(AircraftState& aircraftState) {
+    return (gp_vec3(0.0f, 0.0f, SIM_INITIAL_ALTITUDE) - aircraftState.getPosition()).norm();
 }
 
 // Portable bytecode evaluation implementation - works on all platforms
-double evaluateBytecodePortable(const struct GPBytecode* program, int program_size, 
+gp_scalar evaluateBytecodePortable(const struct GPBytecode* program, int program_size, 
                                PathProvider& pathProvider, AircraftState& aircraftState, 
-                               double contextArg) {
+                               gp_scalar contextArg) {
     const int MAX_STACK_SIZE = 256;
-    double stack[MAX_STACK_SIZE];
+    gp_scalar stack[MAX_STACK_SIZE];
     int stack_ptr = 0;
     
     // Execute bytecode instructions
@@ -249,8 +337,8 @@ double evaluateBytecodePortable(const struct GPBytecode* program, int program_si
             case ATAN2:
             case MIN:
             case MAX: {
-                if (stack_ptr < 2) return 0.0;
-                double args[2] = {stack[stack_ptr-2], stack[stack_ptr-1]};
+                if (stack_ptr < 2) return 0.0f;
+                gp_scalar args[2] = {stack[stack_ptr-2], stack[stack_ptr-1]};
                 stack_ptr -= 2;
                 stack[stack_ptr++] = evaluateGPOperator(instruction.opcode, pathProvider, aircraftState, args, 2, contextArg);
                 break;
@@ -267,8 +355,8 @@ double evaluateBytecodePortable(const struct GPBytecode* program, int program_si
             case GETDPHI:
             case GETDTHETA:
             case GETDTARGET: {
-                if (stack_ptr < 1) return 0.0;
-                double args[1] = {stack[stack_ptr-1]};
+                if (stack_ptr < 1) return 0.0f;
+                gp_scalar args[1] = {stack[stack_ptr-1]};
                 stack_ptr -= 1;
                 stack[stack_ptr++] = evaluateGPOperator(instruction.opcode, pathProvider, aircraftState, args, 1, contextArg);
                 break;
@@ -277,8 +365,8 @@ double evaluateBytecodePortable(const struct GPBytecode* program, int program_si
             // Ternary operations - pop three, push result
             case IF:
             case CLAMP: {
-                if (stack_ptr < 3) return 0.0;
-                double args[3] = {stack[stack_ptr-3], stack[stack_ptr-2], stack[stack_ptr-1]};
+                if (stack_ptr < 3) return 0.0f;
+                gp_scalar args[3] = {stack[stack_ptr-3], stack[stack_ptr-2], stack[stack_ptr-1]};
                 stack_ptr -= 3;
                 stack[stack_ptr++] = evaluateGPOperator(instruction.opcode, pathProvider, aircraftState, args, 3, contextArg);
                 break;
@@ -286,8 +374,8 @@ double evaluateBytecodePortable(const struct GPBytecode* program, int program_si
             
             // PROGN - pop two, discard first, keep second
             case PROGN: {
-                if (stack_ptr < 2) return 0.0;
-                double args[2] = {stack[stack_ptr-2], stack[stack_ptr-1]};
+                if (stack_ptr < 2) return 0.0f;
+                gp_scalar args[2] = {stack[stack_ptr-2], stack[stack_ptr-1]};
                 stack_ptr -= 2;
                 stack[stack_ptr++] = evaluateGPOperator(instruction.opcode, pathProvider, aircraftState, args, 2, contextArg);
                 break;
@@ -305,16 +393,16 @@ double evaluateBytecodePortable(const struct GPBytecode* program, int program_si
 #ifdef GP_BUILD
             std::cerr << "Error: Stack overflow in bytecode execution" << std::endl;
 #endif
-            return 0.0;
+            return 0.0f;
         }
     }
     
     // Return final result
     if (stack_ptr != 1) {
 #ifdef GP_BUILD
-        std::cerr << "Error: Invalid stack state after bytecode execution (stack_ptr=" << stack_ptr << ")" << std::endl;
+            std::cerr << "Error: Invalid stack state after bytecode execution (stack_ptr=" << stack_ptr << ")" << std::endl;
 #endif
-        return 0.0;
+        return 0.0f;
     }
     
     return applyRangeLimit(stack[0]);

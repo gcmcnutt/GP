@@ -30,6 +30,11 @@
 #include <aws/core/auth/AWSCredentialsProvider.h>
 #include <aws/core/client/ClientConfiguration.h>
 
+using scalar = gp_scalar;
+using vec3 = gp_vec3;
+using quat = gp_quat;
+using mat3 = Eigen::Matrix<gp_scalar, 3, 3>;
+
 EvalResults evalResults;
 std::string computedKeyName = "";
 Renderer renderer;
@@ -37,12 +42,12 @@ Renderer renderer;
 // Blackbox-related global variables
 std::string decoderCommand = "";
 vtkSmartPointer<vtkAppendPolyData> blackboxTape;
-std::vector<Eigen::Vector3d> blackboxPoints;
-std::vector<Eigen::Vector3d> blackboxNormals;
+std::vector<vec3> blackboxPoints;
+std::vector<vec3> blackboxNormals;
 std::vector<AircraftState> blackboxAircraftStates;
 std::vector<AircraftState> fullBlackboxAircraftStates;  // Store full flight for span extraction
-Eigen::Vector3d blackboxOrigin(0.0, 0.0, 0.0);
-double blackboxTimeOffset = 0.0;
+vec3 blackboxOrigin(0.0f, 0.0f, 0.0f);
+scalar blackboxTimeOffset = 0.0f;
 std::vector<std::string> csvLines;  // Store CSV lines for span analysis
 
 // Forward declarations
@@ -55,69 +60,33 @@ std::shared_ptr<Aws::S3::S3Client> getS3Client() {
   return ConfigManager::getS3Client();
 }
 
-void PrintPolyDataInfo(vtkPolyData* polyData)
-{
-  vtkPoints* points = polyData->GetPoints();
-  vtkCellArray* cells = polyData->GetPolys();
-  vtkIdList* idList = vtkIdList::New();
-
-  if (points == NULL) {
-    printf("No points in the polydata\n");
-  }
-  else {
-    printf("Number of Points: %lld\n", static_cast<long long>(points->GetNumberOfPoints()));
-    printf("Points:\n");
-    for (vtkIdType i = 0; i < points->GetNumberOfPoints(); ++i)
-    {
-      double p[3];
-      points->GetPoint(i, p);
-      printf("  Point %lld: (%f, %f, %f)\n", static_cast<long long>(i), p[0], p[1], p[2]);
-    }
-  }
-
-  printf("Number of Cells: %lld\n", static_cast<long long>(cells->GetNumberOfCells()));
-  printf("Cells:\n");
-  cells->InitTraversal();
-  while (cells->GetNextCell(idList))
-  {
-    printf("  Cell with %lld points: ", static_cast<long long>(idList->GetNumberOfIds()));
-    for (vtkIdType j = 0; j < idList->GetNumberOfIds(); ++j)
-    {
-      printf("%lld ", static_cast<long long>(idList->GetId(j)));
-    }
-    printf("\n");
-  }
-
-  idList->Delete();
-}
-
 // Function to lay out the squares
 // given i, and NUM_PATHS_PER_GEN, compute the offsets for this particular square
-Eigen::Vector3d Renderer::renderingOffset(int i) {
+vec3 Renderer::renderingOffset(int i) {
   // Calculate the dimension of the larger square
-  int sideLength = std::ceil(std::sqrt(evalResults.pathList.size()));
+  int sideLength = static_cast<int>(std::ceil(std::sqrt(static_cast<scalar>(evalResults.pathList.size()))));
 
   int row = i / sideLength;
   int col = i % sideLength;
 
   // for now put them in a line
-  double xOffset = col * (FIELD_SIZE + FIELD_GAP);
-  double yOffset = row * (FIELD_SIZE + FIELD_GAP);
+  scalar xOffset = static_cast<scalar>(col) * static_cast<scalar>(FIELD_SIZE + FIELD_GAP);
+  scalar yOffset = static_cast<scalar>(row) * static_cast<scalar>(FIELD_SIZE + FIELD_GAP);
 
-  return Eigen::Vector3d(xOffset, yOffset, 0.0);
+  return vec3(xOffset, yOffset, 0.0f);
 }
 
 
-vtkSmartPointer<vtkPolyData> Renderer::createPointSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> points) {
-  return createPointSet(offset, points, 1.0);
+vtkSmartPointer<vtkPolyData> Renderer::createPointSet(vec3 offset, const std::vector<vec3> points) {
+  return createPointSet(offset, points, static_cast<scalar>(1.0f));
 }
 
-vtkSmartPointer<vtkPolyData> Renderer::createPointSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> points, double timeProgress) {
+vtkSmartPointer<vtkPolyData> Renderer::createPointSet(vec3 offset, const std::vector<vec3> points, scalar timeProgress) {
   vtkSmartPointer<vtkPolyData> polyData = vtkSmartPointer<vtkPolyData>::New();
   
   // Calculate how many points to include based on time progress
   size_t numPointsToShow = static_cast<size_t>(points.size() * timeProgress);
-  if (numPointsToShow == 0 && timeProgress > 0.0) numPointsToShow = 1; // Show at least one point if progress > 0
+  if (numPointsToShow == 0 && timeProgress > static_cast<scalar>(0.0f)) numPointsToShow = 1; // Show at least one point if progress > 0
   if (numPointsToShow > points.size()) numPointsToShow = points.size();
   
   // Return empty polydata if no points to show
@@ -129,7 +98,7 @@ vtkSmartPointer<vtkPolyData> Renderer::createPointSet(Eigen::Vector3d offset, co
   
   vtkSmartPointer<vtkPoints> vtp = vtkSmartPointer<vtkPoints>::New();
   for (size_t i = 0; i < numPointsToShow; ++i) {
-    Eigen::Vector3d rPoint = points[i] + offset;
+    vec3 rPoint = points[i] + offset;
     vtp->InsertNextPoint(rPoint[0], rPoint[1], rPoint[2]);
   }
 
@@ -148,16 +117,16 @@ vtkSmartPointer<vtkPolyData> Renderer::createPointSet(Eigen::Vector3d offset, co
   return polyData;
 }
 
-vtkSmartPointer<vtkPolyData> Renderer::createSegmentSet(Eigen::Vector3d offset, const std::vector<AircraftState> state, const std::vector<Eigen::Vector3d> end) {
-  return createSegmentSet(offset, state, end, 1.0);
+vtkSmartPointer<vtkPolyData> Renderer::createSegmentSet(vec3 offset, const std::vector<AircraftState> state, const std::vector<vec3> end) {
+  return createSegmentSet(offset, state, end, static_cast<scalar>(1.0f));
 }
 
-vtkSmartPointer<vtkPolyData> Renderer::createSegmentSet(Eigen::Vector3d offset, const std::vector<AircraftState> state, const std::vector<Eigen::Vector3d> end, double timeProgress) {
+vtkSmartPointer<vtkPolyData> Renderer::createSegmentSet(vec3 offset, const std::vector<AircraftState> state, const std::vector<vec3> end, scalar timeProgress) {
   vtkSmartPointer<vtkPolyData> polyData = vtkSmartPointer<vtkPolyData>::New();
   
   // Calculate how many segments to show based on time progress
   size_t numStatesToShow = static_cast<size_t>(state.size() * timeProgress);
-  if (numStatesToShow == 0 && timeProgress > 0.0) numStatesToShow = 1;
+  if (numStatesToShow == 0 && timeProgress > static_cast<scalar>(0.0f)) numStatesToShow = 1;
   if (numStatesToShow > state.size()) numStatesToShow = state.size();
   
   // Return empty polydata if no states to show
@@ -170,8 +139,8 @@ vtkSmartPointer<vtkPolyData> Renderer::createSegmentSet(Eigen::Vector3d offset, 
   vtkSmartPointer<vtkPoints> points = vtkSmartPointer<vtkPoints>::New();
   for (size_t i = 0; i < numStatesToShow; i++) {
     auto& s = state.at(i);
-    Eigen::Vector3d rStart = Eigen::Vector3d{ s.getPosition()[0], s.getPosition()[1], s.getPosition()[2] } + offset;
-    Eigen::Vector3d rEnd = end[s.getThisPathIndex()] + offset;
+    vec3 rStart = vec3{ s.getPosition()[0], s.getPosition()[1], s.getPosition()[2] } + offset;
+    vec3 rEnd = end[s.getThisPathIndex()] + offset;
     points->InsertNextPoint(rStart[0], rStart[1], rStart[2]);
     points->InsertNextPoint(rEnd[0], rEnd[1], rEnd[2]);
   }
@@ -193,22 +162,22 @@ vtkSmartPointer<vtkPolyData> Renderer::createSegmentSet(Eigen::Vector3d offset, 
 /*
  ** actual data is rendered as a tape with a top and bottom
  */
-vtkSmartPointer<vtkPolyData> Renderer::createTapeSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> points,
-  const std::vector<Eigen::Vector3d> normals) {
-  return createTapeSet(offset, points, normals, 1.0);
+vtkSmartPointer<vtkPolyData> Renderer::createTapeSet(vec3 offset, const std::vector<vec3> points,
+  const std::vector<vec3> normals) {
+  return createTapeSet(offset, points, normals, static_cast<scalar>(1.0f));
 }
 
-vtkSmartPointer<vtkPolyData> Renderer::createTapeSet(Eigen::Vector3d offset, const std::vector<Eigen::Vector3d> points,
-  const std::vector<Eigen::Vector3d> normals, double timeProgress) {
+vtkSmartPointer<vtkPolyData> Renderer::createTapeSet(vec3 offset, const std::vector<vec3> points,
+  const std::vector<vec3> normals, scalar timeProgress) {
   vtkSmartPointer<vtkPoints> vtp = vtkSmartPointer<vtkPoints>::New();
   vtkSmartPointer<vtkCellArray> lines = vtkSmartPointer<vtkCellArray>::New();
-  vtkSmartPointer<vtkDoubleArray> orientations = vtkSmartPointer<vtkDoubleArray>::New();
+  vtkSmartPointer<vtkFloatArray> orientations = vtkSmartPointer<vtkFloatArray>::New();
   orientations->SetNumberOfComponents(3);
   orientations->SetName("Orientations");
 
   // Calculate how many points to show based on time progress
   size_t numPointsToShow = static_cast<size_t>(points.size() * timeProgress);
-  if (numPointsToShow == 0 && timeProgress > 0.0) numPointsToShow = 1;
+  if (numPointsToShow == 0 && timeProgress > static_cast<scalar>(0.0f)) numPointsToShow = 1;
   if (numPointsToShow > points.size()) numPointsToShow = points.size();
   
   // Need at least 2 points for ribbon filter to work properly
@@ -227,7 +196,7 @@ vtkSmartPointer<vtkPolyData> Renderer::createTapeSet(Eigen::Vector3d offset, con
   polyLine->GetPointIds()->SetNumberOfIds(numPointsToShow);
 
   for (size_t i = 0; i < numPointsToShow; ++i) {
-    Eigen::Vector3d point = points[i] + offset;
+    vec3 point = points[i] + offset;
     vtp->InsertNextPoint(point[0], point[1], point[2]);
     polyLine->GetPointIds()->SetId(i, i);
 
@@ -322,7 +291,7 @@ bool Renderer::updateGenerationDisplay(int newGen) {
       }
     }
 
-    Eigen::Vector3d finalPos = Eigen::Vector3d::Zero();
+    vec3 finalPos = vec3::Zero();
     if (i < evalResults.aircraftStateList.size() && !evalResults.aircraftStateList[i].empty()) {
       finalPos = evalResults.aircraftStateList[i].back().getPosition();
     } else if (i < evalResults.pathList.size() && !evalResults.pathList[i].empty()) {
@@ -338,10 +307,10 @@ bool Renderer::updateGenerationDisplay(int newGen) {
 
   int maxArenas = evalResults.pathList.size();
   for (int i = 0; i < maxArenas; i++) {
-    Eigen::Vector3d offset = renderingOffset(i);
+    vec3 offset = renderingOffset(i);
 
-    std::vector<Eigen::Vector3d> p = pathToVector(evalResults.pathList[i]);
-    std::vector<Eigen::Vector3d> a = stateToVector(evalResults.aircraftStateList[i]);
+    std::vector<vec3> p = pathToVector(evalResults.pathList[i]);
+    std::vector<vec3> a = stateToVector(evalResults.aircraftStateList[i]);
 
     if (!p.empty()) {
       this->paths->AddInputData(createPointSet(offset, p));
@@ -356,12 +325,12 @@ bool Renderer::updateGenerationDisplay(int newGen) {
     // Create a plane source at z = 0
     vtkNew<vtkPlaneSource> planeSource;
 
-    double width = FIELD_SIZE;
-    double height = FIELD_SIZE;
-    int resolution = FIELD_SIZE / 10.0;
-    planeSource->SetOrigin(offset[0] - width / 2.0, offset[1] - height / 2.0, 0.0);
-    planeSource->SetPoint1(offset[0] + width / 2.0, offset[1] - height / 2.0, 0.0);
-    planeSource->SetPoint2(offset[0] - width / 2.0, offset[1] + height / 2.0, 0.0);
+    scalar width = static_cast<scalar>(FIELD_SIZE);
+    scalar height = static_cast<scalar>(FIELD_SIZE);
+    int resolution = static_cast<int>(FIELD_SIZE / 10.0f);
+    planeSource->SetOrigin(offset[0] - width / 2.0f, offset[1] - height / 2.0f, 0.0);
+    planeSource->SetPoint1(offset[0] + width / 2.0f, offset[1] - height / 2.0f, 0.0);
+    planeSource->SetPoint2(offset[0] - width / 2.0f, offset[1] + height / 2.0f, 0.0);
     planeSource->SetXResolution(resolution);
     planeSource->SetYResolution(resolution);
     planeSource->Update();
@@ -374,12 +343,12 @@ bool Renderer::updateGenerationDisplay(int newGen) {
     // checkerboard
     for (int i = 0; i < planeSource->GetOutput()->GetNumberOfCells(); i++) {
       if (i % 2 ^ (i / 10) % 2) {
-        double rgb[4] = { 255.0, 255.0, 255.0, 100.0 };
-        cellData->InsertTuple(i, rgb);
+        unsigned char rgb[4] = { 255, 255, 255, 100 };
+        cellData->InsertTypedTuple(i, rgb);
       }
       else {
-        double rgb[4] = { 0.0, 0.0, 0.0, 100.0 };
-        cellData->InsertTuple(i, rgb);
+        unsigned char rgb[4] = { 0, 0, 0, 100 };
+        cellData->InsertTypedTuple(i, rgb);
       }
     }
     planeSource->GetOutput()->GetCellData()->SetScalars(cellData);
@@ -401,18 +370,17 @@ bool Renderer::updateGenerationDisplay(int newGen) {
     labelStream << "  Wind " << meta.windVariantIndex;
     labelStream << "\nSeed " << meta.windSeed;
 
-    double labelScale = 6.0 * 0.5;
-    double textOffsetX = 45.0;
-    double textOffsetY = -45.0;
-    double anchorX = offset[0] + textOffsetX;
-    double anchorY = offset[1] + textOffsetY;
-    double anchorZ = offset[2] + 0.1;
+    scalar labelScale = static_cast<scalar>(6.0f * 0.5f);
+    scalar textOffsetX = static_cast<scalar>(45.0f);
+    scalar textOffsetY = static_cast<scalar>(-45.0f);
+    scalar anchorX = offset[0] + textOffsetX;
+    scalar anchorY = offset[1] + textOffsetY;
+    scalar anchorZ = offset[2] + static_cast<scalar>(0.1f);
 
     vtkNew<vtkVectorText> textSource;
     textSource->SetText(labelStream.str().c_str());
     textSource->Update();
-    double bounds[6];
-    textSource->GetOutput()->GetBounds(bounds);
+    const auto* bounds = textSource->GetOutput()->GetBounds();
 
     vtkNew<vtkTransform> textTransform;
     textTransform->PostMultiply();
@@ -443,10 +411,10 @@ bool Renderer::updateGenerationDisplay(int newGen) {
     if (i == 0 && !blackboxAircraftStates.empty()) {
       // Center blackbox data in the arena by adding the arena offset
       // The blackbox data is already origin-centered, so we add the arena offset to position it properly
-      Eigen::Vector3d blackboxOffset = offset;
+      vec3 blackboxOffset = offset;
       
       // Use the same rendering pipeline as the blue/yellow tape
-      std::vector<Eigen::Vector3d> a = stateToVector(blackboxAircraftStates);
+      std::vector<vec3> a = stateToVector(blackboxAircraftStates);
       
       // Only create tape if we have enough points
       if (a.size() >= 2) {
@@ -486,7 +454,7 @@ bool Renderer::updateGenerationDisplay(int newGen) {
   renderWindow->SetWindowName(title.c_str());
 
   // Extract fitness from GP data and update text displays
-  double fitness = extractFitnessFromGP(evalResults.gp);
+  gp_scalar fitness = extractFitnessFromGP(evalResults.gp);
   updateTextDisplay(newGen, fitness);
 
   // Render the updated scene
@@ -935,7 +903,7 @@ void Renderer::initialize() {
   // Set properties for the tape (actor2)
   vtkProperty* property = actor2->GetProperty();
 
-  // Enable double-sided surface rendering
+  // Enable two-sided surface rendering
   property->SetLighting(true);
   property->SetInterpolation(VTK_FLAT);
   property->SetBackfaceCulling(false);
@@ -1059,34 +1027,34 @@ void Renderer::initialize() {
   renderWindowInteractor->AddObserver(vtkCommand::TimerEvent, timerCallback);
 }
 
-std::vector<Eigen::Vector3d> Renderer::pathToVector(std::vector<Path> path) {
-  std::vector<Eigen::Vector3d> points;
+std::vector<vec3> Renderer::pathToVector(std::vector<Path> path) {
+  std::vector<vec3> points;
   for (const auto& p : path) {
     points.push_back(p.start);
   }
   return points;
 }
 
-std::vector<Eigen::Vector3d> Renderer::stateToVector(std::vector<AircraftState> state) {
-  std::vector<Eigen::Vector3d> points;
+std::vector<vec3> Renderer::stateToVector(std::vector<AircraftState> state) {
+  std::vector<vec3> points;
   for (const auto& s : state) {
-    points.push_back({ s.getPosition()[0], s.getPosition()[1], s.getPosition()[2] });
+    points.push_back(s.getPosition());
   }
   return points;
 }
 
-std::vector<Eigen::Vector3d> Renderer::stateToOrientation(std::vector<AircraftState> state) {
-  std::vector<Eigen::Vector3d> points;
+std::vector<vec3> Renderer::stateToOrientation(std::vector<AircraftState> state) {
+  std::vector<vec3> points;
   for (const auto& s : state) {
     // Use the aircraft body Z-axis (up direction) for ribbon orientation
-    points.push_back(s.getOrientation() * -Eigen::Vector3d::UnitZ());
+    points.push_back(s.getOrientation() * -vec3::UnitZ());
   }
   return points;
 }
 
-double Renderer::extractFitnessFromGP(const std::vector<char>& gpData) {
+gp_scalar Renderer::extractFitnessFromGP(const std::vector<char>& gpData) {
   if (gpData.empty()) {
-    return 0.0;
+    return 0.0f;
   }
   
   try {
@@ -1097,15 +1065,15 @@ double Renderer::extractFitnessFromGP(const std::vector<char>& gpData) {
     GP gp;
     gp.load(inStream);
     
-    return gp.getFitness();
+    return static_cast<gp_scalar>(gp.getFitness());
   }
   catch (const std::exception& e) {
     std::cerr << "Error extracting fitness from GP: " << e.what() << std::endl;
-    return 0.0;
+    return 0.0f;
   }
 }
 
-void Renderer::updateTextDisplay(int generation, double fitness) {
+void Renderer::updateTextDisplay(int generation, gp_scalar fitness) {
   // Store current values for resize updates
   currentGeneration = generation;
   currentFitness = fitness;
@@ -1437,13 +1405,13 @@ bool parseBlackboxData(const std::string& csvData) {
     
     // Extract navPos coordinates and convert to meters
     if (latIndex >= 0 && lonIndex >= 0 && altIndex >= 0) {
-      double navX = std::stod(row[latIndex]);  // navPos[0] in cm
-      double navY = std::stod(row[lonIndex]);  // navPos[1] in cm
-      double navZ = std::stod(row[altIndex]);  // navPos[2] in cm
+      scalar navX = std::stof(row[latIndex]);  // navPos[0] in cm
+      scalar navY = std::stof(row[lonIndex]);  // navPos[1] in cm
+      scalar navZ = std::stof(row[altIndex]);  // navPos[2] in cm
       
       // Convert from centimeters to meters and center on origin
       static bool firstPoint = true;
-      static double originX, originY, originZ;
+      static scalar originX, originY, originZ;
       
       if (firstPoint) {
         originX = navX;
@@ -1455,27 +1423,27 @@ bool parseBlackboxData(const std::string& csvData) {
       // Convert to meters and translate to origin
       // NED coordinates: North=X, East=Y, Down=Z
       // For VTK visualization, flip Z to make "up" positive (NED Down -> VTK Up)
-      double x = (navX - originX) / 100.0;   // cm to m, North
-      double y = (navY - originY) / 100.0;   // cm to m, East  
-      double z = -(navZ - originZ) / 100.0;  // cm to m, Down->Up (flip sign)
+      scalar x = (navX - originX) / static_cast<scalar>(100.0f);   // cm to m, North
+      scalar y = (navY - originY) / static_cast<scalar>(100.0f);   // cm to m, East  
+      scalar z = -(navZ - originZ) / static_cast<scalar>(100.0f);  // cm to m, Down->Up (flip sign)
       
-      Eigen::Vector3d newPoint(x, y, z);
+      vec3 newPoint(x, y, z);
       
       // Filter out coincident points to avoid VTK ribbon filter issues
-      if (blackboxPoints.empty() || (newPoint - blackboxPoints.back()).norm() > 0.01) {
+      if (blackboxPoints.empty() || (newPoint - blackboxPoints.back()).norm() > static_cast<scalar>(0.01f)) {
         
         blackboxPoints.push_back(newPoint);
         
         // Create AircraftState object
         if (quatWIndex >= 0 && quatXIndex >= 0 && quatYIndex >= 0 && quatZIndex >= 0) {
           // Parse normalized quaternion values (stored as integers * 10000)
-          double qw = std::stod(row[quatWIndex]) / 10000.0;
-          double qx = std::stod(row[quatXIndex]) / 10000.0;
-          double qy = std::stod(row[quatYIndex]) / 10000.0;
-          double qz = std::stod(row[quatZIndex]) / 10000.0;
+          scalar qw = std::stof(row[quatWIndex]) / static_cast<scalar>(10000.0f);
+          scalar qx = std::stof(row[quatXIndex]) / static_cast<scalar>(10000.0f);
+          scalar qy = std::stof(row[quatYIndex]) / static_cast<scalar>(10000.0f);
+          scalar qz = std::stof(row[quatZIndex]) / static_cast<scalar>(10000.0f);
           
           // Create quaternion directly from normalized values
-          Eigen::Quaterniond q(qw, qx, qy, qz);
+          quat q(qw, qx, qy, qz);
           
           // Ensure quaternion is normalized (should already be, but safety check)
           q.normalize();
@@ -1484,10 +1452,10 @@ bool parseBlackboxData(const std::string& csvData) {
           unsigned long int timeMs = (timeIndex >= 0) ? std::stoul(row[timeIndex]) : blackboxAircraftStates.size() * 100;
           
           // Create simple velocity vector for blackbox data (assuming forward flight)
-          Eigen::Vector3d velocity_vector = q * Eigen::Vector3d(20.0, 0, 0);
+          vec3 velocity_vector = q * vec3(static_cast<scalar>(20.0f), 0, 0);
           
           // Create AircraftState with blackbox data
-          AircraftState state(blackboxAircraftStates.size(), 20.0, velocity_vector, q, newPoint, 0.0, 0.0, 0.0, timeMs);
+          AircraftState state(static_cast<int>(blackboxAircraftStates.size()), static_cast<scalar>(20.0f), velocity_vector, q, newPoint, 0.0f, 0.0f, 0.0f, timeMs);
           blackboxAircraftStates.push_back(state);
           fullBlackboxAircraftStates.push_back(state);  // Store full flight data
           
@@ -1529,11 +1497,11 @@ void updateBlackboxForCurrentTest() {
     // Ensure we have valid indices
     if (startIdx < endIdx && startIdx < fullBlackboxAircraftStates.size()) {
       // Calculate offset to align test start with path origin
-      Eigen::Vector3d testStartPosition = fullBlackboxAircraftStates[startIdx].getPosition();
-      Eigen::Vector3d pathOrigin(0.0, 0.0, 0.0); // Path origin is at (0,0,0) for horizontal position
+      vec3 testStartPosition = fullBlackboxAircraftStates[startIdx].getPosition();
+      vec3 pathOrigin(0.0f, 0.0f, 0.0f); // Path origin is at (0,0,0) for horizontal position
       
       // Calculate offset to align test start with path origin and Z to SIM_INITIAL_ALTITUDE
-      Eigen::Vector3d positionOffset;
+      vec3 positionOffset;
       positionOffset[0] = pathOrigin[0] - testStartPosition[0]; // North offset
       positionOffset[1] = pathOrigin[1] - testStartPosition[1]; // East offset
       positionOffset[2] = SIM_INITIAL_ALTITUDE - testStartPosition[2]; // Offset Z to SIM_INITIAL_ALTITUDE
@@ -1542,8 +1510,8 @@ void updateBlackboxForCurrentTest() {
         AircraftState offsetState = fullBlackboxAircraftStates[i];
         
         // Apply horizontal position offset to align test start with path origin
-        Eigen::Vector3d originalPosition = offsetState.getPosition();
-        Eigen::Vector3d offsetPosition = originalPosition + positionOffset;
+        vec3 originalPosition = offsetState.getPosition();
+        vec3 offsetPosition = originalPosition + positionOffset;
         offsetState.setPosition(offsetPosition);
         
         // Keep original attitude (yaw, pitch, roll) - no attitude offset needed
@@ -1857,7 +1825,7 @@ void Renderer::showAllFlight() {
   renderFullScene();
 }
 
-void Renderer::createHighlightedFlightTapes(Eigen::Vector3d offset) {
+void Renderer::createHighlightedFlightTapes(vec3 offset) {
   if (fullBlackboxAircraftStates.empty() || testSpans.empty()) {
     return;
   }
@@ -1866,7 +1834,7 @@ void Renderer::createHighlightedFlightTapes(Eigen::Vector3d offset) {
   this->blackboxHighlightTapes->RemoveAllInputs();
   
   // Create dimmed version of full flight (25% brightness)
-  std::vector<Eigen::Vector3d> fullPoints = stateToVector(fullBlackboxAircraftStates);
+  std::vector<vec3> fullPoints = stateToVector(fullBlackboxAircraftStates);
   if (fullPoints.size() >= 2) {
     this->blackboxTapes->AddInputData(createTapeSet(offset, fullPoints, stateToOrientation(fullBlackboxAircraftStates)));
     // Adjust opacity to 25% for dimmed effect
@@ -1886,7 +1854,7 @@ void Renderer::createHighlightedFlightTapes(Eigen::Vector3d offset) {
       }
       
       if (spanStates.size() >= 2) {
-        std::vector<Eigen::Vector3d> spanPoints = stateToVector(spanStates);
+        std::vector<vec3> spanPoints = stateToVector(spanStates);
         this->blackboxHighlightTapes->AddInputData(createTapeSet(offset, spanPoints, stateToOrientation(spanStates)));
       }
     }
@@ -1903,18 +1871,18 @@ void Renderer::createStopwatch() {
   vtkNew<vtkCellArray> lines;
   
   // Clock face circle (100px diameter)
-  const double radius = 50.0;
+  const scalar radius = static_cast<scalar>(50.0f);
   const int numPoints = 60;
   for (int i = 0; i < numPoints; i++) {
-    double angle = 2.0 * M_PI * i / numPoints;
+    scalar angle = static_cast<scalar>(2.0 * M_PI * i / numPoints);
     points->InsertNextPoint(radius * cos(angle), radius * sin(angle), 0);
   }
   
   // Add tick marks (10 ticks)
   for (int i = 0; i < 10; i++) {
-    double angle = 2.0 * M_PI * i / 10;
-    double innerRadius = radius * 0.85;
-    double outerRadius = radius * 0.95;
+    scalar angle = static_cast<scalar>(2.0 * M_PI * i / 10);
+    scalar innerRadius = radius * static_cast<scalar>(0.85f);
+    scalar outerRadius = radius * static_cast<scalar>(0.95f);
     
     // Inner point
     points->InsertNextPoint(innerRadius * cos(angle), innerRadius * sin(angle), 0);
@@ -1963,33 +1931,33 @@ void Renderer::createStopwatch() {
   stopwatchTimeActor->GetTextProperty()->SetJustificationToCentered();
 }
 
-void Renderer::updateStopwatch(double currentTime) {
+void Renderer::updateStopwatch(gp_scalar currentTime) {
   if (!stopwatchActor || !stopwatchTimeActor) return;
   
   stopwatchTime = currentTime;
   
   // Position stopwatch in upper right corner (2D screen coordinates)
   int* windowSize = renderWindow->GetSize();
-  double centerX = windowSize[0] - 70; // 70px from right edge
-  double centerY = windowSize[1] - 70; // 70px from top
+  scalar centerX = static_cast<scalar>(windowSize[0] - 70); // 70px from right edge
+  scalar centerY = static_cast<scalar>(windowSize[1] - 70); // 70px from top
   
   // Create updated stopwatch geometry with hands
   vtkNew<vtkPoints> points;
   vtkNew<vtkCellArray> lines;
   
   // Clock face circle
-  const double radius = 45.0;
+  const scalar radius = static_cast<scalar>(45.0f);
   const int numPoints = 60;
   for (int i = 0; i < numPoints; i++) {
-    double angle = 2.0 * M_PI * i / numPoints;
+    scalar angle = static_cast<scalar>(2.0 * M_PI * i / numPoints);
     points->InsertNextPoint(centerX + radius * cos(angle), centerY + radius * sin(angle), 0);
   }
   
   // Add tick marks (10 ticks)
   for (int i = 0; i < 10; i++) {
-    double angle = 2.0 * M_PI * i / 10 - M_PI/2; // Start from top
-    double innerRadius = radius * 0.85;
-    double outerRadius = radius * 0.95;
+    scalar angle = static_cast<scalar>(2.0 * M_PI * i / 10 - M_PI/2); // Start from top
+    scalar innerRadius = radius * static_cast<scalar>(0.85f);
+    scalar outerRadius = radius * static_cast<scalar>(0.95f);
     
     points->InsertNextPoint(centerX + innerRadius * cos(angle), centerY + innerRadius * sin(angle), 0);
     points->InsertNextPoint(centerX + outerRadius * cos(angle), centerY + outerRadius * sin(angle), 0);
@@ -2000,16 +1968,16 @@ void Renderer::updateStopwatch(double currentTime) {
   int centerPointId = numPoints + 20;
   
   // Calculate hand angles (clockwise rotation)
-  double secondAngle = -fmod(currentTime, 1.0) * 2.0 * M_PI + M_PI/2; // 1 rev/sec, clockwise from top
-  double tenSecAngle = -fmod(currentTime, 10.0) * 2.0 * M_PI / 10.0 + M_PI/2; // 1 rev/10sec, clockwise
+  scalar secondAngle = static_cast<scalar>(-fmod(currentTime, static_cast<gp_scalar>(1.0f)) * 2.0 * M_PI + M_PI/2); // 1 rev/sec, clockwise from top
+  scalar tenSecAngle = static_cast<scalar>(-fmod(currentTime, static_cast<gp_scalar>(10.0f)) * 2.0 * M_PI / 10.0 + M_PI/2); // 1 rev/10sec, clockwise
   
   // 1-second hand (longer, thinner)
-  double secondRadius = radius * 0.8;
+  scalar secondRadius = radius * static_cast<scalar>(0.8f);
   points->InsertNextPoint(centerX + secondRadius * cos(secondAngle), centerY + secondRadius * sin(secondAngle), 0);
   int secondHandId = centerPointId + 1;
   
   // 10-second hand (shorter, thicker conceptually)
-  double tenSecRadius = radius * 0.6;
+  scalar tenSecRadius = radius * static_cast<scalar>(0.6f);
   points->InsertNextPoint(centerX + tenSecRadius * cos(tenSecAngle), centerY + tenSecRadius * sin(tenSecAngle), 0);
   int tenSecHandId = centerPointId + 2;
   
@@ -2065,8 +2033,8 @@ void Renderer::updateStopwatchPosition() {
   
   // Recalculate position based on current window size
   int* windowSize = renderWindow->GetSize();
-  double centerX = windowSize[0] - 70; // 70px from right edge
-  double centerY = windowSize[1] - 70; // 70px from top
+  scalar centerX = static_cast<scalar>(windowSize[0] - 70); // 70px from right edge
+  scalar centerY = static_cast<scalar>(windowSize[1] - 70); // 70px from top
   
   // Update the stopwatch geometry with new center position
   // This requires recreating the geometry since the center position has changed
@@ -2113,7 +2081,7 @@ void Renderer::focusMoveLeft() {
   }
   focusMode = true;
   int columns = static_cast<int>(std::ceil(std::sqrt(total)));
-  int rows = static_cast<int>(std::ceil(static_cast<double>(total) / columns));
+  int rows = static_cast<int>(std::ceil(static_cast<scalar>(total) / static_cast<scalar>(columns)));
   int row = focusArenaIndex / columns;
   int col = focusArenaIndex % columns;
   int startRow = row;
@@ -2141,7 +2109,7 @@ void Renderer::focusMoveRight() {
   }
   focusMode = true;
   int columns = static_cast<int>(std::ceil(std::sqrt(total)));
-  int rows = static_cast<int>(std::ceil(static_cast<double>(total) / columns));
+  int rows = static_cast<int>(std::ceil(static_cast<scalar>(total) / static_cast<scalar>(columns)));
   int row = focusArenaIndex / columns;
   int col = focusArenaIndex % columns;
   int startRow = row;
@@ -2231,25 +2199,25 @@ void Renderer::setFocusArena(int arenaIdx) {
     return;
   }
 
-  Eigen::Vector3d offset = renderingOffset(arenaIdx);
-  double focusZ = 0.0;
+  vec3 offset = renderingOffset(arenaIdx);
+  scalar focusZ = 0.0f;
   if (arenaIdx < static_cast<int>(evalResults.pathList.size()) && !evalResults.pathList[arenaIdx].empty()) {
     focusZ = evalResults.pathList[arenaIdx].front().start[2];
   }
 
-  double camX = offset[0] - 70.0;
-  double camY = offset[1] - 10.0;
-  double camZ = offset[2] - 100.0;
+  scalar camX = offset[0] - static_cast<scalar>(70.0f);
+  scalar camY = offset[1] - static_cast<scalar>(10.0f);
+  scalar camZ = offset[2] - static_cast<scalar>(100.0f);
 
   focusCameraPosition = {camX, camY, camZ};
-  focusCameraFocalPoint = {offset[0], offset[1], offset[2] - 10.0};
-  focusCameraViewUp = {0.0, 0.0, -1.0};
+  focusCameraFocalPoint = {offset[0], offset[1], offset[2] - static_cast<scalar>(10.0f)};
+  focusCameraViewUp = {0.0f, 0.0f, -1.0f};
 
   vtkCamera* camera = activeRenderer->GetActiveCamera();
   if (camera) {
-    camera->SetPosition(focusCameraPosition.data());
-    camera->SetFocalPoint(focusCameraFocalPoint.data());
-    camera->SetViewUp(focusCameraViewUp.data());
+    camera->SetPosition(focusCameraPosition[0], focusCameraPosition[1], focusCameraPosition[2]);
+    camera->SetFocalPoint(focusCameraFocalPoint[0], focusCameraFocalPoint[1], focusCameraFocalPoint[2]);
+    camera->SetViewUp(focusCameraViewUp[0], focusCameraViewUp[1], focusCameraViewUp[2]);
     activeRenderer->ResetCameraClippingRange();
   }
 }
@@ -2270,7 +2238,7 @@ void Renderer::togglePlaybackAnimation() {
     // Stop animation
     isPlaybackActive = false;
     isPlaybackPaused = false;
-    totalPausedTime = std::chrono::duration<double>::zero();
+    totalPausedTime = std::chrono::duration<gp_scalar>::zero();
     if (animationTimerId != 0) {
       renderWindowInteractor->DestroyTimer(animationTimerId);
       animationTimerId = 0;
@@ -2282,7 +2250,7 @@ void Renderer::togglePlaybackAnimation() {
     // Start animation
     isPlaybackActive = true;
     isPlaybackPaused = false;
-    totalPausedTime = std::chrono::duration<double>::zero();
+    totalPausedTime = std::chrono::duration<gp_scalar>::zero();
     animationStartTime = std::chrono::steady_clock::now();
     stopwatchVisible = true;
     
@@ -2327,21 +2295,21 @@ void Renderer::updatePlaybackAnimation() {
   auto currentTime = std::chrono::steady_clock::now();
   auto totalElapsed = currentTime - animationStartTime;
   auto effectiveElapsed = totalElapsed - totalPausedTime;
-  auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(effectiveElapsed).count() / 1000.0;
+  scalar elapsed = static_cast<scalar>(std::chrono::duration_cast<std::chrono::milliseconds>(effectiveElapsed).count()) / static_cast<scalar>(1000.0f);
   
   // Path always drives the timing - find longest path duration across all arenas
-  double primaryDuration = 0.0;
+  scalar primaryDuration = 0.0f;
   int maxArenas = evalResults.pathList.size();
   for (int i = 0; i < maxArenas; i++) {
     if (!evalResults.pathList[i].empty()) {
       // Use path timestamp directly (convert from milliseconds to seconds)
-      double pathDuration = evalResults.pathList[i].back().simTimeMsec / 1000.0;
+      scalar pathDuration = static_cast<scalar>(evalResults.pathList[i].back().simTimeMsec) / static_cast<scalar>(1000.0f);
       primaryDuration = std::max(primaryDuration, pathDuration);
     }
   }
   
   // Use real-time playback - elapsed seconds = simulation seconds
-  double currentSimTime = elapsed;
+  scalar currentSimTime = elapsed;
   
   // Update stopwatch
   if (stopwatchVisible) {
@@ -2374,21 +2342,21 @@ void Renderer::updatePlaybackAnimation() {
   this->blackboxHighlightTapes->AddInputData(emptyHighlightData);
   
   // Render with synchronized time progress
-  int renderArenas = (!blackboxAircraftStates.empty()) ? 1 : evalResults.pathList.size();
+  int renderArenas = (!blackboxAircraftStates.empty()) ? 1 : static_cast<int>(evalResults.pathList.size());
   for (int i = 0; i < renderArenas; i++) {
-    Eigen::Vector3d offset = renderingOffset(i);
+    vec3 offset = renderingOffset(i);
     
-    std::vector<Eigen::Vector3d> p = pathToVector(evalResults.pathList[i]);
-    std::vector<Eigen::Vector3d> a = stateToVector(evalResults.aircraftStateList[i]);
+    std::vector<vec3> p = pathToVector(evalResults.pathList[i]);
+    std::vector<vec3> a = stateToVector(evalResults.aircraftStateList[i]);
     
     // Time-based filtering: show data up to currentSimTime
     
     // Filter path points by simulation timestamp
-    std::vector<Eigen::Vector3d> visiblePathVector;
+    std::vector<vec3> visiblePathVector;
     if (!evalResults.pathList[i].empty()) {
       std::vector<Path> visiblePath;
       for (const auto& pathPoint : evalResults.pathList[i]) {
-        double pathPointTime = pathPoint.simTimeMsec / 1000.0; // Convert to seconds
+        scalar pathPointTime = static_cast<scalar>(pathPoint.simTimeMsec) / static_cast<scalar>(1000.0f); // Convert to seconds
         if (pathPointTime <= currentSimTime) {
           visiblePath.push_back(pathPoint);
         }
@@ -2402,10 +2370,10 @@ void Renderer::updatePlaybackAnimation() {
     
     // Filter aircraft states by timestamp
     std::vector<AircraftState> visibleStates;
-    std::vector<Eigen::Vector3d> visibleStateVector;
+    std::vector<vec3> visibleStateVector;
     if (!evalResults.aircraftStateList[i].empty()) {
       for (const auto& state : evalResults.aircraftStateList[i]) {
-        double stateTime = state.getSimTimeMsec() / 1000.0;
+        scalar stateTime = static_cast<scalar>(state.getSimTimeMsec()) / static_cast<scalar>(1000.0f);
         if (stateTime <= currentSimTime) {
           visibleStates.push_back(state);
         }
@@ -2416,12 +2384,12 @@ void Renderer::updatePlaybackAnimation() {
     }
     // Always add aircraft data (empty if no visible states) to prevent VTK warnings
     this->actuals->AddInputData(createTapeSet(offset, visibleStateVector, 
-      visibleStates.empty() ? std::vector<Eigen::Vector3d>() : stateToOrientation(visibleStates)));
+      visibleStates.empty() ? std::vector<vec3>() : stateToOrientation(visibleStates)));
     
     // Add segment gaps only if we have visible states and the full path exists
     if (!visibleStates.empty() && !evalResults.pathList[i].empty()) {
       // Use full path for segment connections (aircraft states reference original path indices)
-      std::vector<Eigen::Vector3d> fullPathVector = pathToVector(evalResults.pathList[i]);
+      std::vector<vec3> fullPathVector = pathToVector(evalResults.pathList[i]);
       
       // Further filter visible states to only include those with valid path references
       std::vector<AircraftState> validStates;
@@ -2436,34 +2404,34 @@ void Renderer::updatePlaybackAnimation() {
       } else {
         // Add empty segment gaps to prevent VTK warnings
         std::vector<AircraftState> emptyStates;
-        std::vector<Eigen::Vector3d> emptyPath;
+        std::vector<vec3> emptyPath;
         this->segmentGaps->AddInputData(createSegmentSet(offset, emptyStates, emptyPath));
       }
     } else {
       // Add empty segment gaps to prevent VTK warnings
       std::vector<AircraftState> emptyStates;
-      std::vector<Eigen::Vector3d> emptyPath;
+      std::vector<vec3> emptyPath;
       this->segmentGaps->AddInputData(createSegmentSet(offset, emptyStates, emptyPath));
     }
     
     // Add blackbox data to first arena only (with animation)
     if (i == 0 && !blackboxAircraftStates.empty()) {
-      Eigen::Vector3d blackboxOffset = offset;
-      std::vector<Eigen::Vector3d> a_bb = stateToVector(blackboxAircraftStates);
+      vec3 blackboxOffset = offset;
+      std::vector<vec3> a_bb = stateToVector(blackboxAircraftStates);
       
       if (a_bb.size() >= 2) {
         // Calculate blackbox progress to sync with path timing
-        double blackboxProgress = 1.0; // Default to show all
+        scalar blackboxProgress = static_cast<scalar>(1.0f); // Default to show all
         if (!blackboxAircraftStates.empty()) {
           // The blackbox test data starts at some offset but should sync with path time 0
           // Simply use the blackbox duration and sync with currentSimTime
-          double blackboxStartTime = blackboxAircraftStates.front().getSimTimeMsec();
-          double blackboxEndTime = blackboxAircraftStates.back().getSimTimeMsec();
-          double blackboxDuration = (blackboxEndTime - blackboxStartTime) / 1000000.0; // Convert microseconds to seconds
+          scalar blackboxStartTime = static_cast<scalar>(blackboxAircraftStates.front().getSimTimeMsec());
+          scalar blackboxEndTime = static_cast<scalar>(blackboxAircraftStates.back().getSimTimeMsec());
+          scalar blackboxDuration = (blackboxEndTime - blackboxStartTime) / static_cast<scalar>(1000000.0f); // Convert microseconds to seconds
           
-          if (blackboxDuration > 0.0) {
+          if (blackboxDuration > static_cast<scalar>(0.0f)) {
             // Blackbox animates synchronized with path: both start at currentSimTime=0
-            blackboxProgress = std::min(1.0, currentSimTime / blackboxDuration);
+            blackboxProgress = std::min(static_cast<scalar>(1.0f), currentSimTime / blackboxDuration);
           }
           
         }
@@ -2474,19 +2442,19 @@ void Renderer::updatePlaybackAnimation() {
           blackboxActor->GetBackfaceProperty()->SetOpacity(1.0);
         } else if (inDecodeMode && showingFullFlight && !testSpans.empty()) {
           // For full flight mode, filter full flight blackbox data by time
-          double fullStartTime = fullBlackboxAircraftStates.front().getSimTimeMsec() / 1000000.0; // microseconds to seconds
+          scalar fullStartTime = static_cast<scalar>(fullBlackboxAircraftStates.front().getSimTimeMsec()) / static_cast<scalar>(1000000.0f); // microseconds to seconds
           std::vector<AircraftState> visibleFullStates;
           
           for (const auto& state : fullBlackboxAircraftStates) {
-            double stateTime = state.getSimTimeMsec() / 1000000.0; // microseconds to seconds
-            double relativeTime = stateTime - fullStartTime; // normalize to start at 0
+            scalar stateTime = static_cast<scalar>(state.getSimTimeMsec()) / static_cast<scalar>(1000000.0f); // microseconds to seconds
+            scalar relativeTime = stateTime - fullStartTime; // normalize to start at 0
             if (relativeTime <= currentSimTime) {
               visibleFullStates.push_back(state);
             }
           }
           
           if (visibleFullStates.size() >= 2) {
-            std::vector<Eigen::Vector3d> visibleFullVector = stateToVector(visibleFullStates);
+            std::vector<vec3> visibleFullVector = stateToVector(visibleFullStates);
             this->blackboxTapes->AddInputData(createTapeSet(blackboxOffset, visibleFullVector, stateToOrientation(visibleFullStates)));
             blackboxActor->GetProperty()->SetOpacity(0.25);
             blackboxActor->GetBackfaceProperty()->SetOpacity(0.25);
@@ -2505,15 +2473,15 @@ void Renderer::updatePlaybackAnimation() {
                 // Filter span states by time
                 std::vector<AircraftState> visibleSpanStates;
                 for (const auto& state : spanStates) {
-                  double stateTime = state.getSimTimeMsec() / 1000000.0; // microseconds to seconds
-                  double relativeTime = stateTime - fullStartTime; // use full flight start time
+                  scalar stateTime = static_cast<scalar>(state.getSimTimeMsec()) / static_cast<scalar>(1000000.0f); // microseconds to seconds
+                  scalar relativeTime = stateTime - fullStartTime; // use full flight start time
                   if (relativeTime <= currentSimTime) {
                     visibleSpanStates.push_back(state);
                   }
                 }
                 
                 if (visibleSpanStates.size() >= 2) {
-                  std::vector<Eigen::Vector3d> visibleSpanVector = stateToVector(visibleSpanStates);
+                  std::vector<vec3> visibleSpanVector = stateToVector(visibleSpanStates);
                   this->blackboxHighlightTapes->AddInputData(createTapeSet(blackboxOffset, visibleSpanVector, stateToOrientation(visibleSpanStates)));
                 }
               }
@@ -2522,18 +2490,18 @@ void Renderer::updatePlaybackAnimation() {
         } else {
           // Standard blackbox mode with time-based filtering
           std::vector<AircraftState> visibleBlackboxStates;
-          double blackboxStartTime = blackboxAircraftStates.front().getSimTimeMsec() / 1000000.0; // microseconds to seconds
+          scalar blackboxStartTime = static_cast<scalar>(blackboxAircraftStates.front().getSimTimeMsec()) / static_cast<scalar>(1000000.0f); // microseconds to seconds
           
           for (const auto& state : blackboxAircraftStates) {
-            double stateTime = state.getSimTimeMsec() / 1000000.0; // microseconds to seconds
-            double relativeTime = stateTime - blackboxStartTime; // normalize to start at 0
+            scalar stateTime = static_cast<scalar>(state.getSimTimeMsec()) / static_cast<scalar>(1000000.0f); // microseconds to seconds
+            scalar relativeTime = stateTime - blackboxStartTime; // normalize to start at 0
             if (relativeTime <= currentSimTime) {
               visibleBlackboxStates.push_back(state);
             }
           }
           
           if (visibleBlackboxStates.size() >= 2) {
-            std::vector<Eigen::Vector3d> visibleBlackboxVector = stateToVector(visibleBlackboxStates);
+            std::vector<vec3> visibleBlackboxVector = stateToVector(visibleBlackboxStates);
             this->blackboxTapes->AddInputData(createTapeSet(blackboxOffset, visibleBlackboxVector, stateToOrientation(visibleBlackboxStates)));
             blackboxActor->GetProperty()->SetOpacity(1.0);
             blackboxActor->GetBackfaceProperty()->SetOpacity(1.0);
@@ -2578,10 +2546,10 @@ void Renderer::renderFullScene() {
   // Render with full progress (1.0) using existing data
   int maxArenas = evalResults.pathList.size();
   for (int i = 0; i < maxArenas; i++) {
-    Eigen::Vector3d offset = renderingOffset(i);
+    vec3 offset = renderingOffset(i);
     
-    std::vector<Eigen::Vector3d> p = pathToVector(evalResults.pathList[i]);
-    std::vector<Eigen::Vector3d> a = stateToVector(evalResults.aircraftStateList[i]);
+    std::vector<vec3> p = pathToVector(evalResults.pathList[i]);
+    std::vector<vec3> a = stateToVector(evalResults.aircraftStateList[i]);
     
     if (!p.empty()) {
       this->paths->AddInputData(createPointSet(offset, p)); // Full progress (no timeProgress param)
@@ -2595,8 +2563,8 @@ void Renderer::renderFullScene() {
     
     // Add blackbox data to first arena only (full progress)
     if (i == 0 && !blackboxAircraftStates.empty()) {
-      Eigen::Vector3d blackboxOffset = offset;
-      std::vector<Eigen::Vector3d> a_bb = stateToVector(blackboxAircraftStates);
+      vec3 blackboxOffset = offset;
+      std::vector<vec3> a_bb = stateToVector(blackboxAircraftStates);
       
       if (a_bb.size() >= 2) {
         if (inDecodeMode && !testSpans.empty() && !showingFullFlight) {

@@ -1,14 +1,17 @@
 #ifndef GP_EVALUATOR_PORTABLE_H
 #define GP_EVALUATOR_PORTABLE_H
 
+#include <cstdint>
 #include "aircraft_state.h"
 
-#ifdef GP_BUILD
+#if defined(GP_BUILD) && !defined(GP_TEST)
 #include "autoc.h"
 // Forward declaration - actual definition depends on build context
 struct GPBytecode;
-#else
-// Embedded build: define operators enum locally
+#endif
+
+// Local operators/bytecode definitions for test/embedded builds
+#if !defined(GP_BUILD) || defined(GP_TEST)
 enum Operators {
   ADD = 0, SUB, MUL, DIV,
   IF, EQ, GT,
@@ -22,11 +25,10 @@ enum Operators {
   OP_PI, ZERO, ONE, TWO, PROGN, _END  // Renamed PI to OP_PI to avoid Arduino macro conflict
 };
 
-// Simple bytecode structure for embedded
 struct GPBytecode {
-    uint8_t opcode;     // Operation code (maps to Operators enum)
-    uint8_t argc;       // Number of arguments
-    float constant;     // For literal values (PI, 0, 1, 2)
+    uint8_t opcode;
+    uint8_t argc;
+    float constant;
     
     GPBytecode(uint8_t op = 0, uint8_t args = 0, float val = 0.0f) 
         : opcode(op), argc(args), constant(val) {}
@@ -34,28 +36,28 @@ struct GPBytecode {
 #endif
 
 // Single portable evaluation function that works everywhere
-double evaluateGPOperator(int opcode, PathProvider& pathProvider, 
+gp_scalar evaluateGPOperator(int opcode, PathProvider& pathProvider, 
                          AircraftState& aircraftState, 
-                         const double* args, int argc, double contextArg = 0.0);
+                         const gp_scalar* args, int argc, gp_scalar contextArg = 0.0f);
 
 // Navigation helpers - same logic, different path access
-double executeGetDPhi(PathProvider& pathProvider, AircraftState& aircraftState, double arg);
-double executeGetDTheta(PathProvider& pathProvider, AircraftState& aircraftState, double arg);
-double executeGetDTarget(PathProvider& pathProvider, AircraftState& aircraftState, double arg);
-double executeGetDHome(AircraftState& aircraftState);
+gp_scalar executeGetDPhi(PathProvider& pathProvider, AircraftState& aircraftState, gp_scalar arg);
+gp_scalar executeGetDTheta(PathProvider& pathProvider, AircraftState& aircraftState, gp_scalar arg);
+gp_scalar executeGetDTarget(PathProvider& pathProvider, AircraftState& aircraftState, gp_scalar arg);
+gp_scalar executeGetDHome(AircraftState& aircraftState);
 
 // Range limiting - identical across platforms
-inline double applyRangeLimit(double value) {
-    const double RANGELIMIT = 1000000.0;
+inline gp_scalar applyRangeLimit(gp_scalar value) {
+    const gp_scalar RANGELIMIT = static_cast<gp_scalar>(1000000.0f);
     if (value < -RANGELIMIT) return -RANGELIMIT;
     if (value > RANGELIMIT) return RANGELIMIT;
-    if (ABS_DEF(value) < 0.000001) return 0.0;
+    if (ABS_DEF(value) < static_cast<gp_scalar>(0.000001f)) return 0.0f;
     return value;
 }
 
 // Stack-based bytecode evaluation using portable operators
-double evaluateBytecodePortable(const GPBytecode* program, int program_size, 
+gp_scalar evaluateBytecodePortable(const GPBytecode* program, int program_size, 
                                PathProvider& pathProvider, AircraftState& aircraftState, 
-                               double contextArg = 0.0);
+                               gp_scalar contextArg = 0.0f);
 
 #endif

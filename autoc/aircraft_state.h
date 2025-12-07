@@ -2,45 +2,44 @@
 #ifndef AIRCRAFT_STATE_H
 #define AIRCRAFT_STATE_H
 
+#include <algorithm>
 #include <cmath>
+#include "gp_types.h"
 
 #ifdef GP_BUILD
-#include <Eigen/Dense>
-#include <Eigen/Geometry>
 #include <boost/format.hpp>
 #include <boost/serialization/access.hpp>
 #include <boost/serialization/version.hpp>
+#include <vector>
 #define CLAMP_DEF(v, min, max) std::clamp(v, min, max) 
-#define ATAN2_DEF(y, x) std::atan2(y, x)
-#define ABS_DEF(v) std::abs(v)
+#define ATAN2_DEF(y, x) std::atan2f(y, x)
+#define ABS_DEF(v) std::fabs(v)
 #define SQRT_DEF(v) std::sqrt(v)
 #define MIN_DEF(a, b) std::min(a, b)
 #define MAX_DEF(a, b) std::max(a, b)
 #else
-#include <ArduinoEigenDense.h>
-// #include <ArduinoEigen/ArduinoEigen/Eigen/Geometry>
 #define CLAMP_DEF(v, min, max) ((v) < (min) ? (min) : ((v) > (max) ? (max) : (v)))
-#define ATAN2_DEF(y, x) atan2(y, x)
+#define ATAN2_DEF(y, x) atan2f(y, x)
 #define ABS_DEF(v) ((v) < 0 ? -(v) : (v))
 #define SQRT_DEF(v) sqrt(v)
 #define MIN_DEF(a, b) ((a) < (b) ? (a) : (b))
 #define MAX_DEF(a, b) ((a) > (b) ? (a) : (b))
 #endif
 
-#define SIM_MAX_ROLL_RATE_RADSEC (M_PI)
-#define SIM_MAX_PITCH_RATE_RADSEC (M_PI)
+#define SIM_MAX_ROLL_RATE_RADSEC (static_cast<gp_scalar>(M_PI))
+#define SIM_MAX_PITCH_RATE_RADSEC (static_cast<gp_scalar>(M_PI))
 
-#define SIM_INITIAL_VELOCITY 20.0
-#define SIM_RABBIT_VELOCITY 16.0
-#define SIM_THROTTLE_SCALE 10.0
-#define SIM_CRASH_PENALTY (100.0 + 100.0 + 100.0)
-#define SIM_INITIAL_ALTITUDE -25.0
-#define SIM_INITIAL_THROTTLE 0.0
-#define SIM_INITIAL_LOCATION_DITHER 30.0
-#define SIM_PATH_BOUNDS 40.0
-#define SIM_PATH_RADIUS_LIMIT 60.0
-#define SIM_MIN_ELEVATION -7.0
-#define SIM_MAX_ELEVATION -110.0
+#define SIM_INITIAL_VELOCITY static_cast<gp_scalar>(20.0f)
+#define SIM_RABBIT_VELOCITY static_cast<gp_scalar>(16.0f)
+#define SIM_THROTTLE_SCALE static_cast<gp_scalar>(10.0f)
+#define SIM_CRASH_PENALTY static_cast<gp_scalar>(100.0f + 100.0f + 100.0f)
+#define SIM_INITIAL_ALTITUDE static_cast<gp_scalar>(-25.0f)
+#define SIM_INITIAL_THROTTLE static_cast<gp_scalar>(0.0f)
+#define SIM_INITIAL_LOCATION_DITHER static_cast<gp_scalar>(30.0f)
+#define SIM_PATH_BOUNDS static_cast<gp_scalar>(40.0f)
+#define SIM_PATH_RADIUS_LIMIT static_cast<gp_scalar>(60.0f)
+#define SIM_MIN_ELEVATION static_cast<gp_scalar>(-7.0f)
+#define SIM_MAX_ELEVATION static_cast<gp_scalar>(-110.0f)
 
 #define SIM_TOTAL_TIME_MSEC (100 * 1000)
 #define SIM_TIME_STEP_MSEC (200)
@@ -51,29 +50,38 @@
  */
 class Path {
 public:
-  Eigen::Vector3d start;
-  Eigen::Vector3d orientation;
-  double distanceFromStart;
-  double radiansFromStart;
-  double simTimeMsec;  // Simulation timestamp in milliseconds
+  gp_vec3 start;
+  gp_vec3 orientation;
+  gp_scalar distanceFromStart;
+  gp_scalar radiansFromStart;
+  gp_scalar simTimeMsec;  // Simulation timestamp in milliseconds
 
   // Default constructor for backward compatibility
-  Path() : start(Eigen::Vector3d::Zero()), orientation(Eigen::Vector3d::UnitX()), 
-           distanceFromStart(0.0), radiansFromStart(0.0), simTimeMsec(0.0) {}
+  Path() : start(gp_vec3::Zero()), orientation(gp_vec3::UnitX()), 
+           distanceFromStart(0.0f), radiansFromStart(0.0f), simTimeMsec(0.0f) {}
 
   // Constructor to ensure all fields are properly initialized
-  Path(const Eigen::Vector3d& start_pos, const Eigen::Vector3d& orient, 
-       double distance, double radians, double time_msec)
+  Path(const gp_vec3& start_pos, const gp_vec3& orient, 
+       gp_scalar distance, gp_scalar radians, gp_scalar time_msec)
     : start(start_pos), orientation(orient), distanceFromStart(distance), 
       radiansFromStart(radians), simTimeMsec(time_msec) {}
 
+  // Generic constructor to cast external Eigen scalars into gp_scalar
+  template <typename Scalar>
+  Path(const Eigen::Matrix<Scalar, 3, 1>& start_pos, const Eigen::Matrix<Scalar, 3, 1>& orient,
+       Scalar distance, Scalar radians, Scalar time_msec)
+    : start(start_pos.template cast<gp_scalar>()), orientation(orient.template cast<gp_scalar>()),
+      distanceFromStart(static_cast<gp_scalar>(distance)),
+      radiansFromStart(static_cast<gp_scalar>(radians)),
+      simTimeMsec(static_cast<gp_scalar>(time_msec)) {}
+
   void sanitize() {
-    auto sanitizeScalar = [](double value, double fallback = 0.0) {
+    auto sanitizeScalar = [](gp_scalar value, gp_scalar fallback = 0.0f) {
       return std::isfinite(value) ? value : fallback;
     };
     for (int i = 0; i < 3; ++i) {
       start[i] = sanitizeScalar(start[i]);
-      double defaultOrient = (i == 0) ? 1.0 : 0.0;
+      gp_scalar defaultOrient = (i == 0) ? 1.0f : 0.0f;
       orientation[i] = sanitizeScalar(orientation[i], defaultOrient);
     }
     distanceFromStart = sanitizeScalar(distanceFromStart);
@@ -116,7 +124,7 @@ public:
     virtual int getPathSize() const = 0;
 };
 
-#ifdef GP_BUILD  
+#if defined(GP_BUILD) || defined(GP_TEST)
 // Full GP build: Vector-based path provider
 class VectorPathProvider : public PathProvider {
 private:
@@ -164,14 +172,14 @@ struct AircraftState;
 
 // Portable helper function for GP path indexing
 // Extracted from generated GP code to remove boost dependencies
-inline int getPathIndex(PathProvider& pathProvider, AircraftState& aircraftState, double arg) {
+inline int getPathIndex(PathProvider& pathProvider, AircraftState& aircraftState, gp_scalar arg) {
     if (std::isnan(arg)) {
         return pathProvider.getCurrentIndex();
     }
     
     int steps = CLAMP_DEF((int)arg, -5, 5);
-    double distanceSoFar = pathProvider.getPath(pathProvider.getCurrentIndex()).distanceFromStart;
-    double distanceGoal = distanceSoFar + steps * SIM_RABBIT_VELOCITY * (SIM_TIME_STEP_MSEC / 1000.0);
+    gp_scalar distanceSoFar = pathProvider.getPath(pathProvider.getCurrentIndex()).distanceFromStart;
+    gp_scalar distanceGoal = distanceSoFar + steps * SIM_RABBIT_VELOCITY * (SIM_TIME_STEP_MSEC / 1000.0f);
     int currentStep = pathProvider.getCurrentIndex();
     
     if (steps > 0) {
@@ -195,57 +203,72 @@ struct AircraftState {
   public:
 
     AircraftState() {}
-    AircraftState(int thisPathIndex, double relVel, Eigen::Vector3d vel, Eigen::Quaterniond orientation,
-      Eigen::Vector3d pos, double pc, double rc, double tc,
+    AircraftState(int thisPathIndex, gp_scalar relVel, gp_vec3 vel, gp_quat orientation,
+      gp_vec3 pos, gp_scalar pc, gp_scalar rc, gp_scalar tc,
       unsigned long int timeMsec)
       : thisPathIndex(thisPathIndex), dRelVel(relVel), velocity(vel), aircraft_orientation(orientation), position(pos), simTimeMsec(timeMsec),
       pitchCommand(pc), rollCommand(rc), throttleCommand(tc) {
     }
 
+    // Casting ctor for external Eigen scalar types while migrating callers to float
+    template <typename Scalar>
+    AircraftState(int thisPathIndex, Scalar relVel, const Eigen::Matrix<Scalar, 3, 1>& vel, const Eigen::Quaternion<Scalar>& orientation,
+      const Eigen::Matrix<Scalar, 3, 1>& pos, Scalar pc, Scalar rc, Scalar tc,
+      unsigned long int timeMsec)
+      : thisPathIndex(thisPathIndex),
+        dRelVel(static_cast<gp_scalar>(relVel)),
+        velocity(vel.template cast<gp_scalar>()),
+        aircraft_orientation(orientation.template cast<gp_scalar>()),
+        position(pos.template cast<gp_scalar>()),
+        simTimeMsec(timeMsec),
+        pitchCommand(static_cast<gp_scalar>(pc)),
+        rollCommand(static_cast<gp_scalar>(rc)),
+        throttleCommand(static_cast<gp_scalar>(tc)) {}
+
     // generate setters and getters
     int getThisPathIndex() const { return thisPathIndex; }
     void setThisPathIndex(int index) { thisPathIndex = index; }
 
-    double getRelVel() const { return dRelVel; }
-    void setRelVel(double relVel) { dRelVel = relVel; }
+    gp_scalar getRelVel() const { return dRelVel; }
+    void setRelVel(gp_scalar relVel) { dRelVel = relVel; }
     
-    Eigen::Vector3d getVelocity() const { return velocity; }
-    void setVelocity(const Eigen::Vector3d& vel) { velocity = vel; }
+    gp_vec3 getVelocity() const { return velocity; }
+    void setVelocity(const gp_vec3& vel) { velocity = vel; }
 
-    Eigen::Quaterniond getOrientation() const { return aircraft_orientation; }
-    void setOrientation(Eigen::Quaterniond orientation) { aircraft_orientation = orientation; }
+    gp_quat getOrientation() const { return aircraft_orientation; }
+    void setOrientation(gp_quat orientation) { aircraft_orientation = orientation; }
 
-    Eigen::Vector3d getPosition() const { return position; }
-    void setPosition(Eigen::Vector3d pos) { position = pos; }
+    gp_vec3 getPosition() const { return position; }
+    void setPosition(gp_vec3 pos) { position = pos; }
 
     unsigned long int getSimTimeMsec() const { return simTimeMsec; }
     void setSimTimeMsec(unsigned long int timeMsec) { simTimeMsec = timeMsec; }
 
-    double getPitchCommand() const { return pitchCommand; }
-    double setPitchCommand(double pitch) { return (pitchCommand = CLAMP_DEF(pitch, -1.0, 1.0)); }
-    double getRollCommand() const { return rollCommand; }
-    double setRollCommand(double roll) { return (rollCommand = CLAMP_DEF(roll, -1.0, 1.0)); }
-    double getThrottleCommand() const { return throttleCommand; }
-    double setThrottleCommand(double throttle) { return (throttleCommand = CLAMP_DEF(throttle, -1.0, 1.0)); }
+    gp_scalar getPitchCommand() const { return pitchCommand; }
+    gp_scalar setPitchCommand(gp_scalar pitch) { return (pitchCommand = CLAMP_DEF(pitch, -1.0f, 1.0f)); }
+    gp_scalar getRollCommand() const { return rollCommand; }
+    gp_scalar setRollCommand(gp_scalar roll) { return (rollCommand = CLAMP_DEF(roll, -1.0f, 1.0f)); }
+    gp_scalar getThrottleCommand() const { return throttleCommand; }
+    gp_scalar setThrottleCommand(gp_scalar throttle) { return (throttleCommand = CLAMP_DEF(throttle, -1.0f, 1.0f)); }
 
-    void minisimAdvanceState(double dt) {
-      double dtSec = dt / 1000.0;
+    void minisimAdvanceState(gp_scalar dt) {
+      gp_scalar dtSec = dt / 1000.0f;
 
       // get current roll state, compute left/right force (positive roll is right)
-      double delta_roll = remainder(rollCommand * dtSec * SIM_MAX_ROLL_RATE_RADSEC, M_PI);
+      gp_scalar delta_roll = std::remainder(rollCommand * dtSec * SIM_MAX_ROLL_RATE_RADSEC, static_cast<gp_scalar>(M_PI));
 
       // get current pitch state, compute up/down force (positive pitch is up)
-      double delta_pitch = remainder(pitchCommand * dtSec * SIM_MAX_PITCH_RATE_RADSEC, M_PI);
+      gp_scalar delta_pitch = std::remainder(pitchCommand * dtSec * SIM_MAX_PITCH_RATE_RADSEC, static_cast<gp_scalar>(M_PI));
 
       // adjust velocity as a function of throttle (-1:1)
       // throttle = -1.0 → 0.5x base velocity (10 m/s)
       // throttle =  0.0 → 1.0x base velocity (20 m/s)
       // throttle = +1.0 → 1.5x base velocity (30 m/s)
-      dRelVel = SIM_INITIAL_VELOCITY * (1.0 + throttleCommand * 0.5);
+      dRelVel = SIM_INITIAL_VELOCITY * (1.0f + throttleCommand * 0.5f);
 
       // Convert pitch and roll updates to quaternions (in the body frame)
-      Eigen::Quaterniond delta_roll_quat(Eigen::AngleAxisd(delta_roll, Eigen::Vector3d::UnitX()));
-      Eigen::Quaterniond delta_pitch_quat(Eigen::AngleAxisd(delta_pitch, Eigen::Vector3d::UnitY()));
+      gp_quat delta_roll_quat(Eigen::AngleAxis<gp_scalar>(delta_roll, gp_vec3::UnitX()));
+      gp_quat delta_pitch_quat(Eigen::AngleAxis<gp_scalar>(delta_pitch, gp_vec3::UnitY()));
 
       // Apply the roll and pitch adjustments to the aircraft's orientation
       aircraft_orientation = aircraft_orientation * delta_roll_quat;
@@ -255,10 +278,10 @@ struct AircraftState {
       aircraft_orientation.normalize();
 
       // Define the initial velocity vector in the body frame
-      Eigen::Vector3d velocity_body(dRelVel * dtSec, 0, 0);
+      gp_vec3 velocity_body(dRelVel * dtSec, 0.0f, 0.0f);
 
       // Rotate the velocity vector using the updated quaternion
-      Eigen::Vector3d velocity_world = aircraft_orientation * velocity_body;
+      gp_vec3 velocity_world = aircraft_orientation * velocity_body;
 
       // Store the actual velocity vector (convert from distance per timestep to velocity)
       velocity = velocity_world / dtSec;
@@ -269,14 +292,14 @@ struct AircraftState {
 
   private:
     int thisPathIndex;
-    double dRelVel;
-    Eigen::Vector3d velocity;  // Actual velocity vector (north, east, down)
-    Eigen::Quaterniond aircraft_orientation;
-    Eigen::Vector3d position;
+    gp_scalar dRelVel;
+    gp_vec3 velocity;  // Actual velocity vector (north, east, down)
+    gp_quat aircraft_orientation;
+    gp_vec3 position;
     unsigned long int simTimeMsec;
-    double pitchCommand;
-    double rollCommand;
-    double throttleCommand;
+    gp_scalar pitchCommand;
+    gp_scalar rollCommand;
+    gp_scalar throttleCommand;
 
 #ifdef GP_BUILD
     friend class boost::serialization::access;

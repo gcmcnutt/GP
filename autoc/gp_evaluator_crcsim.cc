@@ -1,8 +1,8 @@
 #include "gp_evaluator_crcsim.h"
 
-double GPEvaluatorCRRCSim::evaluateBytecodeForCRRCSim(const GPBytecode* program, int program_size,
+gp_scalar GPEvaluatorCRRCSim::evaluateBytecodeForCRRCSim(const GPBytecode* program, int program_size,
                                                      std::vector<Path>& path, AircraftState& aircraftState, 
-                                                     double arg) {
+                                                     gp_scalar arg) {
     // Create vector path provider for CRRCSim
     VectorPathProvider pathProvider(path, aircraftState.getThisPathIndex());
     

@@ -67,12 +67,10 @@ bool GPBytecodeInterpreter::loadProgram(const std::string& filename) {
     return true;
 }
 
-// Helper functions are now in gp_evaluator_portable.cc
-
-double GPBytecodeInterpreter::evaluate(AircraftState& aircraftState, std::vector<Path>& path, double arg) {
+gp_scalar GPBytecodeInterpreter::evaluate(AircraftState& aircraftState, std::vector<Path>& path, gp_scalar arg) {
     if (program.empty()) {
         std::cerr << "Error: No bytecode program loaded" << std::endl;
-        return 0.0;
+        return 0.0f;
     }
     
     // Delegate to desktop extension which handles format conversion

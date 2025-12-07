@@ -12,9 +12,9 @@ public:
                                std::vector<struct GPBytecode>& portableBytecode);
     
     // Evaluate using GP build bytecode format
-    static double evaluateGPBytecode(const std::vector<struct GPBytecode>& program, 
+    static gp_scalar evaluateGPBytecode(const std::vector<struct GPBytecode>& program, 
                                     std::vector<Path>& path, AircraftState& aircraftState, 
-                                    double contextArg = 0.0);
+                                    gp_scalar contextArg = 0.0f);
 };
 
 #endif

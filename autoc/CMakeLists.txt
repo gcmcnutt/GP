@@ -6,6 +6,18 @@ find_package(Eigen3 REQUIRED)
 find_package(Boost REQUIRED COMPONENTS thread system serialization log)
 find_package(AWSSDK REQUIRED COMPONENTS core s3)
 
+option(ENABLE_AUTOC_TESTS "Build autoc unit tests" ON)
+if(ENABLE_AUTOC_TESTS)
+  include(GoogleTest)
+  include(FetchContent)
+  set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+  FetchContent_Declare(
+      googletest
+      URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
+  )
+  FetchContent_MakeAvailable(googletest)
+endif()
+
 option(USE_SANITIZER "Build with Address Sanitizer" OFF)
 option(ENABLE_PROFILING "Build with frame pointers and debug info for perf/FlameGraph" OFF)
 
@@ -40,3 +52,12 @@ target_link_libraries(minisim gp ${Boost_LIBRARIES} Eigen3::Eigen)
 target_link_libraries(renderer gp ${VTK_LIBRARIES} ${Boost_LIBRARIES} Eigen3::Eigen ${AWSSDK_LIBRARIES})
 target_link_libraries(gpextractor gp ${Boost_LIBRARIES} Eigen3::Eigen ${AWSSDK_LIBRARIES})
 target_link_libraries(bytecode2cpp gp ${Boost_LIBRARIES} Eigen3::Eigen ${AWSSDK_LIBRARIES})
+
+if(ENABLE_AUTOC_TESTS)
+  add_executable(autoc_tests tests/gp_evaluator_tests.cc gp_evaluator_portable.cc)
+  target_compile_definitions(autoc_tests PRIVATE GP_BUILD GP_TEST)
+  target_link_libraries(autoc_tests GTest::gtest GTest::gtest_main Eigen3::Eigen)
+  enable_testing()
+  add_test(NAME autoc_tests COMMAND autoc_tests)
+  add_custom_target(run_autoc_tests ALL DEPENDS autoc_tests COMMAND autoc_tests)
+endif()
