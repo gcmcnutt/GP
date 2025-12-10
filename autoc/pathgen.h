@@ -269,15 +269,13 @@ class GenerateComputedPaths : public GeneratorMethod {
       case PathType::FortyFiveLoop: {
         gp_scalar cSize = static_cast<gp_scalar>(0.8f) * radius;
         for (gp_scalar turn = 0; turn < static_cast<gp_scalar>(M_PI * 2.0); turn += static_cast<gp_scalar>(0.05f)) {
-          gp_vec3 interpolatedPoint = { cSize * std::cos(turn), cSize * std::sin(turn), base - SIM_INITIAL_LOCATION_DITHER };
+          gp_vec3 interpolatedPoint = {
+            cSize * std::cos(turn),
+            cSize * std::sin(turn),
+            base - SIM_INITIAL_LOCATION_DITHER - cSize * std::sin(turn)
+          };
           gp_scalar simTimeMsecLocal = (turn * cSize / SIM_RABBIT_VELOCITY) * static_cast<gp_scalar>(1000.0f);
           Path pathSegment = Path(interpolatedPoint, gp_vec3::UnitX(), turn * cSize, 0.0f, simTimeMsecLocal);
-          path.push_back(pathSegment);
-        }
-        for (gp_scalar turn = 0; turn < static_cast<gp_scalar>(M_PI * 2.0); turn += static_cast<gp_scalar>(0.05f)) {
-          gp_vec3 interpolatedPoint = { cSize * std::cos(turn + static_cast<gp_scalar>(M_PI / 4)), cSize * std::sin(turn + static_cast<gp_scalar>(M_PI / 4)), base - SIM_INITIAL_LOCATION_DITHER };
-          gp_scalar simTimeMsecLocal = ((turn * cSize) + (static_cast<gp_scalar>(M_PI) * cSize / static_cast<gp_scalar>(2.0f))) / SIM_RABBIT_VELOCITY * static_cast<gp_scalar>(1000.0f);
-          Path pathSegment = Path(interpolatedPoint, gp_vec3::UnitX(), (turn * cSize) + (static_cast<gp_scalar>(M_PI) * cSize / static_cast<gp_scalar>(2.0f)), 0.0f, simTimeMsecLocal);
           path.push_back(pathSegment);
         }
         break;

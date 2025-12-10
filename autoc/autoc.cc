@@ -63,12 +63,14 @@ std::vector<MyGP*> tasks = std::vector<MyGP*>();
 extern std::vector<std::vector<Path>> generationPaths;
 extern EvalResults bestOfEvalResults;
 extern std::ofstream fout;
+extern std::ofstream bout;
 extern std::atomic_ulong nanDetector;
 
 std::vector<std::vector<Path>> generationPaths;
 std::vector<ScenarioDescriptor> generationScenarios;
 std::atomic_ulong nanDetector = 0;
 std::ofstream fout;
+std::ofstream bout;
 EvalResults bestOfEvalResults;
 EvalResults aggregatedEvalResults;
 EvalResults* activeEvalCollector = nullptr;
@@ -385,9 +387,9 @@ public:
       }
 
       MyGP* best = nullptr;
+      gp_scalar bestAggregatedFitness = std::numeric_limits<gp_scalar>::infinity();
 
       if (!generationScenarios.empty()) {
-        gp_scalar bestAggregatedFitness = std::numeric_limits<gp_scalar>::infinity();
         EvalResults* previousCollector = activeEvalCollector;
 
         for (int candidateIndex : candidateIndices) {
@@ -443,6 +445,47 @@ public:
               bestOfPopulation = idx;
               break;
             }
+          }
+
+          // Propagate the bakeoff winner to all demes by replacing the worst
+          // individual in each deme. This spreads the generalist's genes across
+          // all path specializations for the next generation.
+          if (gpCfg.DemeticGrouping && gpCfg.DemeSize > 0 &&
+              std::isfinite(bestAggregatedFitness)) {
+            int demeSize = gpCfg.DemeSize;
+            int demesPropagated = 0;
+
+            for (int demeStart = 0; demeStart < containerSize(); demeStart += demeSize) {
+              int demeEnd = std::min(demeStart + demeSize, containerSize());
+
+              // Find worst individual in this deme (highest fitness = worst)
+              int worstInDeme = demeStart;
+              gp_scalar worstFitness = std::numeric_limits<gp_scalar>::lowest();
+
+              for (int idx = demeStart; idx < demeEnd; ++idx) {
+                MyGP* candidate = NthMyGP(idx);
+                if (!candidate) {
+                  continue;
+                }
+                gp_scalar fitness = static_cast<gp_scalar>(candidate->getFitness());
+                if (!std::isfinite(fitness) || fitness > worstFitness) {
+                  worstFitness = fitness;
+                  worstInDeme = idx;
+                }
+              }
+
+              // Don't replace the bakeoff winner itself (elitism protection)
+              if (worstInDeme != bestOfPopulation) {
+                // Clone the winner and replace the worst
+                put(worstInDeme, best->duplicate());
+                demesPropagated++;
+              }
+            }
+
+            bout << "# Propagated bakeoff winner (fitness="
+                 << bestAggregatedFitness << ") to "
+                 << demesPropagated << " demes" << endl;
+            bout.flush();
           }
         }
       }
@@ -1008,7 +1051,7 @@ int main(int argc, char** argv)
   strOutFile << "data.dat" << ends;
   strStatFile << "data.stc" << ends;
   fout.open(strOutFile.str());
-  ofstream bout(strStatFile.str());
+  bout.open(strStatFile.str());
 
   std::string startTime = generate_iso8601_timestamp();
   auto runStartTime = std::chrono::steady_clock::now();
