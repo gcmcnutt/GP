@@ -432,6 +432,19 @@ public:
         }
 
         activeEvalCollector = previousCollector;
+
+        // Update the best individual's fitness with the aggregated result
+        // and update bestOfPopulation to point to the bakeoff winner
+        if (best) {
+          best->setFitness(bestAggregatedFitness);
+          // Find the index of the best candidate in the population
+          for (int idx = 0; idx < containerSize(); ++idx) {
+            if (NthMyGP(idx) == best) {
+              bestOfPopulation = idx;
+              break;
+            }
+          }
+        }
       }
 
       if (!best) {
@@ -1529,7 +1542,7 @@ int main(int argc, char** argv)
 
       // Enable evaluation output for this generation
       printEval = true;
-      
+
       // Switch to new population first to get the correct best individual
       if (!ConfigManager::getGPConfig().SteadyState)
       {
@@ -1537,7 +1550,7 @@ int main(int argc, char** argv)
         pop = newPop;
         delete oldPop;
       }
-      
+
       MyGP* best = pop->NthMyGP(pop->bestOfPopulation);
       best->setScenarioIndex(computeScenarioIndexForIndividual(pop->bestOfPopulation));
       best->evaluate();
