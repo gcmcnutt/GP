@@ -239,6 +239,16 @@ bool Renderer::updateGenerationDisplay(int newGen) {
     oss << outcome.GetResult().GetBody().rdbuf();
     std::string retrievedData = oss.str();
 
+    // Debug: dump first 500 bytes of retrieved data
+    std::cerr << "\n=== DEBUG: Retrieved data size: " << retrievedData.size() << " bytes ===" << std::endl;
+    std::cerr << "First 500 characters:\n" << retrievedData.substr(0, 500) << std::endl;
+    std::cerr << "\nHex dump of first 200 bytes:" << std::endl;
+    for (size_t i = 0; i < std::min(retrievedData.size(), size_t(200)); ++i) {
+      fprintf(stderr, "%02x ", (unsigned char)retrievedData[i]);
+      if ((i + 1) % 16 == 0) fprintf(stderr, "\n");
+    }
+    std::cerr << "\n=== END DEBUG ===" << std::endl;
+
     // Deserialize the data
     try {
       std::istringstream iss(retrievedData);
@@ -247,6 +257,7 @@ bool Renderer::updateGenerationDisplay(int newGen) {
     }
     catch (const std::exception& e) {
       std::cerr << "Error during deserialization: " << e.what() << std::endl;
+      std::cerr << "Archive header: " << retrievedData.substr(0, 50) << std::endl;
       return false;
     }
   }
