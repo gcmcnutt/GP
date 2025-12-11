@@ -32,25 +32,32 @@ namespace boost {
   namespace serialization {
 
     // Serialization for float-based Eigen vector/quaternion used by GP eval
+    // Serialize elements individually for cross-platform portability (avoiding
+    // binary serialization of raw float arrays which is not portable)
     template<class Archive>
     void serialize(Archive& ar, gp_vec3& v, const unsigned int version)
     {
-      ar& boost::serialization::make_array(v.data(), 3);
+      ar & v[0] & v[1] & v[2];
     }
 
     // Serialization for Eigen::Quaternion<float>
+    // Serialize coefficients individually for cross-platform portability
     template<class Archive>
     void save(Archive& ar, const gp_quat& q, const unsigned int version)
     {
-      ar& boost::serialization::make_array(q.coeffs().data(), 4);
+      gp_scalar w = q.w();
+      gp_scalar x = q.x();
+      gp_scalar y = q.y();
+      gp_scalar z = q.z();
+      ar & w & x & y & z;
     }
 
     template<class Archive>
     void load(Archive& ar, gp_quat& q, const unsigned int version)
     {
-      Eigen::Matrix<gp_scalar, 4, 1> coeffs;
-      ar& boost::serialization::make_array(coeffs.data(), 4);
-      q = gp_quat(coeffs[3], coeffs[0], coeffs[1], coeffs[2]);
+      gp_scalar w, x, y, z;
+      ar & w & x & y & z;
+      q = gp_quat(w, x, y, z);
     }
 
   } // namespace serialization
