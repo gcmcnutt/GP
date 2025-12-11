@@ -40,3 +40,16 @@
 - need to refactor the opcode enum to only have one -- and then to stop using numeric opcodes in the bytecode2cpp generator
 
 - check for dangling or vestiage source files
+
+* MIGRATE AWAY FROM BOOST SERIALIZATION
+  - Boost serialization is NOT portable across different Boost versions
+  - Current issue: Boost 1.74 (x86) cannot read archives from Boost 1.83 (ARM64)
+  - Archive version in header changes between Boost releases (v18 vs v19)
+  - This breaks cross-architecture artifact sharing via S3
+  - Consider alternatives:
+    * cereal (header-only, modern, portable)
+    * JSON (human-readable, universally portable)
+    * FlatBuffers (fast, efficient, cross-platform)
+    * Custom text format (simplest, most control)
+  - Migration required for: EvalData, EvalResults, Path, AircraftState, ScenarioMetadata
+  - Benefits: version independence, better portability, potentially smaller/faster
