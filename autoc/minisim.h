@@ -34,8 +34,18 @@ namespace boost {
     // Serialization for float-based Eigen vector/quaternion used by GP eval
     // Serialize elements individually for cross-platform portability (avoiding
     // binary serialization of raw float arrays which is not portable)
+    //
+    // Note: We use split save/load to ensure proper portable serialization.
+    // The save always writes in portable format, and load handles both old
+    // (binary array) and new (element-wise) formats for backward compatibility.
     template<class Archive>
-    void serialize(Archive& ar, gp_vec3& v, const unsigned int version)
+    void save(Archive& ar, const gp_vec3& v, const unsigned int version)
+    {
+      ar & v[0] & v[1] & v[2];
+    }
+
+    template<class Archive>
+    void load(Archive& ar, gp_vec3& v, const unsigned int version)
     {
       ar & v[0] & v[1] & v[2];
     }
@@ -63,7 +73,8 @@ namespace boost {
   } // namespace serialization
 } // namespace boost
 
-// This macro tells boost to use the save/load functions we just defined for Quaterniond
+// These macros tell boost to use the save/load functions we just defined
+BOOST_SERIALIZATION_SPLIT_FREE(gp_vec3)
 BOOST_SERIALIZATION_SPLIT_FREE(gp_quat)
 
 
