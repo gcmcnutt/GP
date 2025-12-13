@@ -286,22 +286,10 @@ gp_scalar executeGetDTheta(PathProvider& pathProvider, AircraftState& aircraftSt
     
     // Transform the craft-to-target vector to body frame
     gp_vec3 target_local = aircraftState.getOrientation().inverse() * craftToTarget;
-    
-    // Project the craft-to-target vector onto the body YZ plane
-    gp_vec3 projectedVector(0.0f, target_local.y(), target_local.z());
-    
-    // Calculate the angle between the projected vector and the body Z-axis
-    gp_scalar rollEstimate = fastAtan2(projectedVector.y(), -projectedVector.z());
-    
-    // *** PITCH: Calculate the vector from craft to target in world frame if it did rotate
-    gp_quat rollRotation(Eigen::AngleAxis<gp_scalar>(rollEstimate, gp_vec3::UnitX()));
-    gp_quat virtualOrientation = aircraftState.getOrientation() * rollRotation;
-    
-    // Transform target vector to new virtual orientation
-    gp_vec3 newLocalTargetVector = virtualOrientation.inverse() * craftToTarget;
-    
-    // Calculate pitch angle
-    return fastAtan2(-newLocalTargetVector.z(), newLocalTargetVector.x());
+
+    // Pitch error is the minimal rotation about body Y to point nose at the target
+    // Positive when target is above the nose, negative when below.
+    return fastAtan2(-target_local.z(), target_local.x());
 }
 
 gp_scalar executeGetDTarget(PathProvider& pathProvider, AircraftState& aircraftState, gp_scalar arg) {

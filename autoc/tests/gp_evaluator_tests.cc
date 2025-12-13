@@ -108,6 +108,12 @@ TEST(GPOperatorTest, NavigationAngles) {
   EXPECT_NEAR(executeGetDTheta(provider, state, args[0]), 0.0f, 1e-4f);
   EXPECT_NEAR(executeGetDTarget(provider, state, args[0]), -0.9f, 1e-4f);
   EXPECT_NEAR(executeGetDHome(state), (gp_vec3(0.0f, 0.0f, SIM_INITIAL_ALTITUDE) - state.getPosition()).norm(), 1e-4f);
+
+  // Target above should yield positive pitch, below should yield negative pitch
+  provider.paths[0].start = gp_vec3(10.0f, 0.0f, -5.0f);  // Above (negative Z in NED body frame)
+  EXPECT_NEAR(executeGetDTheta(provider, state, args[0]), static_cast<gp_scalar>(0.4636476f), 1e-4f);
+  provider.paths[0].start = gp_vec3(10.0f, 0.0f, 5.0f);   // Below (positive Z)
+  EXPECT_NEAR(executeGetDTheta(provider, state, args[0]), static_cast<gp_scalar>(-0.4636476f), 1e-4f);
 }
 
 TEST(BytecodeTest, SimpleProgram) {

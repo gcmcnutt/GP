@@ -31,12 +31,9 @@
   - will need to have the blue diff lines between planned and actual rendered when comparing that model
   - need a flight model selector, a way to select one of a few paths to fly as the goal
   - might need additional attributes on renderer playback, e.g. loss of GPS signal, etc
-  - on playback maybe render the flight controls input and some parameters power, velocity
   - blackbox logs are 1/32 which is still a lot of data, can we do subselect, perhaps 5 hz?
-  - an info panel or attitude display or vector toward intercept display would help
   - fpv mode for playback
 - also seems crrcsim is dependent on a valid DISPLAY even when in headless
-- we should alter the base controller to be able to pitch up or down a little if target is slightly below
 - need to refactor the opcode enum to only have one -- and then to stop using numeric opcodes in the bytecode2cpp generator
 
 - check for dangling or vestiage source files
