@@ -157,6 +157,21 @@ private:
   bool stopwatchVisible = false;
   gp_scalar stopwatchTime = 0.0f;
 
+  // Control HUD components (stick + throttle)
+  vtkSmartPointer<vtkActor2D> controlOutlineActor;
+  vtkSmartPointer<vtkActor2D> controlStickActor;
+  vtkSmartPointer<vtkActor2D> throttleFillActor;
+  vtkSmartPointer<vtkTextActor> controlSourceActor;
+  vtkSmartPointer<vtkActor2D> attitudeSkyActor;
+  vtkSmartPointer<vtkActor2D> attitudeGroundActor;
+  vtkSmartPointer<vtkActor2D> attitudeOutlineActor;
+  vtkSmartPointer<vtkTextActor> velocityActor;
+  bool controlsVisible = false;
+  gp_scalar lastControlPitch = 0.0f;
+  gp_scalar lastControlRoll = 0.0f;
+  gp_scalar lastControlThrottle = 0.0f;
+  gp_scalar lastControlsTime = 0.0f;
+
   gp_vec3 renderingOffset(int i); // locate a coordinate offset for our rendering screen
   vtkSmartPointer<vtkPolyData> createPointSet(gp_vec3 offset, const std::vector<gp_vec3> points);
   vtkSmartPointer<vtkPolyData> createPointSet(gp_vec3 offset, const std::vector<gp_vec3> points, gp_scalar timeProgress);
@@ -171,6 +186,10 @@ private:
   void createHighlightedFlightTapes(gp_vec3 offset);
   void createStopwatch();
   void updateStopwatch(gp_scalar currentTime);
+  void createControlsOverlay();
+  void updateControlsOverlay(gp_scalar currentTime);
+  void updateControlsPosition();
+  bool getControlStateAtTime(gp_scalar currentTime, gp_scalar& pitch, gp_scalar& roll, gp_scalar& throttle, int arenaIndex, bool& usedBlackbox, const AircraftState*& chosenState);
   void setFocusArena(int arenaIdx);
 };
 

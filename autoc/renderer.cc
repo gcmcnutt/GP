@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <cmath>
 #include <iomanip>
+#include <algorithm>
 
 #include "renderer.h"
 #include "config_manager.h"
@@ -20,6 +21,7 @@
 #include <vtkVectorText.h>
 #include <vtkTransform.h>
 #include <vtkTransformPolyDataFilter.h>
+#include <vtkPolygon.h>
 
 #include <gp.h>
 
@@ -1001,6 +1003,8 @@ void Renderer::initialize() {
 
   // Create stopwatch (initially hidden)
   createStopwatch();
+  // Create control HUD (initially hidden)
+  createControlsOverlay();
 
   // render
   renderWindow->Render();
@@ -1343,6 +1347,7 @@ bool parseBlackboxData(const std::string& csvData) {
   // Find column indices
   int latIndex = -1, lonIndex = -1, altIndex = -1, timeIndex = -1;
   int quatWIndex = -1, quatXIndex = -1, quatYIndex = -1, quatZIndex = -1;
+  int rcRollIndex = -1, rcPitchIndex = -1, rcThrottleIndex = -1;
   
   while (std::getline(stream, line)) {
     csvLines.push_back(line);  // Store all lines for span analysis
@@ -1371,6 +1376,9 @@ bool parseBlackboxData(const std::string& csvData) {
         else if (header == "quaternion[1]") quatXIndex = index;
         else if (header == "quaternion[2]") quatYIndex = index;
         else if (header == "quaternion[3]") quatZIndex = index;
+        else if (header == "rcCommand[0]") rcRollIndex = index;
+        else if (header == "rcCommand[1]") rcPitchIndex = index;
+        else if (header == "rcCommand[3]") rcThrottleIndex = index;
         index++;
       }
       headerParsed = true;
@@ -1454,8 +1462,18 @@ bool parseBlackboxData(const std::string& csvData) {
           // Create simple velocity vector for blackbox data (assuming forward flight)
           vec3 velocity_vector = q * vec3(static_cast<scalar>(20.0f), 0, 0);
           
+          gp_scalar pitchCmd = 0.0f;
+          gp_scalar rollCmd = 0.0f;
+          gp_scalar throttleCmd = 0.0f;
+          if (rcRollIndex >= 0 && rcPitchIndex >= 0 && rcThrottleIndex >= 0) {
+            rollCmd = CLAMP_DEF(static_cast<gp_scalar>(std::stof(row[rcRollIndex]) / static_cast<scalar>(500.0f)), -1.0f, 1.0f);
+            pitchCmd = CLAMP_DEF(static_cast<gp_scalar>(std::stof(row[rcPitchIndex]) / static_cast<scalar>(500.0f)), -1.0f, 1.0f);
+            // rcCommand[3] is centered around 1500us; scale to -1..1
+            throttleCmd = CLAMP_DEF(static_cast<gp_scalar>((std::stof(row[rcThrottleIndex]) - static_cast<scalar>(1500.0f)) / static_cast<scalar>(500.0f)), -1.0f, 1.0f);
+          }
+          
           // Create AircraftState with blackbox data
-          AircraftState state(static_cast<int>(blackboxAircraftStates.size()), static_cast<scalar>(20.0f), velocity_vector, q, newPoint, 0.0f, 0.0f, 0.0f, timeMs);
+          AircraftState state(static_cast<int>(blackboxAircraftStates.size()), static_cast<scalar>(20.0f), velocity_vector, q, newPoint, pitchCmd, rollCmd, throttleCmd, timeMs);
           blackboxAircraftStates.push_back(state);
           fullBlackboxAircraftStates.push_back(state);  // Store full flight data
           
@@ -1931,6 +1949,64 @@ void Renderer::createStopwatch() {
   stopwatchTimeActor->GetTextProperty()->SetJustificationToCentered();
 }
 
+void Renderer::createControlsOverlay() {
+  // Outline (stick box, crosshair, throttle outline)
+  controlOutlineActor = vtkSmartPointer<vtkActor2D>::New();
+  vtkNew<vtkPolyDataMapper2D> outlineMapper;
+  outlineMapper->SetInputData(vtkSmartPointer<vtkPolyData>::New());
+  controlOutlineActor->SetMapper(outlineMapper);
+  controlOutlineActor->GetProperty()->SetColor(1.0, 1.0, 1.0);
+  controlOutlineActor->GetProperty()->SetOpacity(0.8);
+
+  // Moving stick indicator
+  controlStickActor = vtkSmartPointer<vtkActor2D>::New();
+  vtkNew<vtkPolyDataMapper2D> stickMapper;
+  stickMapper->SetInputData(vtkSmartPointer<vtkPolyData>::New());
+  controlStickActor->SetMapper(stickMapper);
+  controlStickActor->GetProperty()->SetColor(1.0, 1.0, 1.0);
+  controlStickActor->GetProperty()->SetOpacity(0.8);
+
+  // Throttle fill
+  throttleFillActor = vtkSmartPointer<vtkActor2D>::New();
+  vtkNew<vtkPolyDataMapper2D> throttleMapper;
+  throttleMapper->SetInputData(vtkSmartPointer<vtkPolyData>::New());
+  throttleFillActor->SetMapper(throttleMapper);
+  throttleFillActor->GetProperty()->SetColor(1.0, 1.0, 1.0);
+  throttleFillActor->GetProperty()->SetOpacity(0.5);
+
+  controlSourceActor = vtkSmartPointer<vtkTextActor>::New();
+  controlSourceActor->GetTextProperty()->SetFontSize(12);
+  controlSourceActor->GetTextProperty()->SetColor(1.0, 1.0, 1.0);
+  controlSourceActor->GetTextProperty()->SetJustificationToLeft();
+
+  // Attitude indicator (sky/ground fill + outline/horizon)
+  attitudeSkyActor = vtkSmartPointer<vtkActor2D>::New();
+  vtkNew<vtkPolyDataMapper2D> skyMapper;
+  skyMapper->SetInputData(vtkSmartPointer<vtkPolyData>::New());
+  attitudeSkyActor->SetMapper(skyMapper);
+  attitudeSkyActor->GetProperty()->SetColor(0.2, 0.4, 0.9); // blue sky
+  attitudeSkyActor->GetProperty()->SetOpacity(0.7);
+
+  attitudeGroundActor = vtkSmartPointer<vtkActor2D>::New();
+  vtkNew<vtkPolyDataMapper2D> groundMapper;
+  groundMapper->SetInputData(vtkSmartPointer<vtkPolyData>::New());
+  attitudeGroundActor->SetMapper(groundMapper);
+  attitudeGroundActor->GetProperty()->SetColor(0.8, 0.2, 0.2); // red ground
+  attitudeGroundActor->GetProperty()->SetOpacity(0.7);
+
+  attitudeOutlineActor = vtkSmartPointer<vtkActor2D>::New();
+  vtkNew<vtkPolyDataMapper2D> attitudeOutlineMapper;
+  attitudeOutlineMapper->SetInputData(vtkSmartPointer<vtkPolyData>::New());
+  attitudeOutlineActor->SetMapper(attitudeOutlineMapper);
+  attitudeOutlineActor->GetProperty()->SetColor(1.0, 1.0, 1.0);
+  attitudeOutlineActor->GetProperty()->SetOpacity(0.8);
+
+  velocityActor = vtkSmartPointer<vtkTextActor>::New();
+  velocityActor->GetTextProperty()->SetFontSize(12);
+  velocityActor->GetTextProperty()->SetColor(1.0, 1.0, 1.0);
+  velocityActor->GetTextProperty()->SetJustificationToLeft();
+}
+
 void Renderer::updateStopwatch(gp_scalar currentTime) {
   if (!stopwatchActor || !stopwatchTimeActor) return;
   
@@ -2041,6 +2117,391 @@ void Renderer::updateStopwatchPosition() {
   if (stopwatchTime >= 0.0) { // Only update if we have valid stopwatch time
     updateStopwatch(stopwatchTime); // This will recreate the geometry with new position
   }
+
+  // Keep controls aligned with the stopwatch box
+  updateControlsPosition();
+}
+
+bool Renderer::getControlStateAtTime(gp_scalar currentSimTime, gp_scalar& pitch, gp_scalar& roll, gp_scalar& throttle, int arenaIndex, bool& usedBlackbox, const AircraftState*& chosenState) {
+  const std::vector<AircraftState>* states = nullptr;
+  bool useBlackboxTime = false;
+  usedBlackbox = false;
+  chosenState = nullptr;
+
+  if (!blackboxAircraftStates.empty()) {
+    states = &blackboxAircraftStates;
+    useBlackboxTime = true;
+    usedBlackbox = true;
+  } else if (!evalResults.aircraftStateList.empty()) {
+    if (arenaIndex < 0) arenaIndex = 0;
+    if (arenaIndex >= static_cast<int>(evalResults.aircraftStateList.size())) {
+      arenaIndex = static_cast<int>(evalResults.aircraftStateList.size()) - 1;
+    }
+    if (!evalResults.aircraftStateList[arenaIndex].empty()) {
+      states = &evalResults.aircraftStateList[arenaIndex];
+    }
+  } else {
+    return false;
+  }
+
+  if (!states || states->empty()) {
+    return false;
+  }
+
+  scalar startTime = useBlackboxTime
+    ? static_cast<scalar>((*states)[0].getSimTimeMsec()) / static_cast<scalar>(1000000.0f)
+    : static_cast<scalar>((*states)[0].getSimTimeMsec()) / static_cast<scalar>(1000.0f);
+
+  size_t chosenIndex = 0;
+  for (size_t i = 0; i < states->size(); ++i) {
+    scalar stateTime = useBlackboxTime
+      ? static_cast<scalar>((*states)[i].getSimTimeMsec()) / static_cast<scalar>(1000000.0f)
+      : static_cast<scalar>((*states)[i].getSimTimeMsec()) / static_cast<scalar>(1000.0f);
+    scalar relativeTime = stateTime - startTime;
+    if (relativeTime > currentSimTime) {
+      break;
+    }
+    chosenIndex = i;
+  }
+
+  const AircraftState& state = (*states)[chosenIndex];
+  pitch = state.getPitchCommand();
+  roll = state.getRollCommand();
+  throttle = state.getThrottleCommand();
+  chosenState = &state;
+  return true;
+}
+
+void Renderer::updateControlsOverlay(gp_scalar currentTime) {
+  if (!renderWindow || !controlOutlineActor || !controlStickActor || !throttleFillActor || !controlsVisible) {
+    return;
+  }
+
+  int selectedArena = focusMode ? focusArenaIndex : 0;
+  bool usedBlackbox = false;
+  const AircraftState* chosenState = nullptr;
+
+  gp_scalar pitch = lastControlPitch;
+  gp_scalar roll = lastControlRoll;
+  gp_scalar throttle = lastControlThrottle;
+  bool haveControls = getControlStateAtTime(currentTime, pitch, roll, throttle, selectedArena, usedBlackbox, chosenState);
+
+  lastControlPitch = pitch;
+  lastControlRoll = roll;
+  lastControlThrottle = throttle;
+  lastControlsTime = currentTime;
+
+  int* windowSize = renderWindow->GetSize();
+  scalar clockCenterX = static_cast<scalar>(windowSize[0] - 70); // Align with stopwatch anchor
+  scalar clockCenterY = static_cast<scalar>(windowSize[1] - 70);
+
+  scalar stickSize = static_cast<scalar>(70.0f);
+  scalar stickHalf = stickSize / static_cast<scalar>(2.0f);
+  scalar velocityAnchorX = clockCenterX - static_cast<scalar>(80.0f);
+  scalar attitudeCenterX = velocityAnchorX - static_cast<scalar>(80.0f);
+  scalar attitudeRadius = static_cast<scalar>(30.0f);
+  scalar throttleLeft = attitudeCenterX - static_cast<scalar>(70.0f);
+  scalar throttleWidth = static_cast<scalar>(12.0f);
+  scalar throttleRight = throttleLeft + throttleWidth;
+  scalar stickCenterX = throttleLeft - static_cast<scalar>(90.0f);
+  scalar stickCenterY = clockCenterY;
+  scalar stickLeft = stickCenterX - stickHalf;
+  scalar stickRight = stickCenterX + stickHalf;
+  scalar stickBottom = stickCenterY - stickHalf;
+  scalar stickTop = stickCenterY + stickHalf;
+
+  scalar throttleBottom = stickBottom;
+  scalar throttleTop = stickTop;
+  scalar attitudeCenterY = clockCenterY;
+
+  vtkNew<vtkPoints> outlinePoints;
+  vtkNew<vtkCellArray> outlineLines;
+  auto addLine = [&](scalar x1, scalar y1, scalar x2, scalar y2) {
+    vtkIdType id1 = outlinePoints->InsertNextPoint(x1, y1, 0);
+    vtkIdType id2 = outlinePoints->InsertNextPoint(x2, y2, 0);
+    vtkNew<vtkLine> line;
+    line->GetPointIds()->SetId(0, id1);
+    line->GetPointIds()->SetId(1, id2);
+    outlineLines->InsertNextCell(line);
+  };
+
+  // Stick outline and crosshair
+  addLine(stickLeft, stickBottom, stickRight, stickBottom);
+  addLine(stickRight, stickBottom, stickRight, stickTop);
+  addLine(stickRight, stickTop, stickLeft, stickTop);
+  addLine(stickLeft, stickTop, stickLeft, stickBottom);
+  addLine(stickCenterX, stickBottom, stickCenterX, stickTop);
+  addLine(stickLeft, stickCenterY, stickRight, stickCenterY);
+
+  // Throttle outline
+  addLine(throttleLeft, throttleBottom, throttleRight, throttleBottom);
+  addLine(throttleRight, throttleBottom, throttleRight, throttleTop);
+  addLine(throttleRight, throttleTop, throttleLeft, throttleTop);
+  addLine(throttleLeft, throttleTop, throttleLeft, throttleBottom);
+
+  vtkNew<vtkPolyData> outlineData;
+  outlineData->SetPoints(outlinePoints);
+  outlineData->SetLines(outlineLines);
+  vtkPolyDataMapper2D* outlineMapper = vtkPolyDataMapper2D::SafeDownCast(controlOutlineActor->GetMapper());
+  if (outlineMapper) {
+    outlineMapper->SetInputData(outlineData);
+  }
+
+  // Stick indicator (clamp to box). Positive pitch = stick back (downwards on radio face).
+  roll = CLAMP_DEF(roll, -1.0f, 1.0f);
+  pitch = CLAMP_DEF(pitch, -1.0f, 1.0f);
+  throttle = CLAMP_DEF(throttle, -1.0f, 1.0f);
+
+  scalar knobX = stickCenterX + roll * stickHalf;
+  scalar knobY = stickCenterY - pitch * stickHalf;
+  scalar knobRadius = static_cast<scalar>(6.0f);
+
+  vtkNew<vtkPoints> stickPoints;
+  vtkNew<vtkCellArray> stickLines;
+  vtkNew<vtkPolyLine> knob;
+  const int knobSegments = 20;
+  knob->GetPointIds()->SetNumberOfIds(knobSegments + 1);
+  for (int i = 0; i < knobSegments; ++i) {
+    scalar angle = static_cast<scalar>(2.0 * M_PI * i / knobSegments);
+    vtkIdType id = stickPoints->InsertNextPoint(knobX + knobRadius * cos(angle), knobY + knobRadius * sin(angle), 0);
+    knob->GetPointIds()->SetId(i, id);
+  }
+  knob->GetPointIds()->SetId(knobSegments, 0);
+  stickLines->InsertNextCell(knob);
+
+  vtkNew<vtkPolyData> stickData;
+  stickData->SetPoints(stickPoints);
+  stickData->SetLines(stickLines);
+  vtkPolyDataMapper2D* stickMapper = vtkPolyDataMapper2D::SafeDownCast(controlStickActor->GetMapper());
+  if (stickMapper) {
+    stickMapper->SetInputData(stickData);
+  }
+
+  // Throttle fill (bottom = idle)
+  scalar throttleFraction = CLAMP_DEF((throttle + static_cast<scalar>(1.0f)) / static_cast<scalar>(2.0f), static_cast<scalar>(0.0f), static_cast<scalar>(1.0f));
+  scalar fillTop = throttleBottom + (throttleTop - throttleBottom) * throttleFraction;
+
+  vtkNew<vtkPoints> fillPoints;
+  fillPoints->InsertNextPoint(throttleLeft, throttleBottom, 0);
+  fillPoints->InsertNextPoint(throttleRight, throttleBottom, 0);
+  fillPoints->InsertNextPoint(throttleRight, fillTop, 0);
+  fillPoints->InsertNextPoint(throttleLeft, fillTop, 0);
+
+  vtkNew<vtkCellArray> fillPolys;
+  vtkNew<vtkPolygon> fillPoly;
+  fillPoly->GetPointIds()->SetNumberOfIds(4);
+  for (int i = 0; i < 4; ++i) {
+    fillPoly->GetPointIds()->SetId(i, i);
+  }
+  fillPolys->InsertNextCell(fillPoly);
+
+  vtkNew<vtkPolyData> fillData;
+  fillData->SetPoints(fillPoints);
+  fillData->SetPolys(fillPolys);
+  vtkPolyDataMapper2D* throttleMapper = vtkPolyDataMapper2D::SafeDownCast(throttleFillActor->GetMapper());
+  if (throttleMapper) {
+    throttleMapper->SetInputData(fillData);
+  }
+
+  // Attitude indicator derived from quaternion (world frame)
+  gp_scalar attRoll = static_cast<gp_scalar>(0.0f);
+  gp_scalar attPitch = static_cast<gp_scalar>(0.0f);
+  if (chosenState) {
+    gp_quat q = chosenState->getOrientation();
+    gp_vec3 forward = q * gp_vec3::UnitX();
+    gp_vec3 right = q * gp_vec3::UnitY();
+    gp_vec3 up = q * -gp_vec3::UnitZ(); // body up
+    attPitch = std::atan2(-forward[2], std::sqrt(forward[0] * forward[0] + forward[1] * forward[1]));
+    attRoll = std::atan2(right[2], up[2]);
+  }
+  scalar maxPitch = static_cast<scalar>(M_PI / 3.0); // clamp to +-60 deg for display
+  // Positive pitch (nose up) should move horizon down to show more sky
+  scalar pitchOffset = -CLAMP_DEF(attPitch / maxPitch, static_cast<scalar>(-1.0f), static_cast<scalar>(1.0f)) * attitudeRadius;
+  scalar drawRoll = -attRoll; // horizon moves opposite aircraft roll
+  scalar cosR = cos(drawRoll);
+  scalar sinR = sin(drawRoll);
+
+  auto rotateToLevel = [&](scalar x, scalar y) {
+    scalar rx = x * cosR - y * sinR;
+    scalar ry = x * sinR + y * cosR;
+    return std::pair<scalar, scalar>(rx, ry);
+  };
+  auto rotateFromLevel = [&](scalar x, scalar y) {
+    scalar rx = x * cosR + y * sinR;
+    scalar ry = -x * sinR + y * cosR;
+    return std::pair<scalar, scalar>(rx, ry);
+  };
+
+  // Precompute circle points
+  const int attSegments = 80;
+  std::vector<std::pair<scalar, scalar>> circlePoints;
+  circlePoints.reserve(attSegments);
+  for (int i = 0; i < attSegments; ++i) {
+    scalar angle = static_cast<scalar>(2.0 * M_PI * i / attSegments);
+    circlePoints.emplace_back(attitudeRadius * cos(angle), attitudeRadius * sin(angle));
+  }
+
+  auto clipHalf = [&](bool keepSky) -> vtkSmartPointer<vtkPolyData> {
+    if (circlePoints.empty()) {
+      return vtkSmartPointer<vtkPolyData>::New();
+    }
+    std::vector<std::pair<scalar, scalar>> input = circlePoints;
+    std::vector<std::pair<scalar, scalar>> output;
+
+    auto inside = [&](const std::pair<scalar, scalar>& p) {
+      auto r = rotateToLevel(p.first, p.second);
+      return keepSky ? (r.second >= pitchOffset) : (r.second <= pitchOffset);
+    };
+
+    auto intersect = [&](const std::pair<scalar, scalar>& p1, const std::pair<scalar, scalar>& p2) {
+      auto r1 = rotateToLevel(p1.first, p1.second);
+      auto r2 = rotateToLevel(p2.first, p2.second);
+      if (r1.second == r2.second) return p1;
+      scalar t = (pitchOffset - r1.second) / (r2.second - r1.second);
+      scalar nx = p1.first + t * (p2.first - p1.first);
+      scalar ny = p1.second + t * (p2.second - p1.second);
+      return std::make_pair(nx, ny);
+    };
+
+    for (size_t i = 0; i < input.size(); ++i) {
+      auto curr = input[i];
+      auto next = input[(i + 1) % input.size()];
+      bool currIn = inside(curr);
+      bool nextIn = inside(next);
+
+      if (currIn && nextIn) {
+        output.push_back(next);
+      } else if (currIn && !nextIn) {
+        output.push_back(intersect(curr, next));
+      } else if (!currIn && nextIn) {
+        output.push_back(intersect(curr, next));
+        output.push_back(next);
+      }
+    }
+
+    vtkSmartPointer<vtkPolyData> data = vtkSmartPointer<vtkPolyData>::New();
+    if (output.size() < 3) {
+      return data;
+    }
+
+    vtkNew<vtkPoints> pts;
+    vtkNew<vtkPolygon> poly;
+    poly->GetPointIds()->SetNumberOfIds(static_cast<vtkIdType>(output.size()));
+    for (size_t i = 0; i < output.size(); ++i) {
+      auto p = rotateFromLevel(output[i].first, output[i].second);
+      vtkIdType id = pts->InsertNextPoint(attitudeCenterX + p.first, attitudeCenterY + p.second, 0);
+      poly->GetPointIds()->SetId(static_cast<vtkIdType>(i), id);
+    }
+    vtkNew<vtkCellArray> polys;
+    polys->InsertNextCell(poly);
+    data->SetPoints(pts);
+    data->SetPolys(polys);
+    return data;
+  };
+
+  vtkPolyDataMapper2D* skyMap = vtkPolyDataMapper2D::SafeDownCast(attitudeSkyActor->GetMapper());
+  vtkPolyDataMapper2D* groundMap = vtkPolyDataMapper2D::SafeDownCast(attitudeGroundActor->GetMapper());
+  if (skyMap) skyMap->SetInputData(clipHalf(true));
+  if (groundMap) groundMap->SetInputData(clipHalf(false));
+
+  // Outline only (horizon implied by sky/ground split)
+  vtkNew<vtkPoints> attPoints;
+  vtkNew<vtkCellArray> attLines;
+  vtkNew<vtkPolyLine> attCircle;
+  attCircle->GetPointIds()->SetNumberOfIds(attSegments + 1);
+  for (int i = 0; i < attSegments; ++i) {
+    vtkIdType id = attPoints->InsertNextPoint(attitudeCenterX + circlePoints[i].first,
+      attitudeCenterY + circlePoints[i].second, 0);
+    attCircle->GetPointIds()->SetId(i, id);
+  }
+  attCircle->GetPointIds()->SetId(attSegments, 0);
+  attLines->InsertNextCell(attCircle);
+
+  vtkNew<vtkPolyData> attOutlineData;
+  attOutlineData->SetPoints(attPoints);
+  attOutlineData->SetLines(attLines);
+  vtkPolyDataMapper2D* attOutlineMapper = vtkPolyDataMapper2D::SafeDownCast(attitudeOutlineActor->GetMapper());
+  if (attOutlineMapper) {
+    attOutlineMapper->SetInputData(attOutlineData);
+  }
+
+  // Fixed aircraft reference symbol at center (small crosshair)
+  {
+    vtkNew<vtkPoints> refPoints;
+    vtkNew<vtkCellArray> refLines;
+    scalar wingSpan = attitudeRadius * static_cast<scalar>(0.6f);
+    scalar tailSpan = attitudeRadius * static_cast<scalar>(0.3f);
+    vtkIdType w1 = refPoints->InsertNextPoint(attitudeCenterX - wingSpan, attitudeCenterY, 0);
+    vtkIdType w2 = refPoints->InsertNextPoint(attitudeCenterX + wingSpan, attitudeCenterY, 0);
+    vtkIdType t1 = refPoints->InsertNextPoint(attitudeCenterX, attitudeCenterY - tailSpan, 0);
+    vtkIdType t2 = refPoints->InsertNextPoint(attitudeCenterX, attitudeCenterY + tailSpan, 0);
+    vtkNew<vtkLine> wings;
+    wings->GetPointIds()->SetId(0, w1);
+    wings->GetPointIds()->SetId(1, w2);
+    vtkNew<vtkLine> tail;
+    tail->GetPointIds()->SetId(0, t1);
+    tail->GetPointIds()->SetId(1, t2);
+    refLines->InsertNextCell(wings);
+    refLines->InsertNextCell(tail);
+    vtkNew<vtkPolyData> refData;
+    refData->SetPoints(refPoints);
+    refData->SetLines(refLines);
+    if (attOutlineMapper) {
+      // Overlay onto same outline actor for simplicity
+      vtkNew<vtkAppendPolyData> append;
+      append->AddInputData(attOutlineData);
+      append->AddInputData(refData);
+      append->Update();
+      attOutlineMapper->SetInputData(append->GetOutput());
+    }
+  }
+
+  // Update arena label
+  if (controlSourceActor) {
+    int fontSize = std::max(8, std::min(16, static_cast<int>(windowSize[1] * 0.018)));
+    controlSourceActor->GetTextProperty()->SetFontSize(fontSize);
+    std::ostringstream label;
+    if (!haveControls) {
+      label << "No control data";
+    } else if (usedBlackbox) {
+      label << "Blackbox";
+    } else {
+      ScenarioMetadata meta{};
+      if (!evalResults.scenarioList.empty() && selectedArena >= 0 && selectedArena < static_cast<int>(evalResults.scenarioList.size())) {
+        meta = evalResults.scenarioList[selectedArena];
+      } else {
+        meta = evalResults.scenario;
+      }
+      int pathIdx = (meta.pathVariantIndex >= 0) ? meta.pathVariantIndex : selectedArena;
+      int windIdx = meta.windVariantIndex;
+      label << "Path " << pathIdx << " / Wind " << windIdx;
+    }
+    controlSourceActor->SetInput(label.str().c_str());
+    controlSourceActor->SetPosition(stickLeft, stickTop + static_cast<scalar>(12.0f));
+  }
+
+  // Velocity indicator (approximate forward speed in m/s)
+  if (velocityActor) {
+    int fontSize = std::max(8, std::min(16, static_cast<int>(windowSize[1] * 0.018)));
+    velocityActor->GetTextProperty()->SetFontSize(fontSize);
+    gp_scalar speed = 0.0f;
+    if (haveControls && chosenState) {
+      gp_vec3 vel = chosenState->getVelocity();
+      speed = vel.norm();
+    }
+    std::ostringstream velStr;
+    velStr << "Vel " << std::fixed << std::setprecision(1) << speed << " m/s";
+    velocityActor->SetInput(velStr.str().c_str());
+    velocityActor->SetPosition(attitudeCenterX - attitudeRadius,
+      attitudeCenterY + attitudeRadius + static_cast<scalar>(10.0f));
+  }
+}
+
+void Renderer::updateControlsPosition() {
+  if (!controlsVisible) {
+    return;
+  }
+  updateControlsOverlay(lastControlsTime);
 }
 
 void Renderer::toggleFocusMode() {
@@ -2228,8 +2689,25 @@ void Renderer::hideStopwatch() {
     if (renderer) {
       renderer->RemoveActor2D(stopwatchActor);
       renderer->RemoveActor2D(stopwatchTimeActor);
+      if (controlOutlineActor && controlStickActor && throttleFillActor) {
+        renderer->RemoveActor2D(controlOutlineActor);
+        renderer->RemoveActor2D(controlStickActor);
+        renderer->RemoveActor2D(throttleFillActor);
+        if (controlSourceActor) {
+          renderer->RemoveActor2D(controlSourceActor);
+        }
+      }
+      if (attitudeSkyActor && attitudeGroundActor && attitudeOutlineActor) {
+        renderer->RemoveActor2D(attitudeSkyActor);
+        renderer->RemoveActor2D(attitudeGroundActor);
+        renderer->RemoveActor2D(attitudeOutlineActor);
+      }
+      if (velocityActor) {
+        renderer->RemoveActor2D(velocityActor);
+      }
     }
     stopwatchVisible = false;
+    controlsVisible = false;
   }
 }
 
@@ -2253,13 +2731,22 @@ void Renderer::togglePlaybackAnimation() {
     totalPausedTime = std::chrono::duration<gp_scalar>::zero();
     animationStartTime = std::chrono::steady_clock::now();
     stopwatchVisible = true;
+    controlsVisible = true;
     
     // Show stopwatch actors (need to get the renderer from the render window)
     vtkRenderer* renderer = vtkRenderer::SafeDownCast(renderWindow->GetRenderers()->GetFirstRenderer());
-    if (renderer) {
-      renderer->AddActor2D(stopwatchActor);
-      renderer->AddActor2D(stopwatchTimeActor);
-    }
+  if (renderer) {
+    renderer->AddActor2D(stopwatchActor);
+    renderer->AddActor2D(stopwatchTimeActor);
+    renderer->AddActor2D(controlOutlineActor);
+    renderer->AddActor2D(controlStickActor);
+    renderer->AddActor2D(throttleFillActor);
+    renderer->AddActor2D(controlSourceActor);
+    renderer->AddActor2D(attitudeSkyActor);
+    renderer->AddActor2D(attitudeGroundActor);
+    renderer->AddActor2D(attitudeOutlineActor);
+    renderer->AddActor2D(velocityActor);
+  }
     
     std::cout << "Real-time playback animation started" << std::endl;
     // Start with first animation frame
@@ -2314,6 +2801,11 @@ void Renderer::updatePlaybackAnimation() {
   // Update stopwatch
   if (stopwatchVisible) {
     updateStopwatch(currentSimTime);
+  }
+  
+  // Update control HUD alongside stopwatch
+  if (controlsVisible) {
+    updateControlsOverlay(currentSimTime);
   }
   
   // Check if animation is complete

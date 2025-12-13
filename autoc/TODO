@@ -41,6 +41,8 @@
 
 - check for dangling or vestiage source files
 
+* bakeoff demetic migration should honor DemeticMigProbability instead of propagating every generation
+
 * MIGRATE AWAY FROM BOOST SERIALIZATION
   - Boost serialization is NOT portable across different Boost versions
   - Current issue: Boost 1.74 (x86) cannot read archives from Boost 1.83 (ARM64)
