@@ -42,7 +42,7 @@
 #define SIM_MAX_ELEVATION static_cast<gp_scalar>(-110.0f)
 
 #define SIM_TOTAL_TIME_MSEC (100 * 1000)
-#define SIM_TIME_STEP_MSEC (200)
+#define SIM_TIME_STEP_MSEC (100)
 #define SIM_MAX_INTERVAL_MSEC (SIM_TIME_STEP_MSEC * 5)
 
 /*

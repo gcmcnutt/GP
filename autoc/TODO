@@ -4,8 +4,6 @@
 - llm fitness function evolution
   - this could be progressively raise the bar on complexity - staged evolution
   - co-evolution
-- do we want to migrate to 100msec timing vs 200msec today?
-
 - try to simplify the eval tree by passing a class reference instead of N args
 * replay functions
 - consider fitness function for distance, alignment is ramped sensitivity for first couple of seconds (to allow capture from random start)
@@ -37,8 +35,6 @@
 - need to refactor the opcode enum to only have one -- and then to stop using numeric opcodes in the bytecode2cpp generator
 
 - check for dangling or vestiage source files
-
-* bakeoff demetic migration should honor DemeticMigProbability instead of propagating every generation
 
 * MIGRATE AWAY FROM BOOST SERIALIZATION
   - Boost serialization is NOT portable across different Boost versions

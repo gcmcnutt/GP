@@ -21,6 +21,7 @@ From skeleton/skeleton.cc
 #include <cstdint>
 #include <limits>
 #include <iomanip>
+#include <random>
 
 #include "gp.h"
 #include "gp_bytecode.h"
@@ -454,8 +455,19 @@ public:
               std::isfinite(bestAggregatedFitness)) {
             int demeSize = gpCfg.DemeSize;
             int demesPropagated = 0;
+            // Clamp probability to [0,1]
+            gp_scalar migProb = std::clamp(static_cast<gp_scalar>(gpCfg.DemeticMigProbability) / static_cast<gp_scalar>(100.0f),
+                                           static_cast<gp_scalar>(0.0f),
+                                           static_cast<gp_scalar>(1.0f));
+            std::uniform_real_distribution<gp_scalar> dist(static_cast<gp_scalar>(0.0f), static_cast<gp_scalar>(1.0f));
+            static thread_local std::mt19937 rng(std::random_device{}());
 
             for (int demeStart = 0; demeStart < containerSize(); demeStart += demeSize) {
+              // Per-deme coin flip: only migrate if roll is below probability
+              if (dist(rng) > migProb) {
+                continue;
+              }
+
               int demeEnd = std::min(demeStart + demeSize, containerSize());
 
               // Find worst individual in this deme (highest fitness = worst)
