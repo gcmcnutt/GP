@@ -12,9 +12,7 @@
 - can not interactively flip to autoc input as it attempts to use the callback port -- soften this dependency for when it is manually run (maybe if port not set, it falls back to Mouse)
 - plumb stdout/stderr nicely for a build run -- perhaps hook this into archiving system too
 - figure out how to use crrcsim robots to form lead plane
-- Still getting thermal crash/corruption
 - variations project - to get closer to zero-shot
-  - maybe revisit thermal model
   - power, drag, service response times
   - get random start/orientation working in crrcsim
   - model and env dithering in crrcsim
@@ -35,6 +33,18 @@
 - need to refactor the opcode enum to only have one -- and then to stop using numeric opcodes in the bytecode2cpp generator
 
 - check for dangling or vestiage source files
+
+* INVESTIGATE DOUBLE PRECISION FOR DETERMINISM
+  - Current: gp_scalar = float (single precision)
+  - Issue: crrcsim physics uses double internally, but converts to float at interface
+  - Conversion at inputdev_autoc.cpp:474-476 loses ~9 digits of precision
+  - Results in ~0.0002m position divergence from first frame
+  - Divergence grows to ~0.17m by frame 100
+  - Test: Change gp_types.h to use double and measure impact on:
+    * Determinism (does divergence disappear?)
+    * Performance (memory, CPU)
+    * Flight hardware compatibility (does embedded support double?)
+  - May need conditional compilation for desktop vs embedded builds
 
 * MIGRATE AWAY FROM BOOST SERIALIZATION
   - Boost serialization is NOT portable across different Boost versions

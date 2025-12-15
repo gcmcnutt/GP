@@ -24,4 +24,14 @@ case "$INSTANCE" in
 esac
 
 cd $PROGDIR
-DISPLAY=$DISPLAY stdbuf -o0 -e0 $PROG -g autoc_config.xml -p "$PORT" -i AUTOC > $CRRCSIM_LOG 2>&1
+
+# Enable valgrind for debugging if USE_VALGRIND env var is set
+if [ -n "$USE_VALGRIND" ]; then
+  VALGRIND_LOG=${CRRCSIM_LOGDIR}/valgrind-$1.$$.log
+  VALGRIND_CMD="valgrind --track-origins=yes --leak-check=no --undef-value-errors=yes --log-file=$VALGRIND_LOG"
+  echo "Running with valgrind, log: $VALGRIND_LOG"
+else
+  VALGRIND_CMD=""
+fi
+
+DISPLAY=$DISPLAY stdbuf -o0 -e0 $VALGRIND_CMD $PROG -g autoc_config.xml -p "$PORT" -i AUTOC > $CRRCSIM_LOG 2>&1
