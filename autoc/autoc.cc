@@ -455,7 +455,7 @@ public:
               std::isfinite(bestAggregatedFitness)) {
             int demeSize = gpCfg.DemeSize;
             int demesPropagated = 0;
-            // Clamp probability to [0,1]
+            // Config is expressed as percent (0..100)
             gp_scalar migProb = std::clamp(static_cast<gp_scalar>(gpCfg.DemeticMigProbability) / static_cast<gp_scalar>(100.0f),
                                            static_cast<gp_scalar>(0.0f),
                                            static_cast<gp_scalar>(1.0f));
