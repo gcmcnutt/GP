@@ -1450,17 +1450,20 @@ bool parseBlackboxData(const std::string& csvData) {
           scalar qy = std::stof(row[quatYIndex]) / static_cast<scalar>(10000.0f);
           scalar qz = std::stof(row[quatZIndex]) / static_cast<scalar>(10000.0f);
           
-          // Create quaternion directly from normalized values
+          // Create quaternion directly from normalized values (INAV earth->body, NEU frame)
           quat q(qw, qx, qy, qz);
-          
-          // Ensure quaternion is normalized (should already be, but safety check)
           q.normalize();
+          
+          // Convert NEU earth->body -> NED body->world so orientation matches renderer math
+          const quat neuToNed(static_cast<scalar>(0.0f), static_cast<scalar>(1.0f), static_cast<scalar>(0.0f), static_cast<scalar>(0.0f)); // 180 deg about X
+          quat bodyToWorld = (neuToNed * q).conjugate();
+          bodyToWorld.normalize();
           
           // Get time if available, otherwise use index
           unsigned long int timeMs = (timeIndex >= 0) ? std::stoul(row[timeIndex]) : blackboxAircraftStates.size() * 100;
           
           // Create simple velocity vector for blackbox data (assuming forward flight)
-          vec3 velocity_vector = q * vec3(static_cast<scalar>(20.0f), 0, 0);
+          vec3 velocity_vector = bodyToWorld * vec3(static_cast<scalar>(20.0f), 0, 0);
           
           gp_scalar pitchCmd = 0.0f;
           gp_scalar rollCmd = 0.0f;
@@ -1473,7 +1476,7 @@ bool parseBlackboxData(const std::string& csvData) {
           }
           
           // Create AircraftState with blackbox data
-          AircraftState state(static_cast<int>(blackboxAircraftStates.size()), static_cast<scalar>(20.0f), velocity_vector, q, newPoint, pitchCmd, rollCmd, throttleCmd, timeMs);
+          AircraftState state(static_cast<int>(blackboxAircraftStates.size()), static_cast<scalar>(20.0f), velocity_vector, bodyToWorld, newPoint, pitchCmd, rollCmd, throttleCmd, timeMs);
           blackboxAircraftStates.push_back(state);
           fullBlackboxAircraftStates.push_back(state);  // Store full flight data
           
@@ -2307,12 +2310,12 @@ void Renderer::updateControlsOverlay(gp_scalar currentTime) {
   gp_scalar attRoll = static_cast<gp_scalar>(0.0f);
   gp_scalar attPitch = static_cast<gp_scalar>(0.0f);
   if (chosenState) {
-    gp_quat q = chosenState->getOrientation();
+    gp_quat q = chosenState->getOrientation(); // body -> world, NED (Down positive)
     gp_vec3 forward = q * gp_vec3::UnitX();
     gp_vec3 right = q * gp_vec3::UnitY();
-    gp_vec3 up = q * -gp_vec3::UnitZ(); // body up
+    gp_vec3 up = q * -gp_vec3::UnitZ(); // body up (world Z is down)
     attPitch = std::atan2(-forward[2], std::sqrt(forward[0] * forward[0] + forward[1] * forward[1]));
-    attRoll = std::atan2(right[2], up[2]);
+    attRoll = std::atan2(right[2], -up[2]); // negate up-Z so level attitude yields 0 roll
   }
   scalar maxPitch = static_cast<scalar>(M_PI / 3.0); // clamp to +-60 deg for display
   // Positive pitch (nose up) should move horizon down to show more sky
