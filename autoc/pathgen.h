@@ -316,10 +316,27 @@ public:
     gp_vec3 origin(0.0f, 0.0f, SIM_INITIAL_ALTITUDE);
     gp_scalar loopRadius = static_cast<gp_scalar>(20.0f);
 
+    // 0. Lead-in: ~1s straight-and-level southbound to let MSP override settle
+    const gp_scalar leadSeconds = static_cast<gp_scalar>(1.0f);
+    const gp_scalar leadDistance = SIM_RABBIT_VELOCITY * leadSeconds;
+    const int leadSteps = 20;
+    for (int i = 0; i <= leadSteps; ++i) {
+      gp_scalar frac = static_cast<gp_scalar>(i) / static_cast<gp_scalar>(leadSteps);
+      gp_vec3 point = origin + gp_vec3(-leadDistance * frac, 0.0f, 0.0f); // move south (negative X)
+      gp_scalar distance = (longPath.empty() ? 0.0f : (point - longPath.back().start).norm());
+      totalDistance += distance;
+      gp_scalar simTimeMsecLocal = (totalDistance / SIM_RABBIT_VELOCITY) * static_cast<gp_scalar>(1000.0f);
+      Path pathSegment = Path(point, gp_vec3::UnitX(), totalDistance, 0.0f, simTimeMsecLocal);
+      longPath.push_back(pathSegment);
+    }
+
+    // Use the end of the lead-in as the loop origin so we start the horizontal 8 from the current spot
+    gp_vec3 loopOrigin = longPath.empty() ? origin : longPath.back().start;
+
     // 2. LEFT HORIZONTAL LOOP - Start at origin heading south, turn left (counter-clockwise)
     // Circle center to the west of origin so we turn left around it  
     for (gp_scalar turn = 0; turn < static_cast<gp_scalar>(M_PI * 2.0); turn += static_cast<gp_scalar>(0.05f)) {
-      gp_vec3 circleCenter = origin + gp_vec3(0.0f, -loopRadius, 0.0f);
+      gp_vec3 circleCenter = loopOrigin + gp_vec3(0.0f, -loopRadius, 0.0f);
       // Start at origin (turn=0): point at center + (-radius, 0, 0), heading south
       gp_vec3 point = circleCenter + gp_vec3(-loopRadius * std::sin(turn), loopRadius * std::cos(turn), 0.0f);
       gp_scalar distance = (longPath.empty() ? 0.0f : (point - longPath.back().start).norm());
@@ -333,7 +350,7 @@ public:
     // 3. RIGHT HORIZONTAL LOOP - Start at origin heading south, turn right (clockwise)  
     // Circle center to the east of origin so we turn right around it
     for (gp_scalar turn = 0; turn < static_cast<gp_scalar>(M_PI * 2.0); turn += static_cast<gp_scalar>(0.05f)) {
-      gp_vec3 circleCenter = origin + gp_vec3(0.0f, loopRadius, 0.0f);
+      gp_vec3 circleCenter = loopOrigin + gp_vec3(0.0f, loopRadius, 0.0f);
       // Start at origin (turn=π): point at center + (-radius, 0, 0), heading south
       gp_vec3 point = circleCenter + gp_vec3(-loopRadius * std::sin(turn), -loopRadius * std::cos(turn), 0.0f);
       gp_scalar distance = (point - longPath.back().start).norm();
