@@ -843,7 +843,7 @@ void Renderer::initialize() {
   
   // Set properties for the blackbox tape (top/bottom coloring)
   vtkProperty* blackboxProperty = blackboxActor->GetProperty();
-  blackboxProperty->SetColor(0.0, 1.0, 0.0);  // Green for top face
+  blackboxProperty->SetColor(1.0, 0.5, 0.0);  // Orange for top face (canopy)
   blackboxProperty->SetLighting(true);
   blackboxProperty->SetInterpolation(VTK_FLAT);
   blackboxProperty->SetBackfaceCulling(false);
@@ -853,10 +853,10 @@ void Renderer::initialize() {
   blackboxProperty->SetSpecular(0.1);
   blackboxProperty->SetSpecularPower(10);
   blackboxProperty->SetOpacity(1.0);
-  
+
   // Create a new property for the back face (bottom)
   vtkNew<vtkProperty> blackboxBackProperty;
-  blackboxBackProperty->SetColor(1.0, 0.5, 0.0);  // Orange for bottom face
+  blackboxBackProperty->SetColor(0.0, 1.0, 0.0);  // Green for bottom face (belly)
   blackboxBackProperty->SetAmbient(0.1);
   blackboxBackProperty->SetDiffuse(0.8);
   blackboxBackProperty->SetSpecular(0.1);
@@ -874,7 +874,7 @@ void Renderer::initialize() {
   
   // Set properties for highlighted test spans (brighter)
   vtkProperty* highlightProperty = blackboxHighlightActor->GetProperty();
-  highlightProperty->SetColor(0.0, 1.0, 0.0);  // Bright green for top face
+  highlightProperty->SetColor(1.0, 0.6, 0.0);  // Bright orange for top face (canopy)
   highlightProperty->SetLighting(true);
   highlightProperty->SetInterpolation(VTK_FLAT);
   highlightProperty->SetBackfaceCulling(false);
@@ -884,10 +884,10 @@ void Renderer::initialize() {
   highlightProperty->SetSpecular(0.2);
   highlightProperty->SetSpecularPower(20);
   highlightProperty->SetOpacity(1.0);
-  
+
   // Create a new property for the back face (bottom) of highlights
   vtkNew<vtkProperty> highlightBackProperty;
-  highlightBackProperty->SetColor(1.0, 0.6, 0.0);  // Bright orange for bottom face
+  highlightBackProperty->SetColor(0.0, 1.0, 0.0);  // Bright green for bottom face (belly)
   highlightBackProperty->SetAmbient(0.2);
   highlightBackProperty->SetDiffuse(1.0);
   highlightBackProperty->SetSpecular(0.2);
@@ -1450,21 +1450,23 @@ bool parseBlackboxData(const std::string& csvData) {
           scalar qy = std::stof(row[quatYIndex]) / static_cast<scalar>(10000.0f);
           scalar qz = std::stof(row[quatZIndex]) / static_cast<scalar>(10000.0f);
           
-          // Create quaternion directly from normalized values (INAV earth->body, NEU frame)
-          quat q(qw, qx, qy, qz);
-          q.normalize();
-          
-          // Convert NEU earth->body -> NED body->world so orientation matches renderer math
-          const quat neuToNed(static_cast<scalar>(0.0f), static_cast<scalar>(1.0f), static_cast<scalar>(0.0f), static_cast<scalar>(0.0f)); // 180 deg about X
-          quat bodyToWorld = (neuToNed * q).conjugate();
-          bodyToWorld.normalize();
+          // INAV blackbox logs raw body->earth quaternion in NED frame
+          // (same as what MSP sends before the conjugate fix in msplink.cpp)
+          quat inavQuat(qw, qx, qy, qz);
+          inavQuat.normalize();
+
+          // Convert body->earth to earth->body to match renderer/GP contract
+          // Apply conjugate: (w, x, y, z) -> (w, -x, -y, -z)
+          quat earthToBody(inavQuat.w(), -inavQuat.x(), -inavQuat.y(), -inavQuat.z());
+          earthToBody.normalize();
           
           // Get time if available, otherwise use index
           unsigned long int timeMs = (timeIndex >= 0) ? std::stoul(row[timeIndex]) : blackboxAircraftStates.size() * 100;
-          
+
           // Create simple velocity vector for blackbox data (assuming forward flight)
-          vec3 velocity_vector = bodyToWorld * vec3(static_cast<scalar>(20.0f), 0, 0);
-          
+          // earth->body quaternion rotates body vectors to earth frame
+          vec3 velocity_vector = earthToBody * vec3(static_cast<scalar>(20.0f), 0, 0);
+
           gp_scalar pitchCmd = 0.0f;
           gp_scalar rollCmd = 0.0f;
           gp_scalar throttleCmd = 0.0f;
@@ -1474,9 +1476,9 @@ bool parseBlackboxData(const std::string& csvData) {
             // rcCommand[3] is centered around 1500us; scale to -1..1
             throttleCmd = CLAMP_DEF(static_cast<gp_scalar>((std::stof(row[rcThrottleIndex]) - static_cast<scalar>(1500.0f)) / static_cast<scalar>(500.0f)), -1.0f, 1.0f);
           }
-          
-          // Create AircraftState with blackbox data
-          AircraftState state(static_cast<int>(blackboxAircraftStates.size()), static_cast<scalar>(20.0f), velocity_vector, bodyToWorld, newPoint, pitchCmd, rollCmd, throttleCmd, timeMs);
+
+          // Create AircraftState with earth->body quaternion (matches CRRCSim/GP contract)
+          AircraftState state(static_cast<int>(blackboxAircraftStates.size()), static_cast<scalar>(20.0f), velocity_vector, earthToBody, newPoint, pitchCmd, rollCmd, throttleCmd, timeMs);
           blackboxAircraftStates.push_back(state);
           fullBlackboxAircraftStates.push_back(state);  // Store full flight data
           
@@ -2306,14 +2308,15 @@ void Renderer::updateControlsOverlay(gp_scalar currentTime) {
     throttleMapper->SetInputData(fillData);
   }
 
-  // Attitude indicator derived from quaternion (world frame)
+  // Attitude indicator derived from quaternion
   gp_scalar attRoll = static_cast<gp_scalar>(0.0f);
   gp_scalar attPitch = static_cast<gp_scalar>(0.0f);
   if (chosenState) {
-    gp_quat q = chosenState->getOrientation(); // body -> world, NED (Down positive)
-    gp_vec3 forward = q * gp_vec3::UnitX();
-    gp_vec3 right = q * gp_vec3::UnitY();
-    gp_vec3 up = q * -gp_vec3::UnitZ(); // body up (world Z is down)
+    // earth->body quaternion rotates body frame vectors to earth frame (NED)
+    gp_quat q = chosenState->getOrientation();
+    gp_vec3 forward = q * gp_vec3::UnitX();   // body +X -> earth frame
+    gp_vec3 right = q * gp_vec3::UnitY();     // body +Y -> earth frame
+    gp_vec3 up = q * -gp_vec3::UnitZ();       // body -Z (up) -> earth frame
     attPitch = std::atan2(-forward[2], std::sqrt(forward[0] * forward[0] + forward[1] * forward[1]));
     attRoll = std::atan2(right[2], -up[2]); // negate up-Z so level attitude yields 0 roll
   }
