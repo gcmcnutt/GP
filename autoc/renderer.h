@@ -31,6 +31,11 @@
 #include <vtkInteractorStyleTrackballCamera.h>
 #include <vtkInteractorStyleUser.h>
 #include <vtkLine.h>
+#include <vtkLineSource.h>
+#include <vtkArrowSource.h>
+#include <vtkSphereSource.h>
+#include <vtkTransform.h>
+#include <vtkTransformPolyDataFilter.h>
 #include <vtkAppendPolyData.h>
 #include <vtkTubeFilter.h>
 #include <vtkRibbonFilter.h>
@@ -64,12 +69,23 @@ enum {
 // CustomInteractorStyle forward declaration
 class CustomInteractorStyle;
 
+// Forward declarations for timestamped structures (defined in renderer.cc)
+struct TimestampedVec;
+
 // Test span structure for MSPRCOVERRIDE segments
 struct TestSpan {
   size_t startIndex;
   size_t endIndex;
   unsigned long startTime;
   unsigned long endTime;
+  gp_vec3 origin;  // Test origin for xiao mode
+  std::vector<TimestampedVec> vecPoints;  // Vec arrows for this span
+
+  TestSpan() : startIndex(0), endIndex(0), startTime(0), endTime(0), origin(0.0f, 0.0f, 0.0f) {}
+  TestSpan(size_t start, size_t end, unsigned long stime, unsigned long etime)
+    : startIndex(start), endIndex(end), startTime(stime), endTime(etime), origin(0.0f, 0.0f, 0.0f) {}
+  TestSpan(size_t start, size_t end, unsigned long stime, unsigned long etime, gp_vec3 orig)
+    : startIndex(start), endIndex(end), startTime(stime), endTime(etime), origin(orig) {}
 };
 
 class Renderer {
@@ -109,6 +125,7 @@ public:
   int currentTestIndex = 0;
   bool showingFullFlight = false;
   bool inDecodeMode = false;
+  bool inXiaoMode = false;
   bool focusMode = false;
   int focusArenaIndex = 0;
   std::array<gp_scalar,3> focusCameraPosition{0.0f,0.0f,0.0f};
@@ -136,12 +153,14 @@ private:
   vtkSmartPointer<vtkAppendPolyData> planeData;
   vtkSmartPointer<vtkAppendPolyData> blackboxTapes;
   vtkSmartPointer<vtkAppendPolyData> blackboxHighlightTapes;  // For highlighted test spans
+  vtkSmartPointer<vtkAppendPolyData> xiaoVecArrows;  // For xiao vec vectors
 
   vtkSmartPointer<vtkActor> actor1;
   vtkSmartPointer<vtkActor> actor2;
   vtkSmartPointer<vtkActor> actor3;
   vtkSmartPointer<vtkActor> blackboxActor;
   vtkSmartPointer<vtkActor> blackboxHighlightActor;  // For highlighted test spans
+  vtkSmartPointer<vtkActor> xiaoVecActor;  // For xiao vec arrows
   std::vector<vtkSmartPointer<vtkActor>> arenaLabelActors;
   
   vtkSmartPointer<vtkTextActor> generationTextActor;

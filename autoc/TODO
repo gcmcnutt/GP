@@ -24,8 +24,6 @@
 - blackbox rendering improvements:
   - we will need to select a path and a blackbox log to do comparisons
   - user interface to allow selecting path, log file, etc -- similar to how the path/actual works
-  - will need to have the blue diff lines between planned and actual rendered when comparing that model
-  - need a flight model selector, a way to select one of a few paths to fly as the goal
   - might need additional attributes on renderer playback, e.g. loss of GPS signal, etc
   - blackbox logs are 1/32 which is still a lot of data, can we do subselect, perhaps 5 hz?
   - fpv mode for playback
