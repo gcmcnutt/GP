@@ -306,6 +306,294 @@ class GenerateLine : public GeneratorMethod {
   }
 };
 
+enum AeroStandardPathType {
+  StraightAndLevel = 0,
+  SpiralClimb,
+  HorizontalFigureEight,
+  FortyFiveDegreeAngledLoop,
+  SeededRandomA,
+  SeededRandomB,
+  AERO_END_MARKER  // Total: 6 paths
+};
+
+class GenerateAeroStandard : public GeneratorMethod {
+public:
+  std::vector<Path> method(int pathIndex, gp_scalar radius, gp_scalar height, gp_scalar base) override {
+    std::vector<Path> path;
+    gp_scalar totalDistance = 0.0f;
+
+    AeroStandardPathType pathType = static_cast<AeroStandardPathType>(pathIndex % static_cast<int>(AeroStandardPathType::AERO_END_MARKER));
+
+    // Entry point: heading south at x=0, y=0, z=-25
+    gp_vec3 entryPoint(0.0f, 0.0f, base);
+
+    switch(pathType) {
+      case AeroStandardPathType::StraightAndLevel: {
+        // Straight and level: racetrack pattern
+        // 1. Head south for 20 meters
+        addStraightSegment(path, entryPoint, gp_vec3(-1.0f, 0.0f, 0.0f), 20.0f, totalDistance);
+
+        // 2. Right 180 turn with 20m radius
+        gp_vec3 turn1Start = path.back().start;
+        addHorizontalTurn(path, turn1Start, 20.0f, M_PI, true, totalDistance); // true = right turn (clockwise)
+
+        // 3. Head north for 40 meters
+        gp_vec3 northStart = path.back().start;
+        addStraightSegment(path, northStart, gp_vec3(1.0f, 0.0f, 0.0f), 40.0f, totalDistance);
+
+        // 4. Right 180 turn with 20m radius
+        gp_vec3 turn2Start = path.back().start;
+        addHorizontalTurn(path, turn2Start, 20.0f, M_PI, true, totalDistance);
+
+        // 5. Head south back to near origin for 20 meters
+        gp_vec3 returnStart = path.back().start;
+        addStraightSegment(path, returnStart, gp_vec3(-1.0f, 0.0f, 0.0f), 20.0f, totalDistance);
+        break;
+      }
+
+      case AeroStandardPathType::SpiralClimb: {
+        // 1. Head south for 20 meters at z=-25
+        addStraightSegment(path, entryPoint, gp_vec3(-1.0f, 0.0f, 0.0f), 20.0f, totalDistance);
+
+        // 2. LEFT 900 degree turn (2.5 circles) clockwise when viewed from above, with 20m radius, climbing from z=-25 to z=-75
+        // NOTE: "left" in spec means the turn goes counterclockwise in standard math (but appears clockwise when looking down +z)
+        gp_vec3 spiralStart = path.back().start;
+        gp_scalar climbAmount = -75.0f - spiralStart[2]; // should be -50
+        addSpiralTurn(path, spiralStart, 20.0f, 900.0f * M_PI / 180.0f, true, climbAmount, totalDistance); // true = clockwise from above
+
+        // 3. Head north for 40 meters at z=-75
+        gp_vec3 northStart = path.back().start;
+        addStraightSegment(path, northStart, gp_vec3(1.0f, 0.0f, 0.0f), 40.0f, totalDistance);
+        break;
+      }
+
+      case AeroStandardPathType::HorizontalFigureEight: {
+        // Same as longSequential (reuse the figure-8 logic)
+        gp_scalar loopRadius = 20.0f;
+
+        // Lead-in: 1s straight south
+        const gp_scalar leadSeconds = 1.0f;
+        const gp_scalar leadDistance = SIM_RABBIT_VELOCITY * leadSeconds;
+        addStraightSegment(path, entryPoint, gp_vec3(-1.0f, 0.0f, 0.0f), leadDistance, totalDistance);
+
+        gp_vec3 loopOrigin = path.back().start;
+
+        // Left horizontal loop
+        addHorizontalLoop(path, loopOrigin, loopRadius, false, totalDistance);
+
+        // Right horizontal loop
+        addHorizontalLoop(path, loopOrigin, loopRadius, true, totalDistance);
+        break;
+      }
+
+      case AeroStandardPathType::FortyFiveDegreeAngledLoop: {
+        // 45 degree angled loop - vertical loop rotated 45° around x-axis
+        // Loop goes UP (into negative Z), not down
+        // Entry at bottom of loop at origin (0, 0, base)
+        const gp_scalar cos45 = std::sqrt(2.0f) / 2.0f;
+        const gp_scalar sin45 = std::sqrt(2.0f) / 2.0f;
+
+        gp_scalar loopRadius = 15.0f;
+        // Rotate by -45° to make loop go up: (x, z*sin45, centerAlt - z*cos45)
+        // At angle=-π/2, z_plane=-r, want point at (0, 0, base)
+        // y = z_plane*sin45 + yOffset = -r*sin45 + yOffset = 0 → yOffset = r*sin45
+        // z = centerAlt - z_plane*cos45 = centerAlt + r*cos45 = base → centerAlt = base - r*cos45
+        gp_scalar centerAlt = base - loopRadius * cos45;
+        gp_scalar yOffset = loopRadius * sin45;
+
+        for (gp_scalar turn = 0; turn < static_cast<gp_scalar>(M_PI * 2.0); turn += 0.05f) {
+          // Start at bottom of loop: turn starts at -90° (or 3π/2)
+          // So at turn=0, we're at the bottom (south side)
+          gp_scalar angle = turn - static_cast<gp_scalar>(M_PI / 2.0); // Start at bottom
+
+          // Vertical loop in xz plane before rotation
+          // NEGATE x_plane so loop continues southward (negative x) from entry
+          gp_scalar x_plane = -loopRadius * std::cos(angle);
+          gp_scalar z_plane = loopRadius * std::sin(angle);
+
+          // Rotate around x-axis by -45° (to go up, not down) and translate
+          gp_vec3 interpolatedPoint = {
+            x_plane,
+            z_plane * sin45 + yOffset,
+            centerAlt - z_plane * cos45
+          };
+
+          if (!path.empty()) {
+            gp_scalar distance = (interpolatedPoint - path.back().start).norm();
+            totalDistance += distance;
+          }
+          gp_scalar simTimeMsecLocal = (totalDistance / SIM_RABBIT_VELOCITY) * 1000.0f;
+          Path pathSegment = Path(interpolatedPoint, gp_vec3::UnitX(), totalDistance, 0.0f, simTimeMsecLocal);
+          path.push_back(pathSegment);
+        }
+        break;
+      }
+
+      case AeroStandardPathType::SeededRandomA:
+      case AeroStandardPathType::SeededRandomB: {
+        // Generate seeded random path
+        int seed = (pathType == AeroStandardPathType::SeededRandomA) ? 12345 : 67890;
+        srand(seed);  // Set seed for reproducibility
+
+        std::vector<gp_vec3> controlPoints;
+        int numPoints = NUM_SEGMENTS_PER_PATH;
+
+        // Generate random control points within cylinder
+        for (int i = 0; i < numPoints; ++i) {
+          controlPoints.push_back(randomPointInCylinder(radius, height, base));
+        }
+
+        // Generate smooth path through control points
+        gp_scalar odometer = 0;
+        gp_scalar turnmeter = 0;
+        gp_vec3 lastPoint;
+        gp_vec3 lastDirection;
+        bool first = true;
+
+        for (size_t i = 1; i < controlPoints.size() - 3; ++i) {
+          for (gp_scalar t = 0; t <= 1; t += static_cast<gp_scalar>(0.05f)) {
+            gp_vec3 interpolatedPoint = cubicInterpolate(controlPoints[i - 1], controlPoints[i],
+                                                         controlPoints[i + 1], controlPoints[i + 2], t);
+            if (!first) {
+              gp_scalar newDistance = (interpolatedPoint - lastPoint).norm();
+              gp_vec3 newDirection = (interpolatedPoint - lastPoint).normalized();
+              gp_scalar dVector = lastDirection.dot(newDirection);
+              gp_scalar dAngle = std::acos(std::clamp(dVector / (lastDirection.norm() * newDirection.norm()), -1.0f, 1.0f));
+
+              gp_scalar simTimeMsec = (odometer / SIM_RABBIT_VELOCITY) * static_cast<gp_scalar>(1000.0f);
+              path.push_back(Path(interpolatedPoint, gp_vec3::UnitX(), odometer, turnmeter, simTimeMsec));
+
+              odometer += newDistance;
+              turnmeter += dAngle;
+              lastDirection = newDirection;
+            } else {
+              first = false;
+              lastDirection = (interpolatedPoint - entryPoint).normalized();
+            }
+            lastPoint = interpolatedPoint;
+          }
+        }
+        break;
+      }
+
+      default: {
+        std::cerr << "Unknown aero standard path type: " << pathType << std::endl;
+        assert(false);
+      }
+    }
+
+    return path;
+  }
+
+private:
+  void addStraightSegment(std::vector<Path>& path, const gp_vec3& start, const gp_vec3& direction,
+                          gp_scalar distance, gp_scalar& totalDistance) {
+    const gp_scalar step = 0.1f;
+    gp_vec3 dir = direction.normalized();
+
+    // Start from step if path is not empty to avoid duplicating the last point
+    gp_scalar startD = path.empty() ? 0.0f : step;
+
+    for (gp_scalar d = startD; d <= distance; d += step) {
+      gp_vec3 point = start + dir * d;
+      if (!path.empty()) {
+        gp_scalar segmentDist = (point - path.back().start).norm();
+        totalDistance += segmentDist;
+      }
+      gp_scalar simTimeMsec = (totalDistance / SIM_RABBIT_VELOCITY) * 1000.0f;
+      path.push_back(Path(point, gp_vec3::UnitX(), totalDistance, 0.0f, simTimeMsec));
+    }
+  }
+
+  void addHorizontalTurn(std::vector<Path>& path, const gp_vec3& start, gp_scalar radius,
+                         gp_scalar angleRadians, bool clockwise, gp_scalar& totalDistance) {
+    const gp_scalar step = 0.05f;
+
+    // Determine initial heading from last two points if possible
+    gp_vec3 heading(-1.0f, 0.0f, 0.0f); // default south
+    if (path.size() >= 2) {
+      heading = (path.back().start - path[path.size()-2].start).normalized();
+    }
+
+    // Right perpendicular in xy plane: rotate heading 90° RIGHT (clockwise when viewed from above)
+    // For heading=(-1,0,0) (south), right perpendicular is (0,-1,0) (west)
+    // Formula: rotate (x,y) by -90° (clockwise) = (y, -x)
+    gp_vec3 rightPerpendicular(-heading[1], heading[0], 0.0f);
+
+    // Place center to the right for clockwise turn, left for counterclockwise
+    gp_vec3 center = start + rightPerpendicular * (clockwise ? 1.0f : -1.0f) * radius;
+
+    // Starting angle: we're at the start position relative to center
+    gp_scalar startAngle = std::atan2(start[1] - center[1], start[0] - center[0]);
+
+    // When looking down from above (down +z axis), clockwise motion means INCREASING angle
+    gp_scalar angleSign = clockwise ? 1.0f : -1.0f;
+
+    for (gp_scalar angle = step; angle <= angleRadians; angle += step) {
+      gp_scalar totalAngle = startAngle + angleSign * angle;
+      gp_vec3 point(center[0] + radius * std::cos(totalAngle), center[1] + radius * std::sin(totalAngle), start[2]);
+
+      gp_scalar segmentDist = (point - path.back().start).norm();
+      totalDistance += segmentDist;
+
+      gp_scalar simTimeMsec = (totalDistance / SIM_RABBIT_VELOCITY) * 1000.0f;
+      path.push_back(Path(point, gp_vec3::UnitX(), totalDistance, 0.0f, simTimeMsec));
+    }
+  }
+
+  void addSpiralTurn(std::vector<Path>& path, const gp_vec3& start, gp_scalar radius,
+                     gp_scalar angleRadians, bool clockwise, gp_scalar totalClimb, gp_scalar& totalDistance) {
+    const gp_scalar step = 0.05f;
+
+    gp_vec3 heading(-1.0f, 0.0f, 0.0f);
+    if (path.size() >= 2) {
+      heading = (path.back().start - path[path.size()-2].start).normalized();
+    }
+
+    // Right perpendicular in xy plane: rotate (x,y) by -90° = (y, -x)
+    gp_vec3 rightPerpendicular(-heading[1], heading[0], 0.0f);
+
+    // Place center based on turn direction
+    gp_vec3 center = start + rightPerpendicular * (clockwise ? 1.0f : -1.0f) * radius;
+
+    // Starting angle from center to start position
+    gp_scalar startAngle = std::atan2(start[1] - center[1], start[0] - center[0]);
+
+    // When looking down from above, clockwise means increasing angle
+    gp_scalar angleSign = clockwise ? 1.0f : -1.0f;
+
+    for (gp_scalar angle = step; angle <= angleRadians; angle += step) {
+      gp_scalar totalAngle = startAngle + angleSign * angle;
+      gp_scalar zOffset = (angle / angleRadians) * totalClimb;
+      gp_vec3 point(center[0] + radius * std::cos(totalAngle), center[1] + radius * std::sin(totalAngle), start[2] + zOffset);
+
+      gp_scalar segmentDist = (point - path.back().start).norm();
+      totalDistance += segmentDist;
+
+      gp_scalar simTimeMsec = (totalDistance / SIM_RABBIT_VELOCITY) * 1000.0f;
+      path.push_back(Path(point, gp_vec3::UnitX(), totalDistance, 0.0f, simTimeMsec));
+    }
+  }
+
+  void addHorizontalLoop(std::vector<Path>& path, const gp_vec3& loopOrigin, gp_scalar loopRadius,
+                         bool clockwise, gp_scalar& totalDistance) {
+    const gp_scalar step = 0.05f;
+    gp_scalar sign = clockwise ? -1.0f : 1.0f; // inverted for consistency
+
+    for (gp_scalar turn = 0; turn < static_cast<gp_scalar>(M_PI * 2.0); turn += step) {
+      gp_vec3 circleCenter = loopOrigin + gp_vec3(0.0f, sign * loopRadius, 0.0f);
+      gp_vec3 point = circleCenter + gp_vec3(-loopRadius * std::sin(turn), -sign * loopRadius * std::cos(turn), 0.0f);
+
+      if (!path.empty()) {
+        gp_scalar distance = (point - path.back().start).norm();
+        totalDistance += distance;
+      }
+      gp_scalar simTimeMsec = (totalDistance / SIM_RABBIT_VELOCITY) * 1000.0f;
+      path.push_back(Path(point, gp_vec3::UnitX(), totalDistance, 0.0f, simTimeMsec));
+    }
+  }
+};
+
 class GenerateLongSequential : public GeneratorMethod {
 public:
   std::vector<Path> method(int pathIndex, gp_scalar radius, gp_scalar height, gp_scalar base) override {

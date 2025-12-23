@@ -46,6 +46,9 @@ std::vector<std::vector<Path>> generateSmoothPaths(char* method, int numPaths, g
   else if (strcmp(method, "longSequential") == 0) {
     generatorMethod = new GenerateLongSequential();
   }
+  else if (strcmp(method, "aeroStandard") == 0) {
+    generatorMethod = new GenerateAeroStandard();
+  }
   else if (strcmp(method, "line") == 0) {
     generatorMethod = new GenerateLine();
   }
