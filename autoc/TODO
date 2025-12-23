@@ -5,7 +5,6 @@
   - this could be progressively raise the bar on complexity - staged evolution
   - co-evolution
 - try to simplify the eval tree by passing a class reference instead of N args
-* replay functions
 - consider fitness function for distance, alignment is ramped sensitivity for first couple of seconds (to allow capture from random start)
 - walk various classes for copy by reference, copy by pointer, copy by value == a smaller mem leak in autoc
 - we can buffer the best run over a population vs re-running it -- save the final eval steps
@@ -15,7 +14,16 @@
 - variations project - to get closer to zero-shot
   - power, drag, service response times
   - get random start/orientation working in crrcsim
-  - model and env dithering in crrcsim
+  - wind speed, direction, turbulence multipler need to vary
+    * CURRENT: WindScenarios only varies turbulence/gust patterns via PRNG seed
+    * Wind direction fixed at 270° (from scenery/config)
+    * Base wind velocity fixed at 7 ft/s (from scenery/config)
+    * Turbulence intensity fixed at 1.0 (relative multiplier from scenery/config)
+    * TO ADD VARIATION: Modify config loading to randomize direction/velocity based on wind seed
+      - See config.cpp:173-249 (T_Wind::setDefaults and read methods)
+      - Wind seed controls: Dryden turbulence model gaussian noise (eta1-4 in windfield.h:131)
+      - Wind seed controls: Thermal updraft positions
+  - also varying speed rabbit
 - GP to autoc in inav via controls
   - selector
   - activate
