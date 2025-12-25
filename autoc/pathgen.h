@@ -311,7 +311,7 @@ enum AeroStandardPathType {
   SpiralClimb,
   HorizontalFigureEight,
   FortyFiveDegreeAngledLoop,
-  SeededRandomA,
+  HighPerchSplitS,
   SeededRandomB,
   AERO_END_MARKER  // Total: 6 paths
 };
@@ -355,11 +355,11 @@ public:
         // 1. Head south for 20 meters at z=-25
         addStraightSegment(path, entryPoint, gp_vec3(-1.0f, 0.0f, 0.0f), 20.0f, totalDistance);
 
-        // 2. LEFT 900 degree turn (2.5 circles) clockwise when viewed from above, with 20m radius, climbing from z=-25 to z=-75
+        // 2. LEFT 540 degree turn (1.5 circles) clockwise when viewed from above, with 20m radius, climbing from z=-25 to z=-75
         // NOTE: "left" in spec means the turn goes counterclockwise in standard math (but appears clockwise when looking down +z)
         gp_vec3 spiralStart = path.back().start;
         gp_scalar climbAmount = -75.0f - spiralStart[2]; // should be -50
-        addSpiralTurn(path, spiralStart, 20.0f, 900.0f * M_PI / 180.0f, true, climbAmount, totalDistance); // true = clockwise from above
+        addSpiralTurn(path, spiralStart, 20.0f, 540.0f * M_PI / 180.0f, true, climbAmount, totalDistance); // true = clockwise from above
 
         // 3. Head north for 40 meters at z=-75
         gp_vec3 northStart = path.back().start;
@@ -429,10 +429,66 @@ public:
         break;
       }
 
-      case AeroStandardPathType::SeededRandomA:
+      case AeroStandardPathType::HighPerchSplitS: {
+        // Path 4: High Perch with Split-S Reversal
+        // Complex multi-segment maneuver combining climb, perch, and reversal
+
+        // Segment 1: Head south for 20m
+        addStraightSegment(path, entryPoint, gp_vec3(-1.0f, 0.0f, 0.0f), 20.0f, totalDistance);
+
+        // Segment 2: 180° climbing left turn (clockwise from above) with 20m radius, climbing 20m to z=-45
+        gp_vec3 seg2Start = path.back().start;
+        gp_scalar climbAmount = -20.0f;  // Climb from z=-25 to z=-45
+        addSpiralTurn(path, seg2Start, 20.0f, M_PI, true, climbAmount, totalDistance); // true = clockwise (left turn from pilot)
+
+        // Segment 3: Diagonal climb north from z=-45 to z=-65 over ~40m horizontal distance
+        gp_vec3 seg3Start = path.back().start;
+        gp_vec3 headingNorth(1.0f, 0.0f, 0.0f);
+        gp_scalar horizontalDist = 40.0f;
+        gp_scalar verticalClimb = -20.0f;  // From z=-45 to z=-65
+        gp_vec3 climbVector = headingNorth * horizontalDist + gp_vec3(0.0f, 0.0f, verticalClimb);
+        gp_scalar climbDistance = climbVector.norm();
+        addStraightSegment(path, seg3Start, climbVector.normalized(), climbDistance, totalDistance);
+
+        // Segment 4: Hard 150° right turn with 5m radius at high perch
+        gp_vec3 seg4Start = path.back().start;
+        addHorizontalTurn(path, seg4Start, 5.0f, 150.0f * M_PI / 180.0f, true, totalDistance); // true = right turn
+
+        // Calculate heading after 150° right turn from north
+        // After 150° clockwise turn from north (0°): heading = 150° in NED
+        gp_scalar headingAngle = 150.0f * M_PI / 180.0f;
+        gp_vec3 headingSW(std::cos(headingAngle), std::sin(headingAngle), 0.0f);
+
+        // Segment 5: Fly 30m in new heading (150° from north)
+        gp_vec3 seg5Start = path.back().start;
+        addStraightSegment(path, seg5Start, headingSW, 30.0f, totalDistance);
+
+        // Segment 6: Continue in same heading until x=-20
+        gp_vec3 seg6Start = path.back().start;
+        if (std::abs(headingSW[0]) > 0.001f) {
+          gp_scalar distToX20 = (-20.0f - seg6Start[0]) / headingSW[0];
+          if (distToX20 > 0) {
+            addStraightSegment(path, seg6Start, headingSW, distToX20, totalDistance);
+          }
+        }
+
+        // Segment 7: 180° pitch-down loop (Split-S maneuver) at x=-20
+        gp_vec3 seg7Start = path.back().start;
+        addPitchDownLoop(path, seg7Start, headingSW, 15.0f, totalDistance);
+
+        // Segment 8: Head north to x=40 (heading is now reversed after Split-S)
+        gp_vec3 seg8Start = path.back().start;
+        gp_vec3 headingNE = -headingSW;  // Reversed heading after loop
+        if (std::abs(headingNE[0]) > 0.001f) {
+          gp_scalar distToX40 = (40.0f - seg8Start[0]) / headingNE[0];
+          addStraightSegment(path, seg8Start, headingNE.normalized(), std::abs(distToX40), totalDistance);
+        }
+        break;
+      }
+
       case AeroStandardPathType::SeededRandomB: {
         // Generate seeded random path
-        int seed = (pathType == AeroStandardPathType::SeededRandomA) ? 12345 : 67890;
+        int seed = 67890;
         srand(seed);  // Set seed for reproducibility
 
         std::vector<gp_vec3> controlPoints;
@@ -515,10 +571,14 @@ private:
       heading = (path.back().start - path[path.size()-2].start).normalized();
     }
 
+    // Project heading onto XY plane (ignore Z component for horizontal turn)
+    gp_vec3 headingXY(heading[0], heading[1], 0.0f);
+    headingXY = headingXY.normalized();
+
     // Right perpendicular in xy plane: rotate heading 90° RIGHT (clockwise when viewed from above)
     // For heading=(-1,0,0) (south), right perpendicular is (0,-1,0) (west)
     // Formula: rotate (x,y) by -90° (clockwise) = (y, -x)
-    gp_vec3 rightPerpendicular(-heading[1], heading[0], 0.0f);
+    gp_vec3 rightPerpendicular(-headingXY[1], headingXY[0], 0.0f);
 
     // Place center to the right for clockwise turn, left for counterclockwise
     gp_vec3 center = start + rightPerpendicular * (clockwise ? 1.0f : -1.0f) * radius;
@@ -550,8 +610,12 @@ private:
       heading = (path.back().start - path[path.size()-2].start).normalized();
     }
 
+    // Project heading onto XY plane (ignore Z component for turn calculation)
+    gp_vec3 headingXY(heading[0], heading[1], 0.0f);
+    headingXY = headingXY.normalized();
+
     // Right perpendicular in xy plane: rotate (x,y) by -90° = (y, -x)
-    gp_vec3 rightPerpendicular(-heading[1], heading[0], 0.0f);
+    gp_vec3 rightPerpendicular(-headingXY[1], headingXY[0], 0.0f);
 
     // Place center based on turn direction
     gp_vec3 center = start + rightPerpendicular * (clockwise ? 1.0f : -1.0f) * radius;
@@ -588,6 +652,43 @@ private:
         gp_scalar distance = (point - path.back().start).norm();
         totalDistance += distance;
       }
+      gp_scalar simTimeMsec = (totalDistance / SIM_RABBIT_VELOCITY) * 1000.0f;
+      path.push_back(Path(point, gp_vec3::UnitX(), totalDistance, 0.0f, simTimeMsec));
+    }
+  }
+
+  void addPitchDownLoop(std::vector<Path>& path, const gp_vec3& start, const gp_vec3& heading,
+                        gp_scalar loopRadius, gp_scalar& totalDistance) {
+    // Pitch-down loop: 180° loop in the vertical plane perpendicular to current heading
+    // This is a Split-S maneuver - half loop downward (toward +z) that reverses course
+    const gp_scalar step = 0.05f;
+
+    // Heading should be normalized (only xy components matter for horizontal heading)
+    gp_vec3 headingNorm = heading.normalized();
+
+    // Find the center of the loop: radius distance DOWN (+z direction) from start position
+    // In NED, +z is down, so we move the center downward
+    gp_vec3 center = start + gp_vec3(0.0f, 0.0f, loopRadius);
+
+    // Loop from 0 to π (180°), starting from top of loop heading down
+    for (gp_scalar angle = step; angle <= static_cast<gp_scalar>(M_PI); angle += step) {
+      // In the vertical plane aligned with heading:
+      // - At angle=0: at top of loop (start position)
+      // - At angle=π/2: halfway, heading straight down
+      // - At angle=π: at bottom, reversed heading
+
+      // Position along the loop arc
+      // x,y offset: moves forward along heading direction as we loop
+      gp_scalar horizontalOffset = loopRadius * std::sin(angle);  // 0 at top, r at middle, 0 at bottom
+      // z offset: loops downward (toward +z)
+      gp_scalar verticalOffset = -loopRadius * std::cos(angle);  // -r at top (angle=0), +r at bottom (angle=π)
+
+      // Combine: move along heading (xy) and vertically (z)
+      gp_vec3 point = center + headingNorm * horizontalOffset + gp_vec3(0.0f, 0.0f, verticalOffset);
+
+      gp_scalar segmentDist = (point - path.back().start).norm();
+      totalDistance += segmentDist;
+
       gp_scalar simTimeMsec = (totalDistance / SIM_RABBIT_VELOCITY) * 1000.0f;
       path.push_back(Path(point, gp_vec3::UnitX(), totalDistance, 0.0f, simTimeMsec));
     }

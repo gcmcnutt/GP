@@ -27,9 +27,9 @@ Racetrack pattern at constant altitude z=-25
 - **Key**: All segments maintain z=-25 (no altitude change)
 
 ### Path 1: Spiral Climb ✓
-2.5 circles climbing maneuver
+1.5 circles climbing maneuver
 - Head straight south for 20 meters dest=[-20,0,-25]
-- Execute a 900° turn (2.5 circles) clockwise from above, with 20m radius, smoothly climbing to z=-75
+- Execute a 540° turn (1.5 circles) clockwise from above, with 20m radius, smoothly climbing to z=-75
 - Head north for 40 meters at z=-75
 - **Key**: Clockwise from above (right turn from pilot perspective)
 
@@ -48,14 +48,26 @@ Diagonal loop tilted 45° combining horizontal and vertical motion
 - Continues southward from entry
 - **Key**: Same as FortyFiveLoop in computedPaths but with bottom entry point at origin
 
-### Path 4: Seeded Random A ✓
-Reproducible random path
-- Generated using random path generator with FIXED seed=12345
-- Same geometry as standard random paths but reproducible
-- Seed configurable via `RandomPathSeedA` in autoc.ini
+### Path 4: High Perch with Split-S Reversal
+Complex multi-segment maneuver combining climb, perch, and reversal
+1. **Initial South**: Head south for 20m to [-20, 0, -25]
+2. **Climbing Left Turn**: 180° left turn (clockwise from top view) with 20m radius while climbing 20m to z=-45
+   - Left turn from pilot heading south = clockwise when viewed from -z looking +z
+   - Ends at approximately [-20, -40, -45]
+3. **Diagonal Climb**: Straight climb heading north, ascending from z=-45 to z=-65 over ~40m horizontal distance
+   - Ends at approximately [20, -40, -65] (high perch position)
+4. **Hard Right Turn**: Tight 150° right turn with 5m radius
+   - From north heading, turns 150° clockwise to southwest heading
+5. **Straight Segment**: Fly 30m in new heading (150° from north = southwest)
+6. **Continue to x=-20**: Continue in same heading until reaching x=-20
+7. **Pitch Down at x=-20**: Execute 180° pitch-down loop (course reversal in +z direction)
+   - Split-S maneuver: half loop downward, reversing course
+   - Inverted entry, rolling upright while diving
+8. **Final North Run**: Head north to x=40
+- **Key**: Combines climbing spiral, perch maneuver, and split-S reversal
 
 ### Path 5: Seeded Random B ✓
-Reproducible random path (different from Path 4)
+Reproducible random path
 - Generated using random path generator with FIXED seed=67890
 - Provides variety while maintaining reproducibility
 - Seed configurable via `RandomPathSeedB` in autoc.ini
@@ -84,7 +96,6 @@ Reproducible random path (different from Path 4)
 ```ini
 SimNumPathsPerGeneration = 6
 PathGeneratorMethod = aeroStandard
-RandomPathSeedA = 12345
 RandomPathSeedB = 67890
 ```
 
