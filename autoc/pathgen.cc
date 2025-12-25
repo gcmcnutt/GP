@@ -29,7 +29,7 @@ gp_vec3 cubicInterpolate(const gp_vec3& p0, const gp_vec3& p1, const gp_vec3& p2
 }
 
 // Function to generate a smooth random paths within a half-sphere
-std::vector<std::vector<Path>> generateSmoothPaths(char* method, int numPaths, gp_scalar radius, gp_scalar height) {
+std::vector<std::vector<Path>> generateSmoothPaths(char* method, int numPaths, gp_scalar radius, gp_scalar height, unsigned int baseSeed) {
   std::vector<std::vector<Path>> paths;
 
   GeneratorMethod* generatorMethod;
@@ -57,9 +57,16 @@ std::vector<std::vector<Path>> generateSmoothPaths(char* method, int numPaths, g
     assert(false);
   }
 
+  // For 'random' method: create a NEW seed per path using an mt19937 instance
+  // For all other methods (aeroStandard, etc): use the SAME baseSeed for all paths
+  bool useNewSeedPerPath = (strcmp(method, "random") == 0);
+  std::mt19937 seedGenerator(baseSeed);
+
   for (int i = 0; i < numPaths; ++i) {
-    paths.push_back(generatorMethod->method(i, radius, height, SIM_INITIAL_ALTITUDE));
+    unsigned int pathSeed = useNewSeedPerPath ? seedGenerator() : baseSeed;
+    paths.push_back(generatorMethod->method(i, radius, height, SIM_INITIAL_ALTITUDE, pathSeed));
   }
 
+  delete generatorMethod;
   return paths;
 }

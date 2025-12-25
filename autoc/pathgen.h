@@ -1,8 +1,19 @@
-// Define a structure for 3D points
+// Path generation for GP training
+//
+// USAGE PATTERN FOR autoc.cc:
+// TODO: Update autoc.cc to pass RandomPathSeedB from config manager as baseSeed parameter
+//       Example usage:
+//         unsigned int seed = extraConfig.randomPathSeedB;  // Read from .ini (default: 67890)
+//         auto paths = generateSmoothPaths("aeroStandard", 6, radius, height, seed);
+//
+//       For 'aeroStandard': All 6 paths use the SAME seed (paths are deterministic based on pathIndex)
+//       For 'random': Each path gets a DIFFERENT seed (generated from baseSeed using mt19937)
+//
 #ifndef PATHGEN_H
 #define PATHGEN_H
 
 #include <vector>
+#include <random>
 
 #include "minisim.h"
 #include "gp_types.h"
@@ -11,23 +22,45 @@
 
 gp_vec3 randomPointInCylinder(gp_scalar radius, gp_scalar height, gp_scalar base = SIM_INITIAL_ALTITUDE);
 gp_vec3 cubicInterpolate(const gp_vec3& p0, const gp_vec3& p1, const gp_vec3& p2, const gp_vec3& p3, gp_scalar t);
-std::vector<std::vector<Path>> generateSmoothPaths(char* method, int numPaths, gp_scalar radius, gp_scalar height);
+// Generate paths with controllable random seed
+// For 'aeroStandard' and deterministic methods: use ONE seed for all numPaths
+// For 'random' method: generate a NEW seed for each path
+std::vector<std::vector<Path>> generateSmoothPaths(char* method, int numPaths, gp_scalar radius, gp_scalar height, unsigned int baseSeed);
 
 class GeneratorMethod {
 public:
   virtual ~GeneratorMethod() = default;
-  virtual std::vector<Path> method(int pathIndex, gp_scalar radius, gp_scalar height, gp_scalar base) = 0;
+  // pathIndex: which path variant to generate (0-5 for aeroStandard, etc)
+  // seed: random seed for reproducible generation (creates private PRNG instance)
+  // NOTE: Callers should use ONE seed for all paths in aeroStandard/computedPaths,
+  //       but generate NEW seeds per-path for 'random' method
+  virtual std::vector<Path> method(int pathIndex, gp_scalar radius, gp_scalar height, gp_scalar base, unsigned int seed) = 0;
+
+protected:
+  // Generate random point in cylinder using local mt19937 PRNG (does not affect global rand state)
+  static gp_vec3 localRandomPointInCylinder(std::mt19937& rng, gp_scalar radius, gp_scalar height, gp_scalar base = SIM_INITIAL_ALTITUDE) {
+    std::uniform_real_distribution<gp_scalar> dist(static_cast<gp_scalar>(0.0), static_cast<gp_scalar>(1.0));
+    gp_scalar r = radius * std::cbrt(dist(rng));
+    gp_scalar theta = dist(rng) * static_cast<gp_scalar>(M_PI * 2.0);
+    gp_scalar z = base - dist(rng) * height;
+    gp_scalar x = r * std::cos(theta);
+    gp_scalar y = r * std::sin(theta);
+    return gp_vec3(x, y, z);
+  }
 };
 
 class GenerateRandom : public GeneratorMethod {
-  std::vector<Path> method(int pathIndex, gp_scalar radius, gp_scalar height, gp_scalar base) override {
+  std::vector<Path> method(int pathIndex, gp_scalar radius, gp_scalar height, gp_scalar base, unsigned int seed) override {
     std::vector<gp_vec3> controlPoints;
     std::vector<Path> path;
     int numPoints = NUM_SEGMENTS_PER_PATH;
 
+    // Initialize local mt19937 PRNG (does not affect global rand())
+    std::mt19937 rng(seed);
+
     // Generate random control points
     for (size_t i = 0; i < numPoints; ++i) {
-      controlPoints.push_back(randomPointInCylinder(radius, height));
+      controlPoints.push_back(localRandomPointInCylinder(rng, radius, height));
     }
 
     // Ensure the path is continuous by looping through control points
@@ -81,7 +114,8 @@ class GenerateRandom : public GeneratorMethod {
 };
 
 class GenerateClassic : public GeneratorMethod {
-  std::vector<Path> method(int pathIndex, gp_scalar radius, gp_scalar height, gp_scalar base) override {
+  std::vector<Path> method(int pathIndex, gp_scalar radius, gp_scalar height, gp_scalar base, unsigned int seed) override {
+    // Classic path is deterministic, seed is unused
     std::vector<gp_vec3> controlPoints;
     std::vector<Path> path;
     int numPoints = NUM_SEGMENTS_PER_PATH;
@@ -168,7 +202,8 @@ enum PathType {
 };
 
 class GenerateComputedPaths : public GeneratorMethod {
-  std::vector<Path> method(int pathIndex, gp_scalar radius, gp_scalar height, gp_scalar base) override {
+  std::vector<Path> method(int pathIndex, gp_scalar radius, gp_scalar height, gp_scalar base, unsigned int seed) override {
+    // Computed paths are deterministic, seed is unused
     std::vector<Path> path;
 
     PathType pathType = static_cast<PathType>(pathIndex % static_cast<int>(PathType::END_MARKER));
@@ -291,7 +326,8 @@ class GenerateComputedPaths : public GeneratorMethod {
 };
 
 class GenerateLine : public GeneratorMethod {
-  std::vector<Path> method(int pathIndex, gp_scalar radius, gp_scalar height, gp_scalar base) override {
+  std::vector<Path> method(int pathIndex, gp_scalar radius, gp_scalar height, gp_scalar base, unsigned int seed) override {
+    // Line path is deterministic, seed is unused
 
     std::vector<Path> path;
     gp_scalar distance = 0.0f;
@@ -318,7 +354,7 @@ enum AeroStandardPathType {
 
 class GenerateAeroStandard : public GeneratorMethod {
 public:
-  std::vector<Path> method(int pathIndex, gp_scalar radius, gp_scalar height, gp_scalar base) override {
+  std::vector<Path> method(int pathIndex, gp_scalar radius, gp_scalar height, gp_scalar base, unsigned int seed) override {
     std::vector<Path> path;
     gp_scalar totalDistance = 0.0f;
 
@@ -487,16 +523,15 @@ public:
       }
 
       case AeroStandardPathType::SeededRandomB: {
-        // Generate seeded random path
-        int seed = 67890;
-        srand(seed);  // Set seed for reproducibility
+        // Generate seeded random path using local mt19937 PRNG (does not affect global rand state)
+        std::mt19937 rng(seed);
 
         std::vector<gp_vec3> controlPoints;
         int numPoints = NUM_SEGMENTS_PER_PATH;
 
         // Generate random control points within cylinder
         for (int i = 0; i < numPoints; ++i) {
-          controlPoints.push_back(randomPointInCylinder(radius, height, base));
+          controlPoints.push_back(localRandomPointInCylinder(rng, radius, height, base));
         }
 
         // Generate smooth path through control points
@@ -697,7 +732,8 @@ private:
 
 class GenerateLongSequential : public GeneratorMethod {
 public:
-  std::vector<Path> method(int pathIndex, gp_scalar radius, gp_scalar height, gp_scalar base) override {
+  std::vector<Path> method(int pathIndex, gp_scalar radius, gp_scalar height, gp_scalar base, unsigned int seed) override {
+    // LongSequential path is deterministic, seed is unused
     std::vector<Path> longPath;
     gp_scalar totalDistance = 0.0f;
 

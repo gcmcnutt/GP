@@ -1090,7 +1090,10 @@ int main(int argc, char** argv)
   };
 
   // prime the paths?
-  generationPaths = generateSmoothPaths(ConfigManager::getExtraConfig().generatorMethod, ConfigManager::getExtraConfig().simNumPathsPerGen, SIM_PATH_BOUNDS, SIM_PATH_BOUNDS);
+  generationPaths = generateSmoothPaths(ConfigManager::getExtraConfig().generatorMethod,
+                                        ConfigManager::getExtraConfig().simNumPathsPerGen,
+                                        SIM_PATH_BOUNDS, SIM_PATH_BOUNDS,
+                                        ConfigManager::getExtraConfig().randomPathSeedB);
   rebuildGenerationScenarios(generationPaths);
   const int windsPerPath = std::max(ConfigManager::getExtraConfig().windScenarioCount, 1);
   *logger.debug() << "Wind scenarios this generation: paths="
@@ -1586,7 +1589,10 @@ int main(int argc, char** argv)
     for (int gen = 1; gen <= ConfigManager::getGPConfig().NumberOfGenerations; gen++)
     {
       // For this generation, build a smooth path goal
-      generationPaths = generateSmoothPaths(ConfigManager::getExtraConfig().generatorMethod, ConfigManager::getExtraConfig().simNumPathsPerGen, SIM_PATH_BOUNDS, SIM_PATH_BOUNDS);
+      generationPaths = generateSmoothPaths(ConfigManager::getExtraConfig().generatorMethod,
+                                            ConfigManager::getExtraConfig().simNumPathsPerGen,
+                                            SIM_PATH_BOUNDS, SIM_PATH_BOUNDS,
+                                            ConfigManager::getExtraConfig().randomPathSeedB);
       rebuildGenerationScenarios(generationPaths);
       warnIfScenarioMismatch();
 

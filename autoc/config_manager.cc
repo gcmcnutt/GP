@@ -106,6 +106,7 @@ GPConfigVarInformation* ConfigManager::createConfigArray() {
         {"WindScenarios", DATAINT, &extraConfig->windScenarioCount},
         {"WindSeedBase", DATAINT, &extraConfig->windSeedBase},
         {"WindSeedStride", DATAINT, &extraConfig->windSeedStride},
+        {"RandomPathSeedB", DATAINT, &extraConfig->randomPathSeedB},
         {"", DATAINT, NULL}
     };
     return configArray;
