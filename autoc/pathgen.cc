@@ -64,7 +64,20 @@ std::vector<std::vector<Path>> generateSmoothPaths(char* method, int numPaths, g
 
   for (int i = 0; i < numPaths; ++i) {
     unsigned int pathSeed = useNewSeedPerPath ? seedGenerator() : baseSeed;
-    paths.push_back(generatorMethod->method(i, radius, height, SIM_INITIAL_ALTITUDE, pathSeed));
+
+    // Generate path in canonical coordinate frame (0,0,0)
+    std::vector<Path> canonicalPath = generatorMethod->method(i, radius, height, 0.0f, pathSeed);
+
+    // Apply NED offset for desktop simulation (paths start at SIM_INITIAL_ALTITUDE)
+    gp_vec3 offset(0.0f, 0.0f, SIM_INITIAL_ALTITUDE);  // -25m in NED
+    std::vector<Path> offsetPath;
+    for (const auto& segment : canonicalPath) {
+      Path offsetSegment = segment;
+      offsetSegment.start += offset;
+      offsetPath.push_back(offsetSegment);
+    }
+
+    paths.push_back(offsetPath);
   }
 
   delete generatorMethod;

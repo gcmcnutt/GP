@@ -360,8 +360,9 @@ public:
 
     AeroStandardPathType pathType = static_cast<AeroStandardPathType>(pathIndex % static_cast<int>(AeroStandardPathType::AERO_END_MARKER));
 
-    // Entry point: heading south at x=0, y=0, z=-25
-    gp_vec3 entryPoint(0.0f, 0.0f, base);
+    // Entry point: canonical origin at (0,0,0) heading south
+    // NOTE: base parameter is now deprecated - coordinate offset applied at output stage
+    gp_vec3 entryPoint(0.0f, 0.0f, 0.0f);
 
     switch(pathType) {
       case AeroStandardPathType::StraightAndLevel: {
@@ -388,16 +389,16 @@ public:
       }
 
       case AeroStandardPathType::SpiralClimb: {
-        // 1. Head south for 20 meters at z=-25
+        // 1. Head south for 20 meters at z=0
         addStraightSegment(path, entryPoint, gp_vec3(-1.0f, 0.0f, 0.0f), 20.0f, totalDistance);
 
-        // 2. LEFT 540 degree turn (1.5 circles) clockwise when viewed from above, with 20m radius, climbing from z=-25 to z=-75
+        // 2. LEFT 540 degree turn (1.5 circles) clockwise when viewed from above, with 20m radius, climbing 50m
         // NOTE: "left" in spec means the turn goes counterclockwise in standard math (but appears clockwise when looking down +z)
         gp_vec3 spiralStart = path.back().start;
-        gp_scalar climbAmount = -75.0f - spiralStart[2]; // should be -50
+        gp_scalar climbAmount = -50.0f;  // Climb from z=0 to z=-50 (50m up in NED)
         addSpiralTurn(path, spiralStart, 20.0f, 540.0f * M_PI / 180.0f, true, climbAmount, totalDistance); // true = clockwise from above
 
-        // 3. Head north for 40 meters at z=-75
+        // 3. Head north for 40 meters at z=-50
         gp_vec3 northStart = path.back().start;
         addStraightSegment(path, northStart, gp_vec3(1.0f, 0.0f, 0.0f), 40.0f, totalDistance);
         break;
@@ -425,16 +426,16 @@ public:
       case AeroStandardPathType::FortyFiveDegreeAngledLoop: {
         // 45 degree angled loop - vertical loop rotated 45° around x-axis
         // Loop goes UP (into negative Z), not down
-        // Entry at bottom of loop at origin (0, 0, base)
+        // Entry at bottom of loop at canonical origin (0, 0, 0)
         const gp_scalar cos45 = std::sqrt(2.0f) / 2.0f;
         const gp_scalar sin45 = std::sqrt(2.0f) / 2.0f;
 
         gp_scalar loopRadius = 15.0f;
         // Rotate by -45° to make loop go up: (x, z*sin45, centerAlt - z*cos45)
-        // At angle=-π/2, z_plane=-r, want point at (0, 0, base)
+        // At angle=-π/2, z_plane=-r, want point at (0, 0, 0)
         // y = z_plane*sin45 + yOffset = -r*sin45 + yOffset = 0 → yOffset = r*sin45
-        // z = centerAlt - z_plane*cos45 = centerAlt + r*cos45 = base → centerAlt = base - r*cos45
-        gp_scalar centerAlt = base - loopRadius * cos45;
+        // z = centerAlt - z_plane*cos45 = centerAlt + r*cos45 = 0 → centerAlt = -r*cos45
+        gp_scalar centerAlt = -loopRadius * cos45;
         gp_scalar yOffset = loopRadius * sin45;
 
         for (gp_scalar turn = 0; turn < static_cast<gp_scalar>(M_PI * 2.0); turn += 0.5f) {  // Reduced from 0.05 to 0.5 rad
@@ -472,16 +473,16 @@ public:
         // Segment 1: Head south for 20m
         addStraightSegment(path, entryPoint, gp_vec3(-1.0f, 0.0f, 0.0f), 20.0f, totalDistance);
 
-        // Segment 2: 180° climbing left turn (clockwise from above) with 20m radius, climbing 20m to z=-45
+        // Segment 2: 180° climbing left turn (clockwise from above) with 20m radius, climbing 20m
         gp_vec3 seg2Start = path.back().start;
-        gp_scalar climbAmount = -20.0f;  // Climb from z=-25 to z=-45
+        gp_scalar climbAmount = -20.0f;  // Climb from z=0 to z=-20 (20m up in NED)
         addSpiralTurn(path, seg2Start, 20.0f, M_PI, true, climbAmount, totalDistance); // true = clockwise (left turn from pilot)
 
-        // Segment 3: Diagonal climb north from z=-45 to z=-65 over ~40m horizontal distance
+        // Segment 3: Diagonal climb north climbing 20m more over ~40m horizontal distance
         gp_vec3 seg3Start = path.back().start;
         gp_vec3 headingNorth(1.0f, 0.0f, 0.0f);
         gp_scalar horizontalDist = 40.0f;
-        gp_scalar verticalClimb = -20.0f;  // From z=-45 to z=-65
+        gp_scalar verticalClimb = -20.0f;  // Climb another 20m to z=-40
         gp_vec3 climbVector = headingNorth * horizontalDist + gp_vec3(0.0f, 0.0f, verticalClimb);
         gp_scalar climbDistance = climbVector.norm();
         addStraightSegment(path, seg3Start, climbVector.normalized(), climbDistance, totalDistance);
@@ -529,9 +530,9 @@ public:
         std::vector<gp_vec3> controlPoints;
         int numPoints = NUM_SEGMENTS_PER_PATH;
 
-        // Generate random control points within cylinder
+        // Generate random control points within cylinder at canonical origin
         for (int i = 0; i < numPoints; ++i) {
-          controlPoints.push_back(localRandomPointInCylinder(rng, radius, height, base));
+          controlPoints.push_back(localRandomPointInCylinder(rng, radius, height, 0.0f));  // Use canonical 0,0,0 origin
         }
 
         // Generate smooth path through control points
