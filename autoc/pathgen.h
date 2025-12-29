@@ -58,9 +58,9 @@ class GenerateRandom : public GeneratorMethod {
     // Initialize local mt19937 PRNG (does not affect global rand())
     std::mt19937 rng(seed);
 
-    // Generate random control points
+    // Generate random control points at canonical origin
     for (size_t i = 0; i < numPoints; ++i) {
-      controlPoints.push_back(localRandomPointInCylinder(rng, radius, height));
+      controlPoints.push_back(localRandomPointInCylinder(rng, radius, height, 0.0f));
     }
 
     // Ensure the path is continuous by looping through control points
@@ -120,14 +120,14 @@ class GenerateClassic : public GeneratorMethod {
     std::vector<Path> path;
     int numPoints = NUM_SEGMENTS_PER_PATH;
 
-    controlPoints.push_back({ 0, 0, base });
+    controlPoints.push_back({ 0, 0, 0 });
 
     // Sin
     gp_scalar x, y, z;
     for (size_t i = 0; i < numPoints; ++i) {
       x = -(std::cos(static_cast<gp_scalar>(2 * M_PI) * static_cast<gp_scalar>(i) / static_cast<gp_scalar>(numPoints)) * SIM_PATH_BOUNDS / static_cast<gp_scalar>(2.0f) - SIM_PATH_BOUNDS / static_cast<gp_scalar>(2.0f));
       y = std::sin(static_cast<gp_scalar>(2 * M_PI) * static_cast<gp_scalar>(i) / static_cast<gp_scalar>(numPoints)) * SIM_PATH_BOUNDS / static_cast<gp_scalar>(2.0f);
-      z = base - static_cast<gp_scalar>(i);
+      z = -static_cast<gp_scalar>(i);
       controlPoints.push_back(gp_vec3(x, y, z));
     }
 
@@ -212,7 +212,7 @@ class GenerateComputedPaths : public GeneratorMethod {
       case PathType::HorizontalCircle: {
         gp_scalar cSize = static_cast<gp_scalar>(0.8f) * radius;
         for (gp_scalar turn = 0; turn < static_cast<gp_scalar>(M_PI * 2.0); turn += static_cast<gp_scalar>(0.05f)) {
-          gp_vec3 interpolatedPoint = { cSize * std::cos(turn), cSize * std::sin(turn), base - SIM_INITIAL_LOCATION_DITHER };
+          gp_vec3 interpolatedPoint = { cSize * std::cos(turn), cSize * std::sin(turn), -SIM_INITIAL_LOCATION_DITHER };
           gp_scalar simTimeMsecLocal = (turn * radius / SIM_RABBIT_VELOCITY) * static_cast<gp_scalar>(1000.0f);
           Path pathSegment = Path(interpolatedPoint, gp_vec3::UnitX(), turn * radius, 0.0f, simTimeMsecLocal);
           path.push_back(pathSegment);
@@ -222,7 +222,7 @@ class GenerateComputedPaths : public GeneratorMethod {
       case PathType::VerticalCircle: {
         gp_scalar cSize = static_cast<gp_scalar>(0.8f) * radius;
         for (gp_scalar turn = 0; turn < static_cast<gp_scalar>(M_PI * 2.0); turn += static_cast<gp_scalar>(0.05f)) {
-          gp_vec3 interpolatedPoint = { cSize * std::cos(turn), 0.0f, base - SIM_INITIAL_LOCATION_DITHER - cSize * std::sin(turn)};
+          gp_vec3 interpolatedPoint = { cSize * std::cos(turn), 0.0f, -SIM_INITIAL_LOCATION_DITHER - cSize * std::sin(turn)};
           gp_scalar simTimeMsecLocal = (turn * cSize / SIM_RABBIT_VELOCITY) * static_cast<gp_scalar>(1000.0f);
           Path pathSegment = Path(interpolatedPoint, gp_vec3::UnitX(), turn * cSize, 0.0f, simTimeMsecLocal);
           path.push_back(pathSegment);
@@ -232,13 +232,13 @@ class GenerateComputedPaths : public GeneratorMethod {
       case PathType::FigureEight: {
         gp_scalar cSize = static_cast<gp_scalar>(0.4f) * radius;
         for (gp_scalar turn = 0; turn < static_cast<gp_scalar>(M_PI * 2.0); turn += static_cast<gp_scalar>(0.05f)) {
-          gp_vec3 interpolatedPoint = { (cSize * std::cos(turn)) - cSize, 0.0f, base - SIM_INITIAL_LOCATION_DITHER - (cSize * std::sin(turn))};
+          gp_vec3 interpolatedPoint = { (cSize * std::cos(turn)) - cSize, 0.0f, -SIM_INITIAL_LOCATION_DITHER - (cSize * std::sin(turn))};
           gp_scalar simTimeMsecLocal = ((turn * cSize) / SIM_RABBIT_VELOCITY) * static_cast<gp_scalar>(1000.0f);
           Path pathSegment = Path(interpolatedPoint, gp_vec3::UnitX(), (turn * cSize), 0.0f, simTimeMsecLocal);
           path.push_back(pathSegment);
         }
         for (gp_scalar turn = 0; turn < static_cast<gp_scalar>(M_PI * 2.0); turn += static_cast<gp_scalar>(0.05f)) {
-          gp_vec3 interpolatedPoint = { (-cSize * std::cos(turn)) + cSize, 0.0f, base - SIM_INITIAL_LOCATION_DITHER - (cSize * std::sin(turn))};
+          gp_vec3 interpolatedPoint = { (-cSize * std::cos(turn)) + cSize, 0.0f, -SIM_INITIAL_LOCATION_DITHER - (cSize * std::sin(turn))};
           gp_scalar simTimeMsecLocal = (((turn * cSize) + (static_cast<gp_scalar>(M_PI * 2.0) * cSize)) / SIM_RABBIT_VELOCITY) * static_cast<gp_scalar>(1000.0f);
           Path pathSegment = Path(interpolatedPoint, gp_vec3::UnitX(), (turn * cSize) + (static_cast<gp_scalar>(M_PI * 2.0) * cSize), 0.0f, simTimeMsecLocal);
           path.push_back(pathSegment);
@@ -248,57 +248,57 @@ class GenerateComputedPaths : public GeneratorMethod {
       case PathType::HorizontalSquare: {
         gp_scalar sSize = static_cast<gp_scalar>(0.7f) * radius;
         for (gp_scalar span = -sSize; span < sSize; span += static_cast<gp_scalar>(0.1f)) {
-          gp_vec3 interpolatedPoint = { span, -sSize, base - SIM_INITIAL_LOCATION_DITHER };
+          gp_vec3 interpolatedPoint = { span, -sSize, -SIM_INITIAL_LOCATION_DITHER };
           gp_scalar simTimeMsecLocal = (span / SIM_RABBIT_VELOCITY) * static_cast<gp_scalar>(1000.0f);
           Path pathSegment = Path(interpolatedPoint, gp_vec3::UnitX(), span, 0.0f, simTimeMsecLocal);
           path.push_back(pathSegment);
-        }  
+        }
         for (gp_scalar span = -sSize; span < sSize; span += static_cast<gp_scalar>(0.1f)) {
-          gp_vec3 interpolatedPoint = { sSize, span, base - SIM_INITIAL_LOCATION_DITHER };
+          gp_vec3 interpolatedPoint = { sSize, span, -SIM_INITIAL_LOCATION_DITHER };
           gp_scalar simTimeMsecLocal = ((static_cast<gp_scalar>(2.0f) * sSize + span) / SIM_RABBIT_VELOCITY) * static_cast<gp_scalar>(1000.0f);
           Path pathSegment = Path(interpolatedPoint, gp_vec3::UnitX(), static_cast<gp_scalar>(2.0f) * sSize + span, 0.0f, simTimeMsecLocal);
           path.push_back(pathSegment);
-        } 
+        }
         for (gp_scalar span = -sSize; span < sSize; span += static_cast<gp_scalar>(0.1f)) {
-          gp_vec3 interpolatedPoint = { -span, sSize, base - SIM_INITIAL_LOCATION_DITHER };
+          gp_vec3 interpolatedPoint = { -span, sSize, -SIM_INITIAL_LOCATION_DITHER };
           gp_scalar simTimeMsecLocal = ((static_cast<gp_scalar>(4.0f) * sSize + span) / SIM_RABBIT_VELOCITY) * static_cast<gp_scalar>(1000.0f);
           Path pathSegment = Path(interpolatedPoint, gp_vec3::UnitX(), static_cast<gp_scalar>(4.0f) * sSize + span, 0.0f, simTimeMsecLocal);
           path.push_back(pathSegment);
-        }  
+        }
         for (gp_scalar span = -sSize; span < sSize; span += static_cast<gp_scalar>(0.1f)) {
-          gp_vec3 interpolatedPoint = { -sSize, -span, base - SIM_INITIAL_LOCATION_DITHER };
+          gp_vec3 interpolatedPoint = { -sSize, -span, -SIM_INITIAL_LOCATION_DITHER };
           gp_scalar simTimeMsecLocal = ((static_cast<gp_scalar>(6.0f) * sSize + span) / SIM_RABBIT_VELOCITY) * static_cast<gp_scalar>(1000.0f);
           Path pathSegment = Path(interpolatedPoint, gp_vec3::UnitX(), static_cast<gp_scalar>(6.0f) * sSize + span, 0.0f, simTimeMsecLocal);
           path.push_back(pathSegment);
-        }      
+        }
         break;
       }
       case PathType::VerticalSquare: {
         gp_scalar sSize = static_cast<gp_scalar>(0.7f) * radius;
         for (gp_scalar span = -sSize; span < sSize; span += static_cast<gp_scalar>(0.1f)) {
-          gp_vec3 interpolatedPoint = { span, 0.0f, base - SIM_INITIAL_LOCATION_DITHER - sSize };
+          gp_vec3 interpolatedPoint = { span, 0.0f, -SIM_INITIAL_LOCATION_DITHER - sSize };
           gp_scalar simTimeMsecLocal = (span / SIM_RABBIT_VELOCITY) * static_cast<gp_scalar>(1000.0f);
           Path pathSegment = Path(interpolatedPoint, gp_vec3::UnitX(), span, 0.0f, simTimeMsecLocal);
           path.push_back(pathSegment);
-        }  
+        }
         for (gp_scalar span = -sSize; span < sSize; span += static_cast<gp_scalar>(0.1f)) {
-          gp_vec3 interpolatedPoint = { sSize, 0.0f, base - SIM_INITIAL_LOCATION_DITHER + span };
+          gp_vec3 interpolatedPoint = { sSize, 0.0f, -SIM_INITIAL_LOCATION_DITHER + span };
           gp_scalar simTimeMsecLocal = ((static_cast<gp_scalar>(2.0f) * sSize + span) / SIM_RABBIT_VELOCITY) * static_cast<gp_scalar>(1000.0f);
           Path pathSegment = Path(interpolatedPoint, gp_vec3::UnitX(), static_cast<gp_scalar>(2.0f) * sSize + span, 0.0f, simTimeMsecLocal);
           path.push_back(pathSegment);
-        } 
+        }
         for (gp_scalar span = -sSize; span < sSize; span += static_cast<gp_scalar>(0.1f)) {
-          gp_vec3 interpolatedPoint = { -span, 0.0f, base - SIM_INITIAL_LOCATION_DITHER + sSize };
+          gp_vec3 interpolatedPoint = { -span, 0.0f, -SIM_INITIAL_LOCATION_DITHER + sSize };
           gp_scalar simTimeMsecLocal = ((static_cast<gp_scalar>(4.0f) * sSize + span) / SIM_RABBIT_VELOCITY) * static_cast<gp_scalar>(1000.0f);
           Path pathSegment = Path(interpolatedPoint, gp_vec3::UnitX(), static_cast<gp_scalar>(4.0f) * sSize + span, 0.0f, simTimeMsecLocal);
           path.push_back(pathSegment);
-        }  
+        }
         for (gp_scalar span = -sSize; span < sSize; span += static_cast<gp_scalar>(0.1f)) {
-          gp_vec3 interpolatedPoint = { -sSize, 0.0f, base - SIM_INITIAL_LOCATION_DITHER - span };
+          gp_vec3 interpolatedPoint = { -sSize, 0.0f, -SIM_INITIAL_LOCATION_DITHER - span };
           gp_scalar simTimeMsecLocal = ((static_cast<gp_scalar>(6.0f) * sSize + span) / SIM_RABBIT_VELOCITY) * static_cast<gp_scalar>(1000.0f);
           Path pathSegment = Path(interpolatedPoint, gp_vec3::UnitX(), static_cast<gp_scalar>(6.0f) * sSize + span, 0.0f, simTimeMsecLocal);
           path.push_back(pathSegment);
-        }      
+        }
         break;
       }
       case PathType::FortyFiveLoop: {
@@ -307,7 +307,7 @@ class GenerateComputedPaths : public GeneratorMethod {
           gp_vec3 interpolatedPoint = {
             cSize * std::cos(turn),
             cSize * std::sin(turn),
-            base - SIM_INITIAL_LOCATION_DITHER - cSize * std::sin(turn)
+            -SIM_INITIAL_LOCATION_DITHER - cSize * std::sin(turn)
           };
           gp_scalar simTimeMsecLocal = (turn * cSize / SIM_RABBIT_VELOCITY) * static_cast<gp_scalar>(1000.0f);
           Path pathSegment = Path(interpolatedPoint, gp_vec3::UnitX(), turn * cSize, 0.0f, simTimeMsecLocal);
@@ -332,7 +332,7 @@ class GenerateLine : public GeneratorMethod {
     std::vector<Path> path;
     gp_scalar distance = 0.0f;
     for (gp_scalar i = -SIM_PATH_RADIUS_LIMIT; i <= SIM_PATH_RADIUS_LIMIT; i += static_cast<gp_scalar>(5.0f)) {
-      gp_vec3 interpolatedPoint = { static_cast<gp_scalar>(-30.0f), i, SIM_INITIAL_ALTITUDE };
+      gp_vec3 interpolatedPoint = { static_cast<gp_scalar>(-30.0f), i, 0.0f };
       gp_scalar simTimeMsecLocal = (distance / SIM_RABBIT_VELOCITY) * static_cast<gp_scalar>(1000.0f);
       Path pathSegment = Path(interpolatedPoint, gp_vec3::UnitX(), distance, 0.0f, simTimeMsecLocal);
       path.push_back(pathSegment);
@@ -738,8 +738,8 @@ public:
     std::vector<Path> longPath;
     gp_scalar totalDistance = 0.0f;
 
-    // Origin point and radius
-    gp_vec3 origin(0.0f, 0.0f, SIM_INITIAL_ALTITUDE);
+    // Origin point at canonical (0,0,0)
+    gp_vec3 origin(0.0f, 0.0f, 0.0f);
     gp_scalar loopRadius = static_cast<gp_scalar>(20.0f);
 
     // 0. Lead-in: ~1s straight-and-level southbound to let MSP override settle

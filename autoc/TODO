@@ -5,7 +5,7 @@
   - this could be progressively raise the bar on complexity - staged evolution
   - co-evolution
 - try to simplify the eval tree by passing a class reference instead of N args
-- consider fitness function for distance, alignment is ramped sensitivity for first couple of seconds (to allow capture from random start)
+- 
 - walk various classes for copy by reference, copy by pointer, copy by value == a smaller mem leak in autoc
 - we can buffer the best run over a population vs re-running it -- save the final eval steps
 - can not interactively flip to autoc input as it attempts to use the callback port -- soften this dependency for when it is manually run (maybe if port not set, it falls back to Mouse)
@@ -13,7 +13,7 @@
 - figure out how to use crrcsim robots to form lead plane
 - variations project - to get closer to zero-shot
   - power, drag, service response times
-  - get random start/orientation working in crrcsim
+  - get random start/orientation working in crrcsim, consider fitness function for distance, alignment is ramped sensitivity for first couple of seconds (to allow capture from random start)
   - wind speed, direction, turbulence multipler need to vary
     * CURRENT: WindScenarios only varies turbulence/gust patterns via PRNG seed
     * Wind direction fixed at 270° (from scenery/config)
@@ -37,6 +37,7 @@
   - fpv mode for playback
 - also seems crrcsim is dependent on a valid DISPLAY even when in headless
 - need to refactor the opcode enum to only have one -- and then to stop using numeric opcodes in the bytecode2cpp generator
+- checkpoint/resume a run -- including for LLM enhancement over time, etc
 
 - check for dangling or vestiage source files
 
