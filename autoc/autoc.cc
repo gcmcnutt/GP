@@ -1094,6 +1094,19 @@ int main(int argc, char** argv)
                                         ConfigManager::getExtraConfig().simNumPathsPerGen,
                                         SIM_PATH_BOUNDS, SIM_PATH_BOUNDS,
                                         ConfigManager::getExtraConfig().randomPathSeedB);
+
+  // DEBUG: Log segment counts for each path
+  std::cout << "\n=== Path Segment Counts (method=" << ConfigManager::getExtraConfig().generatorMethod
+            << ", seed=" << ConfigManager::getExtraConfig().randomPathSeedB << ") ===" << std::endl;
+  int maxSegments = 0;
+  for (size_t i = 0; i < generationPaths.size(); i++) {
+    int segCount = generationPaths[i].size();
+    std::cout << "  Path " << i << ": " << segCount << " segments" << std::endl;
+    if (segCount > maxSegments) maxSegments = segCount;
+  }
+  std::cout << "  Maximum: " << maxSegments << " segments" << std::endl;
+  std::cout << "===" << std::endl << std::endl;
+
   rebuildGenerationScenarios(generationPaths);
   const int windsPerPath = std::max(ConfigManager::getExtraConfig().windScenarioCount, 1);
   *logger.debug() << "Wind scenarios this generation: paths="

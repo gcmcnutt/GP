@@ -437,7 +437,7 @@ public:
         gp_scalar centerAlt = base - loopRadius * cos45;
         gp_scalar yOffset = loopRadius * sin45;
 
-        for (gp_scalar turn = 0; turn < static_cast<gp_scalar>(M_PI * 2.0); turn += 0.05f) {
+        for (gp_scalar turn = 0; turn < static_cast<gp_scalar>(M_PI * 2.0); turn += 0.5f) {  // Reduced from 0.05 to 0.5 rad
           // Start at bottom of loop: turn starts at -90° (or 3π/2)
           // So at turn=0, we're at the bottom (south side)
           gp_scalar angle = turn - static_cast<gp_scalar>(M_PI / 2.0); // Start at bottom
@@ -579,7 +579,7 @@ public:
 private:
   void addStraightSegment(std::vector<Path>& path, const gp_vec3& start, const gp_vec3& direction,
                           gp_scalar distance, gp_scalar& totalDistance) {
-    const gp_scalar step = 0.1f;
+    const gp_scalar step = 1.0f;  // 1m spacing (baseline from horizontal 8 analysis)
     gp_vec3 dir = direction.normalized();
 
     // Start from step if path is not empty to avoid duplicating the last point
@@ -598,7 +598,7 @@ private:
 
   void addHorizontalTurn(std::vector<Path>& path, const gp_vec3& start, gp_scalar radius,
                          gp_scalar angleRadians, bool clockwise, gp_scalar& totalDistance) {
-    const gp_scalar step = 0.05f;
+    const gp_scalar step = 0.05f;  // 0.05 rad (~3°) spacing - baseline from horizontal 8
 
     // Determine initial heading from last two points if possible
     gp_vec3 heading(-1.0f, 0.0f, 0.0f); // default south
@@ -638,7 +638,7 @@ private:
 
   void addSpiralTurn(std::vector<Path>& path, const gp_vec3& start, gp_scalar radius,
                      gp_scalar angleRadians, bool clockwise, gp_scalar totalClimb, gp_scalar& totalDistance) {
-    const gp_scalar step = 0.05f;
+    const gp_scalar step = 0.05f;  // 0.05 rad (~3°) spacing - baseline from horizontal 8
 
     gp_vec3 heading(-1.0f, 0.0f, 0.0f);
     if (path.size() >= 2) {
@@ -676,7 +676,7 @@ private:
 
   void addHorizontalLoop(std::vector<Path>& path, const gp_vec3& loopOrigin, gp_scalar loopRadius,
                          bool clockwise, gp_scalar& totalDistance) {
-    const gp_scalar step = 0.05f;
+    const gp_scalar step = 0.05f;  // 0.05 rad (~3°) spacing - baseline from horizontal 8
     gp_scalar sign = clockwise ? -1.0f : 1.0f; // inverted for consistency
 
     for (gp_scalar turn = 0; turn < static_cast<gp_scalar>(M_PI * 2.0); turn += step) {
@@ -696,7 +696,7 @@ private:
                         gp_scalar loopRadius, gp_scalar& totalDistance) {
     // Pitch-down loop: 180° loop in the vertical plane perpendicular to current heading
     // This is a Split-S maneuver - half loop downward (toward +z) that reverses course
-    const gp_scalar step = 0.05f;
+    const gp_scalar step = 0.05f;  // 0.05 rad (~3°) spacing - baseline from horizontal 8
 
     // Heading should be normalized (only xy components matter for horizontal heading)
     gp_vec3 headingNorm = heading.normalized();

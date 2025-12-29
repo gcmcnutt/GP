@@ -40,6 +40,17 @@
 
 - check for dangling or vestiage source files
 
+* MAKE PATHGEN.H PORTABLE FOR EMBEDDED
+  - Current: Separate embedded_pathgen_selector.h duplicates AeroStandard logic
+  - Issue: Code duplication, maintenance burden, version drift risk
+  - Goal: Single pathgen.h that works on both desktop and embedded
+  - Method: Conditional compilation for std::vector vs fixed arrays
+    * Use #ifdef EMBEDDED_BUILD to select array-based storage
+    * Keep all path generation logic identical
+    * Template-based or macro-based container abstraction
+  - Benefits: Single source of truth, easier maintenance, guaranteed consistency
+  - Defer: Wait until path system stabilizes and other generators are improved
+
 * INVESTIGATE DOUBLE PRECISION FOR DETERMINISM
   - Current: gp_scalar = float (single precision)
   - Issue: crrcsim physics uses double internally, but converts to float at interface
