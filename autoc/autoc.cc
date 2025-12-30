@@ -442,7 +442,6 @@ public:
         // and update bestOfPopulation to point to the bakeoff winner
         if (best) {
           best->setFitness(bestAggregatedFitness);
-          best->setHasAggregatedFitness(true);  // Mark as having aggregated fitness
           // Find the index of the best candidate in the population
           for (int idx = 0; idx < containerSize(); ++idx) {
             if (NthMyGP(idx) == best) {
@@ -493,7 +492,8 @@ public:
               if (worstInDeme != bestOfPopulation) {
                 // Clone the winner and replace the worst
                 MyGP* clone = (MyGP*)&best->duplicate();
-                clone->setHasAggregatedFitness(false);  // Clear flag on copy
+                // The clone will have the same fitness as the winner, but it's
+                // not the elite - it will be re-evaluated next generation
                 put(worstInDeme, *clone);
                 demesPropagated++;
               }
@@ -553,19 +553,6 @@ void MyPopulation::evaluate() {
   const GPVariables& gpCfg = ConfigManager::getGPConfig();
   int scenarioCount = std::max<int>(generationScenarios.size(), 1);
 
-  // Clear aggregated fitness flags for all individuals except the elite
-  // This handles cases where flag might have been inherited through genetic ops
-  if (gpCfg.DemeticGrouping) {
-    for (int n = 0; n < containerSize(); ++n) {
-      if (n != bestOfPopulation) {
-        MyGP* current = NthMyGP(n);
-        if (current) {
-          current->setHasAggregatedFitness(false);
-        }
-      }
-    }
-  }
-
   // When DemeticGrouping is disabled, evaluate ALL individuals on ALL scenarios
   // and average their fitness. This ensures fair comparison across the population.
   if (!gpCfg.DemeticGrouping && scenarioCount > 1) {
@@ -608,31 +595,9 @@ void MyPopulation::evaluate() {
         GPExitSystem("MyPopulation::evaluate", "Member of population is NULL");
       }
 #endif
-
-      // Skip individuals with locked aggregated fitness (from bakeoff)
-      // Their fitness should not be overwritten with single-scenario fitness
-      // IMPORTANT: Only do this in demetic mode
-      if (gpCfg.DemeticGrouping && current->getHasAggregatedFitness()) {
-        continue;
-      }
-
       current->setScenarioIndex(computeScenarioIndexForIndividual(n));
     }
     GPPopulation::evaluate();
-  }
-
-  // After evaluation and statistics, restore bestOfPopulation to the elite
-  // (the individual with hasAggregatedFitness=true) to prevent it from being
-  // replaced by individuals with single-scenario fitness
-  if (gpCfg.DemeticGrouping) {
-    for (int n = 0; n < containerSize(); ++n) {
-      MyGP* current = NthMyGP(n);
-      if (current && current->getHasAggregatedFitness()) {
-        // Found the elite - make sure bestOfPopulation points to it
-        bestOfPopulation = n;
-        break;
-      }
-    }
   }
 }
 
@@ -645,16 +610,6 @@ void MyGP::evaluate()
 // fitness.
 void MyGP::evalTask(WorkerContext& context)
 {
-  // Skip evaluation if this individual has locked aggregated fitness
-  if (hasAggregatedFitness) {
-    static int skipCount = 0;
-    if (++skipCount <= 10) {  // Only log first 10 skips to avoid spam
-      std::cerr << "DEBUG: Skipping eval for elite (fitness=" << stdFitness
-                << ", hasAggregatedFitness=" << hasAggregatedFitness << ")" << std::endl;
-    }
-    return;
-  }
-
   stdFitness = 0;
 
   // TODO this save is probably cheaper when GP knows about boost archives...
@@ -773,15 +728,8 @@ void MyGP::evalTask(WorkerContext& context)
     gp_scalar waypoint_distance_sum = 0.0f;        // Distance from current waypoint
     gp_scalar cross_track_error_sum = 0.0f;        // Lateral deviation from path
     gp_scalar movement_direction_error_sum = 0.0f; // Move along path tangent
-    gp_scalar roll_energy_sum = 0.0f;              // Minimize roll
-    gp_scalar pitch_energy_sum = 0.0f;             // Minimize pitch deviation
-    gp_scalar control_smoothness_sum = 0.0f;       // Smooth control changes
+    gp_scalar throttle_energy_sum = 0.0f;          // Minimize throttle usage
     int simulation_steps = 0;
-
-    // initial states for smoothness calculation
-    gp_scalar roll_prev = aircraftState.at(stepIndex).getRollCommand();
-    gp_scalar pitch_prev = aircraftState.at(stepIndex).getPitchCommand();
-    gp_scalar throttle_prev = aircraftState.at(stepIndex).getThrottleCommand();
 
     // now walk next steps of actual path
     while (++stepIndex < aircraftState.size()) {
@@ -834,39 +782,12 @@ void MyGP::evalTask(WorkerContext& context)
       }
 
       // ====================================================================
-      // METRIC 3: Roll stability (minimize unnecessary roll)
+      // METRIC 3: Throttle efficiency (minimize energy consumption)
       // ====================================================================
-      // Extract roll from quaternion to avoid gimbal issues
-      Eigen::Matrix3f rotMatrix = craftOrientation.toRotationMatrix();
-      gp_scalar current_roll_rad = atan2(rotMatrix(2, 1), rotMatrix(2, 2));
-      gp_scalar roll_magnitude = std::abs(current_roll_rad);
-      // Convert to 0-100 scale (0 to π/2 radians = 90 degrees)
-      gp_scalar rollPercent = (roll_magnitude * static_cast<gp_scalar>(100.0f)) / static_cast<gp_scalar>(M_PI / 2.0f);
-      rollPercent = std::min(rollPercent, static_cast<gp_scalar>(100.0f));
-      roll_energy_sum += pow(rollPercent, ROLL_STABILITY_WEIGHT);
-
-      // ====================================================================
-      // METRIC 4: Pitch stability (minimize deviation from efficient trim)
-      // ====================================================================
-      // Pitch from quaternion
-      gp_scalar current_pitch_rad = -asin(std::clamp(rotMatrix(2, 0), -1.0f, 1.0f));
-      // Assume aircraft naturally wants slight nose-up (e.g., 5 degrees = 0.087 rad)
-      gp_scalar pitch_deviation = std::abs(current_pitch_rad - static_cast<gp_scalar>(0.087f));
-      gp_scalar pitchPercent = (pitch_deviation * static_cast<gp_scalar>(100.0f)) / static_cast<gp_scalar>(M_PI / 4.0f);
-      pitchPercent = std::min(pitchPercent, static_cast<gp_scalar>(100.0f));
-      pitch_energy_sum += pow(pitchPercent, PITCH_STABILITY_WEIGHT);
-
-      // ====================================================================
-      // METRIC 5: Control smoothness (minimize jerky inputs)
-      // ====================================================================
-      gp_scalar current_roll_cmd = stepAircraftState.getRollCommand();
-      gp_scalar current_pitch_cmd = stepAircraftState.getPitchCommand();
-      gp_scalar roll_change = std::abs(current_roll_cmd - roll_prev);
-      gp_scalar pitch_change = std::abs(current_pitch_cmd - pitch_prev);
-      gp_scalar control_change = roll_change + pitch_change;
-      // Normalize: max change = 2.0 (both controls -1 to +1), scale to 100
-      gp_scalar smoothnessPercent = (control_change * static_cast<gp_scalar>(100.0f)) / CONTROL_SMOOTHNESS_MAX_PENALTY;
-      control_smoothness_sum += pow(smoothnessPercent, CONTROL_SMOOTHNESS_WEIGHT);
+      gp_scalar current_throttle = stepAircraftState.getThrottleCommand();
+      // Throttle is 0-1 range, convert to 0-100 scale
+      gp_scalar throttlePercent = current_throttle * static_cast<gp_scalar>(100.0f);
+      throttle_energy_sum += pow(throttlePercent, THROTTLE_EFFICIENCY_WEIGHT);
 
       // ====================================================================
       // Logging variables for compatibility (not used in fitness)
@@ -888,13 +809,8 @@ void MyGP::evalTask(WorkerContext& context)
 
       gp_scalar crossTrackPercentForLog = crossTrackPercent;
       gp_scalar oscillationPercentForLog = 0.0f;  // No longer used
-      gp_scalar orientationPenaltyForLog = rollPercent + pitchPercent;
+      gp_scalar orientationPenaltyForLog = 0.0f;  // No longer used
       gp_scalar movement_efficiency = movementDirectionError;
-
-      // ready for next cycle
-      roll_prev = current_roll_cmd;
-      pitch_prev = current_pitch_cmd;
-      throttle_prev = stepAircraftState.getThrottleCommand();
 
       simulation_steps++;
 
@@ -1006,17 +922,13 @@ void MyGP::evalTask(WorkerContext& context)
     gp_scalar normalized_waypoint_distance = (waypoint_distance_sum / normalization_factor);
     gp_scalar normalized_cross_track = (cross_track_error_sum / normalization_factor);
     gp_scalar normalized_movement_direction = (movement_direction_error_sum / normalization_factor);
-    gp_scalar normalized_roll_energy = (roll_energy_sum / normalization_factor);
-    gp_scalar normalized_pitch_energy = (pitch_energy_sum / normalization_factor);
-    gp_scalar normalized_control_smoothness = (control_smoothness_sum / normalization_factor);
+    gp_scalar normalized_throttle_energy = (throttle_energy_sum / normalization_factor);
 
     // Sum all components (lower is better)
     localFitness = normalized_waypoint_distance +     // Reach waypoints on time
                    normalized_cross_track +           // Stay near path centerline
                    normalized_movement_direction +    // Move along path tangent
-                   normalized_roll_energy +           // Minimize roll
-                   normalized_pitch_energy +          // Minimize pitch deviation
-                   normalized_control_smoothness;     // Smooth controls
+                   normalized_throttle_energy;        // Minimize throttle usage
 
     if (isnan(localFitness)) {
       nanDetector++;
@@ -1293,14 +1205,8 @@ int main(int argc, char** argv)
           gp_scalar waypoint_distance_sum = 0.0f;
           gp_scalar cross_track_error_sum = 0.0f;
           gp_scalar movement_direction_error_sum = 0.0f;
-          gp_scalar roll_energy_sum = 0.0f;
-          gp_scalar pitch_energy_sum = 0.0f;
-          gp_scalar control_smoothness_sum = 0.0f;
+          gp_scalar throttle_energy_sum = 0.0f;
           int simulation_steps = 0;
-
-          gp_scalar roll_prev = aircraftState.at(stepIndex).getRollCommand();
-          gp_scalar pitch_prev = aircraftState.at(stepIndex).getPitchCommand();
-          gp_scalar throttle_prev = aircraftState.at(stepIndex).getThrottleCommand();
           
           while (++stepIndex < aircraftState.size()) {
             auto& stepAircraftState = aircraftState.at(stepIndex);
@@ -1342,29 +1248,10 @@ int main(int argc, char** argv)
               }
             }
 
-            // Roll stability
-            Eigen::Matrix3f rotMatrix = craftOrientation.toRotationMatrix();
-            gp_scalar current_roll_rad = atan2(rotMatrix(2, 1), rotMatrix(2, 2));
-            gp_scalar roll_magnitude = std::abs(current_roll_rad);
-            gp_scalar rollPercent = (roll_magnitude * static_cast<gp_scalar>(100.0f)) / static_cast<gp_scalar>(M_PI / 2.0f);
-            rollPercent = std::min(rollPercent, static_cast<gp_scalar>(100.0f));
-            roll_energy_sum += pow(rollPercent, ROLL_STABILITY_WEIGHT);
-
-            // Pitch stability
-            gp_scalar current_pitch_rad = -asin(std::clamp(rotMatrix(2, 0), -1.0f, 1.0f));
-            gp_scalar pitch_deviation = std::abs(current_pitch_rad - static_cast<gp_scalar>(0.087f));
-            gp_scalar pitchPercent = (pitch_deviation * static_cast<gp_scalar>(100.0f)) / static_cast<gp_scalar>(M_PI / 4.0f);
-            pitchPercent = std::min(pitchPercent, static_cast<gp_scalar>(100.0f));
-            pitch_energy_sum += pow(pitchPercent, PITCH_STABILITY_WEIGHT);
-
-            // Control smoothness
-            gp_scalar current_roll_cmd = stepAircraftState.getRollCommand();
-            gp_scalar current_pitch_cmd = stepAircraftState.getPitchCommand();
-            gp_scalar roll_change = std::abs(current_roll_cmd - roll_prev);
-            gp_scalar pitch_change = std::abs(current_pitch_cmd - pitch_prev);
-            gp_scalar control_change = roll_change + pitch_change;
-            gp_scalar smoothnessPercent = (control_change * static_cast<gp_scalar>(100.0f)) / CONTROL_SMOOTHNESS_MAX_PENALTY;
-            control_smoothness_sum += pow(smoothnessPercent, CONTROL_SMOOTHNESS_WEIGHT);
+            // Throttle efficiency
+            gp_scalar current_throttle = stepAircraftState.getThrottleCommand();
+            gp_scalar throttlePercent = current_throttle * static_cast<gp_scalar>(100.0f);
+            throttle_energy_sum += pow(throttlePercent, THROTTLE_EFFICIENCY_WEIGHT);
 
             // Logging variables for compatibility (not used in fitness)
             gp_scalar distanceFromGoal = (currentPathPoint.start - aircraftPosition).norm();
@@ -1387,12 +1274,8 @@ int main(int argc, char** argv)
 
             gp_scalar crossTrackPercentForLog = crossTrackPercent;
             gp_scalar oscillationPercentForLog = 0.0f;
-            gp_scalar orientationPenaltyForLog = rollPercent + pitchPercent;
+            gp_scalar orientationPenaltyForLog = 0.0f;
             gp_scalar movement_efficiency = movementDirectionError;
-
-            roll_prev = current_roll_cmd;
-            pitch_prev = current_pitch_cmd;
-            throttle_prev = stepAircraftState.getThrottleCommand();
 
             simulation_steps++;
             
@@ -1488,16 +1371,12 @@ int main(int argc, char** argv)
           gp_scalar normalized_waypoint_distance = (waypoint_distance_sum / normalization_factor);
           gp_scalar normalized_cross_track = (cross_track_error_sum / normalization_factor);
           gp_scalar normalized_movement_direction = (movement_direction_error_sum / normalization_factor);
-          gp_scalar normalized_roll_energy = (roll_energy_sum / normalization_factor);
-          gp_scalar normalized_pitch_energy = (pitch_energy_sum / normalization_factor);
-          gp_scalar normalized_control_smoothness = (control_smoothness_sum / normalization_factor);
+          gp_scalar normalized_throttle_energy = (throttle_energy_sum / normalization_factor);
 
           localFitness = normalized_waypoint_distance +
                          normalized_cross_track +
                          normalized_movement_direction +
-                         normalized_roll_energy +
-                         normalized_pitch_energy +
-                         normalized_control_smoothness;
+                         normalized_throttle_energy;
 
           if (isnan(localFitness)) {
             nanDetector++;

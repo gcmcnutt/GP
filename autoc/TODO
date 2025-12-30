@@ -76,3 +76,29 @@
     * Custom text format (simplest, most control)
   - Migration required for: EvalData, EvalResults, Path, AircraftState, ScenarioMetadata
   - Benefits: version independence, better portability, potentially smaller/faster
+
+* ELITE PRESERVATION IN DEMETIC MODE (DEFERRED)
+  - Problem: In demetic GP mode with bakeoff evaluation:
+    * Elite individual has aggregated fitness (average across all scenarios)
+    * Regular population members have single-scenario fitness
+    * When elite gets re-evaluated next generation, aggregated fitness is overwritten with single-scenario fitness
+    * This causes best fitness to regress (not monotonically improving)
+  - Attempted solution (lines 623-661, 665-744 in autoc.cc):
+    * Track eliteAggregatedFitness as static member variable (persists across generations)
+    * Before GPPopulation::evaluate(), identify individuals with elite fitness
+    * After evaluation, restore their aggregated fitness value
+    * In calculateStatistics(), ensure bestOfPopulation points to elite
+  - Current status: Partially working
+    * Elite fitness IS being restored in population
+    * But data.stc output may not reflect true elite fitness
+    * Needs more investigation into when/how statistics are printed
+  - Decision: Defer this work to focus on non-demetic mode
+    * Non-demetic mode evaluates all individuals on all scenarios (no aggregation issue)
+    * Want to validate that simplified fitness function (4 metrics instead of 7) has good signal
+    * Will return to demetic elite preservation later
+  - Related code to review when resuming:
+    * MyPopulation::eliteAggregatedFitness (static member)
+    * MyPopulation::evaluate() - restoration after GPPopulation::evaluate()
+    * MyPopulation::calculateStatistics() - restoring bestOfPopulation
+    * MyPopulation::endOfEvaluation() - bakeoff sets eliteAggregatedFitness
+    * MyGP::hasAggregatedFitness flag (currently used but may proliferate)
