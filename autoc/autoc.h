@@ -8,24 +8,25 @@
 // Forward declarations
 struct WorkerContext;
 
-#define FITNESS_DISTANCE_WEIGHT 1.5f
-#define FITNESS_ALIGNMENT_WEIGHT 1.3f
-#define FITNESS_CONTROL_WEIGHT 1.0f
+// ========================================================================
+// SIMPLIFIED FITNESS FUNCTION
+// Goal: Smooth control to intercept and track path with minimum energy
+// ========================================================================
 
-// Movement efficiency penalty constants - reduced for better exploration
-#define CONTROL_SATURATION_THRESHOLD 0.9f
-#define CONTROL_SATURATION_PENALTY 5.0f
-#define CONTROL_RATE_PENALTY 2.0f
-#define MOVEMENT_EFFICIENCY_WEIGHT 1.5f
-#define MOVEMENT_EFFICIENCY_MAX_PENALTY 8.0f
+// Primary objectives: Reach waypoints on time
+#define WAYPOINT_DISTANCE_WEIGHT 1.5f        // Distance from current target waypoint
+#define CROSS_TRACK_WEIGHT 1.2f              // Lateral deviation from path centerline
 
-// Cross-track and attitude penalties
-#define CROSS_TRACK_WEIGHT 1.2f
-#define CROSS_TRACK_SIGN_THRESHOLD 1.0f
-#define CROSS_TRACK_OSC_WEIGHT 1.4f
-#define ORIENTATION_TANGENT_WEIGHT 1.1f
-#define ORIENTATION_UP_WEIGHT 1.3f
-#define PATH_UP_INVERSION_PENALTY 75.0f
+// Secondary objective: Move efficiently along path
+#define MOVEMENT_DIRECTION_WEIGHT 1.3f       // Direction alignment with path
+
+// Tertiary objective: Minimize wasted control energy
+#define ROLL_STABILITY_WEIGHT 1.0f           // Penalize unnecessary roll
+#define PITCH_STABILITY_WEIGHT 0.8f          // Penalize unnecessary pitch deviation from trim
+#define CONTROL_SMOOTHNESS_WEIGHT 1.2f       // Penalize jerky control inputs
+
+// Normalization constants
+#define CONTROL_SMOOTHNESS_MAX_PENALTY 4.0f  // Normalization constant for smoothness
 
 struct WindScenarioConfig {
   unsigned int windSeed = 0;

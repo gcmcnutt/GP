@@ -236,7 +236,9 @@ int computeScenarioIndexForIndividual(int individualIndex) {
     return demeIndex % scenarioCount;
   }
 
-  return individualIndex % scenarioCount;
+  // Without demetic grouping, all individuals evaluate on scenario 0
+  // This ensures fair comparison within the population
+  return 0;
 }
 
 const ScenarioDescriptor& scenarioForIndex(int scenarioIndex) {
@@ -545,16 +547,55 @@ public:
 };
 
 void MyPopulation::evaluate() {
-  for (int n = 0; n < containerSize(); ++n) {
-    MyGP* current = NthMyGP(n);
+  const GPVariables& gpCfg = ConfigManager::getGPConfig();
+  int scenarioCount = std::max<int>(generationScenarios.size(), 1);
+
+  // When DemeticGrouping is disabled, evaluate ALL individuals on ALL scenarios
+  // and average their fitness. This ensures fair comparison across the population.
+  if (!gpCfg.DemeticGrouping && scenarioCount > 1) {
+    for (int n = 0; n < containerSize(); ++n) {
+      MyGP* current = NthMyGP(n);
 #if GPINTERNALCHECK
-    if (!current) {
-      GPExitSystem("MyPopulation::evaluate", "Member of population is NULL");
-    }
+      if (!current) {
+        GPExitSystem("MyPopulation::evaluate", "Member of population is NULL");
+      }
 #endif
-    current->setScenarioIndex(computeScenarioIndexForIndividual(n));
+
+      gp_scalar cumulativeFitness = 0.0f;
+
+      // Evaluate on each scenario
+      for (int scenarioIdx = 0; scenarioIdx < scenarioCount; ++scenarioIdx) {
+        current->setScenarioIndex(scenarioIdx);
+
+        // Queue evaluation task
+        threadPool->enqueue([current](WorkerContext& context) {
+          current->evalTask(context);
+        });
+        threadPool->wait_for_tasks();
+
+        cumulativeFitness += static_cast<gp_scalar>(current->getFitness());
+      }
+
+      // Set final fitness as average across all scenarios
+      gp_scalar averageFitness = cumulativeFitness / static_cast<gp_scalar>(scenarioCount);
+      current->setFitness(averageFitness);
+
+      // Reset to scenario 0 for consistency
+      current->setScenarioIndex(0);
+    }
+  } else {
+    // Demetic mode or single scenario: assign one scenario per individual
+    for (int n = 0; n < containerSize(); ++n) {
+      MyGP* current = NthMyGP(n);
+#if GPINTERNALCHECK
+      if (!current) {
+        GPExitSystem("MyPopulation::evaluate", "Member of population is NULL");
+      }
+#endif
+      current->setScenarioIndex(computeScenarioIndexForIndividual(n));
+    }
+    GPPopulation::evaluate();
   }
-  GPPopulation::evaluate();
 }
 
 void MyGP::evaluate()
@@ -680,19 +721,16 @@ void MyGP::evalTask(WorkerContext& context)
     gp_scalar localFitness = 0.0f;
     int stepIndex = 0; // where are we on the flight path?
 
-    // error accumulators
-    gp_scalar distance_error_sum = 0.0f;
-    gp_scalar angle_error_sum = 0.0f;
-    gp_scalar movement_efficiency_sum = 0.0f;
-    gp_scalar cross_track_error_sum = 0.0f;
-    gp_scalar cross_track_osc_sum = 0.0f;
-    int cross_track_osc_events = 0;
-    gp_scalar orientation_alignment_sum = 0.0f;
-    gp_scalar prev_cross_track_signed = 0.0f;
-    bool has_prev_cross_track = false;
+    // SIMPLIFIED error accumulators
+    gp_scalar waypoint_distance_sum = 0.0f;        // Distance from current waypoint
+    gp_scalar cross_track_error_sum = 0.0f;        // Lateral deviation from path
+    gp_scalar movement_direction_error_sum = 0.0f; // Move along path tangent
+    gp_scalar roll_energy_sum = 0.0f;              // Minimize roll
+    gp_scalar pitch_energy_sum = 0.0f;             // Minimize pitch deviation
+    gp_scalar control_smoothness_sum = 0.0f;       // Smooth control changes
     int simulation_steps = 0;
 
-    // initial states
+    // initial states for smoothness calculation
     gp_scalar roll_prev = aircraftState.at(stepIndex).getRollCommand();
     gp_scalar pitch_prev = aircraftState.at(stepIndex).getPitchCommand();
     gp_scalar throttle_prev = aircraftState.at(stepIndex).getThrottleCommand();
@@ -707,12 +745,87 @@ void MyGP::evalTask(WorkerContext& context)
       int nextIndex = std::min(pathIndex + 1, static_cast<int>(path.size()) - 1);
 
       gp_vec3 aircraftPosition = stepAircraftState.getPosition();
+      gp_quat craftOrientation = stepAircraftState.getOrientation();
+      gp_vec3 aircraftUp = craftOrientation * gp_vec3::UnitZ();
 
-      // Compute the distance between the aircraft and the goal
+      // ====================================================================
+      // METRIC 1: Waypoint distance (reach current target on time)
+      // ====================================================================
+      gp_scalar waypointDistance = (currentPathPoint.start - aircraftPosition).norm();
+      gp_scalar waypointDistancePercent = (waypointDistance * static_cast<gp_scalar>(100.0f)) /
+                                           (static_cast<gp_scalar>(2.0f) * SIM_PATH_RADIUS_LIMIT);
+      waypoint_distance_sum += pow(waypointDistancePercent, WAYPOINT_DISTANCE_WEIGHT);
+
+      // ====================================================================
+      // METRIC 2: Cross-track error (stay near path centerline)
+      // ====================================================================
+      gp_vec3 craftOffset = aircraftPosition - currentPathPoint.start;
+      gp_vec3 lateral = craftOffset - frame.tangent * craftOffset.dot(frame.tangent);
+      gp_scalar crossTrackMagnitude = lateral.norm();
+      gp_scalar crossTrackPercent = 0.0f;
+      if (SIM_PATH_RADIUS_LIMIT > 0.0f) {
+        crossTrackPercent = (crossTrackMagnitude * static_cast<gp_scalar>(100.0f)) / SIM_PATH_RADIUS_LIMIT;
+        cross_track_error_sum += pow(crossTrackPercent, CROSS_TRACK_WEIGHT);
+      }
+
+      // ====================================================================
+      // METRIC 2: Movement direction alignment (move along path efficiently)
+      // ====================================================================
+      gp_scalar movementDirectionError = 0.0f;
+      if (stepIndex > 1) {
+        gp_vec3 aircraft_movement = stepAircraftState.getPosition() - aircraftState.at(stepIndex-1).getPosition();
+        gp_scalar aircraft_distance = aircraft_movement.norm();
+
+        if (aircraft_distance > static_cast<gp_scalar>(0.1f)) {
+          // Path direction is the tangent
+          gp_scalar direction_alignment = aircraft_movement.normalized().dot(frame.tangent);
+          // Convert to 0-100 scale: perfect=0, opposite=100
+          movementDirectionError = (static_cast<gp_scalar>(1.0f) - direction_alignment) * static_cast<gp_scalar>(50.0f);
+          movement_direction_error_sum += pow(movementDirectionError, MOVEMENT_DIRECTION_WEIGHT);
+        }
+      }
+
+      // ====================================================================
+      // METRIC 3: Roll stability (minimize unnecessary roll)
+      // ====================================================================
+      // Extract roll from quaternion to avoid gimbal issues
+      Eigen::Matrix3f rotMatrix = craftOrientation.toRotationMatrix();
+      gp_scalar current_roll_rad = atan2(rotMatrix(2, 1), rotMatrix(2, 2));
+      gp_scalar roll_magnitude = std::abs(current_roll_rad);
+      // Convert to 0-100 scale (0 to π/2 radians = 90 degrees)
+      gp_scalar rollPercent = (roll_magnitude * static_cast<gp_scalar>(100.0f)) / static_cast<gp_scalar>(M_PI / 2.0f);
+      rollPercent = std::min(rollPercent, static_cast<gp_scalar>(100.0f));
+      roll_energy_sum += pow(rollPercent, ROLL_STABILITY_WEIGHT);
+
+      // ====================================================================
+      // METRIC 4: Pitch stability (minimize deviation from efficient trim)
+      // ====================================================================
+      // Pitch from quaternion
+      gp_scalar current_pitch_rad = -asin(std::clamp(rotMatrix(2, 0), -1.0f, 1.0f));
+      // Assume aircraft naturally wants slight nose-up (e.g., 5 degrees = 0.087 rad)
+      gp_scalar pitch_deviation = std::abs(current_pitch_rad - static_cast<gp_scalar>(0.087f));
+      gp_scalar pitchPercent = (pitch_deviation * static_cast<gp_scalar>(100.0f)) / static_cast<gp_scalar>(M_PI / 4.0f);
+      pitchPercent = std::min(pitchPercent, static_cast<gp_scalar>(100.0f));
+      pitch_energy_sum += pow(pitchPercent, PITCH_STABILITY_WEIGHT);
+
+      // ====================================================================
+      // METRIC 5: Control smoothness (minimize jerky inputs)
+      // ====================================================================
+      gp_scalar current_roll_cmd = stepAircraftState.getRollCommand();
+      gp_scalar current_pitch_cmd = stepAircraftState.getPitchCommand();
+      gp_scalar roll_change = std::abs(current_roll_cmd - roll_prev);
+      gp_scalar pitch_change = std::abs(current_pitch_cmd - pitch_prev);
+      gp_scalar control_change = roll_change + pitch_change;
+      // Normalize: max change = 2.0 (both controls -1 to +1), scale to 100
+      gp_scalar smoothnessPercent = (control_change * static_cast<gp_scalar>(100.0f)) / CONTROL_SMOOTHNESS_MAX_PENALTY;
+      control_smoothness_sum += pow(smoothnessPercent, CONTROL_SMOOTHNESS_WEIGHT);
+
+      // ====================================================================
+      // Logging variables for compatibility (not used in fitness)
+      // ====================================================================
       gp_scalar distanceFromGoal = (currentPathPoint.start - aircraftPosition).norm();
       distanceFromGoal = distanceFromGoal * static_cast<gp_scalar>(100.0f) / (static_cast<gp_scalar>(2.0f) * SIM_PATH_RADIUS_LIMIT);
 
-      // Compute vector from me to target using local Frenet frame to avoid gimbal issues
       gp_vec3 target_direction = path.at(nextIndex).start - currentPathPoint.start;
       if (target_direction.norm() < static_cast<gp_scalar>(1e-5)) {
         target_direction = frame.tangent;
@@ -725,129 +838,16 @@ void MyGP::evalTask(WorkerContext& context)
       }
       angle_rad = angle_rad * static_cast<gp_scalar>(100.0f) / static_cast<gp_scalar>(M_PI);
 
-      gp_quat craftOrientation = stepAircraftState.getOrientation();
-      gp_vec3 aircraftForward = craftOrientation * gp_vec3::UnitX();
-      gp_vec3 aircraftUp = craftOrientation * gp_vec3::UnitZ();
-
-      gp_scalar crossTrackPercentForLog = 0.0f;
-      gp_scalar oscillationPercentForLog = 0.0f;
-      gp_scalar orientationPenaltyForLog = 0.0f;
-
-      // Cross-track error measured in the plane perpendicular to the tangent
-      gp_vec3 craftOffset = aircraftPosition - currentPathPoint.start;
-      gp_vec3 lateral = craftOffset - frame.tangent * craftOffset.dot(frame.tangent);
-      gp_scalar crossTrackSigned = lateral.dot(frame.insideNormal);
-      gp_scalar crossTrackMagnitude = lateral.norm();
-      if (SIM_PATH_RADIUS_LIMIT > 0.0f) {
-        crossTrackPercentForLog = (crossTrackMagnitude * static_cast<gp_scalar>(100.0f)) / SIM_PATH_RADIUS_LIMIT;
-        cross_track_error_sum += pow(crossTrackPercentForLog, CROSS_TRACK_WEIGHT);
-      }
-
-      gp_scalar oscillationPercent = 0.0f;
-      bool oscillationTriggered = false;
-      if (has_prev_cross_track) {
-        if ((crossTrackSigned > CROSS_TRACK_SIGN_THRESHOLD && prev_cross_track_signed < -CROSS_TRACK_SIGN_THRESHOLD) ||
-            (crossTrackSigned < -CROSS_TRACK_SIGN_THRESHOLD && prev_cross_track_signed > CROSS_TRACK_SIGN_THRESHOLD)) {
-          gp_scalar denomOsc = std::max(1.0f, static_cast<gp_scalar>(2.0f) * SIM_PATH_RADIUS_LIMIT);
-          oscillationPercent = (std::abs(prev_cross_track_signed) + std::abs(crossTrackSigned)) * static_cast<gp_scalar>(100.0f) / denomOsc;
-          cross_track_osc_sum += pow(oscillationPercent, CROSS_TRACK_OSC_WEIGHT);
-          cross_track_osc_events++;
-          oscillationTriggered = true;
-        }
-      }
-      oscillationPercentForLog = oscillationTriggered ? oscillationPercent : 0.0;
-      prev_cross_track_signed = crossTrackSigned;
-      has_prev_cross_track = true;
-
-      // Quaternion-based orientation alignment (avoid gimbal lock)
-      gp_scalar forwardDot = std::clamp(aircraftForward.dot(frame.tangent), -1.0f, 1.0f);
-      gp_scalar upDot = std::clamp(aircraftUp.dot(frame.insideNormal), -1.0f, 1.0f);
-      gp_scalar forwardAngle = std::acos(forwardDot);
-      gp_scalar upAngle = std::acos(upDot);
-      gp_scalar forwardPercent = (forwardAngle * static_cast<gp_scalar>(100.0f)) / static_cast<gp_scalar>(M_PI);
-      gp_scalar upPercent = (upAngle * static_cast<gp_scalar>(100.0f)) / static_cast<gp_scalar>(M_PI);
-      gp_scalar orientationStep = pow(forwardPercent, ORIENTATION_TANGENT_WEIGHT) +
-                               pow(upPercent, ORIENTATION_UP_WEIGHT);
-      gp_scalar inversionPenalty = (upDot < 0.0f) ? (-upDot) * PATH_UP_INVERSION_PENALTY : 0.0f;
-      orientation_alignment_sum += orientationStep + inversionPenalty;
-      orientationPenaltyForLog = orientationStep + inversionPenalty;
-
-      // Movement efficiency: compare aircraft movement to optimal path movement
-      gp_scalar movement_efficiency = 0.0f;
-      if (stepIndex > 1 && pathIndex < path.size() - 1) {
-        // Aircraft movement since last step
-        gp_vec3 aircraft_movement = stepAircraftState.getPosition() - aircraftState.at(stepIndex-1).getPosition();
-        gp_scalar aircraft_distance = aircraft_movement.norm();
-        
-        // Optimal path movement (direction from current waypoint to next)
-        int movementNextIndex = std::min(pathIndex + 1, static_cast<int>(path.size()) - 1);
-        gp_vec3 path_direction = path.at(movementNextIndex).start - path.at(pathIndex).start;
-        if (path_direction.norm() < static_cast<gp_scalar>(1e-5)) {
-          path_direction = frame.tangent;
-        } else {
-          path_direction.normalize();
-        }
-        gp_scalar optimal_distance = aircraft_distance; // Same distance, optimal direction
-        
-        if (aircraft_distance > static_cast<gp_scalar>(0.1f)) { // Avoid division by zero
-          // Compare directions: dot product shows alignment (-1 to +1)
-          gp_scalar direction_alignment = aircraft_movement.normalized().dot(path_direction);
-          
-          // Movement efficiency penalty: 0 = perfect alignment, 2 = opposite direction
-          movement_efficiency = (static_cast<gp_scalar>(1.0f) - direction_alignment); // 0 to 2 range
-          
-          // Additional penalty for excessive turning/rolling
-          gp_scalar current_roll = abs(stepAircraftState.getRollCommand());
-          gp_scalar current_pitch = abs(stepAircraftState.getPitchCommand());
-          
-          // Control saturation penalty - heavily penalize near ±1.0 commands
-          gp_scalar saturation_penalty = 0.0f;
-          if (current_roll > CONTROL_SATURATION_THRESHOLD) {
-            saturation_penalty += (current_roll - CONTROL_SATURATION_THRESHOLD) * CONTROL_SATURATION_PENALTY;
-          }
-          if (current_pitch > CONTROL_SATURATION_THRESHOLD) {
-            saturation_penalty += (current_pitch - CONTROL_SATURATION_THRESHOLD) * CONTROL_SATURATION_PENALTY;
-          }
-          
-          // Control rate penalty - penalize rapid changes (bang-bang behavior)
-          gp_scalar roll_change = abs(stepAircraftState.getRollCommand() - roll_prev);
-          gp_scalar pitch_change = abs(stepAircraftState.getPitchCommand() - pitch_prev);
-          gp_scalar control_rate_penalty = (roll_change + pitch_change) * CONTROL_RATE_PENALTY;
-          
-          // Estimate "optimal" control needed for this path segment
-          // Simple model: straight segments need minimal control, curves need some roll
-          gp_vec3 prev_path_dir = (pathIndex > 0) ?
-            (path.at(pathIndex).start - path.at(pathIndex-1).start) : path_direction;
-          if (prev_path_dir.norm() < static_cast<gp_scalar>(1e-5)) {
-            prev_path_dir = frame.tangent;
-          } else {
-            prev_path_dir.normalize();
-          }
-          gp_scalar path_curvature = (static_cast<gp_scalar>(1.0f) - prev_path_dir.dot(path_direction)); // 0 to 2
-          gp_scalar optimal_roll = path_curvature * static_cast<gp_scalar>(0.3f); // Scale to reasonable roll estimate
-          gp_scalar optimal_pitch = static_cast<gp_scalar>(0.1f); // Assume minimal pitch needed
-          
-          // Penalty for excessive control relative to path requirements
-          gp_scalar control_excess = (current_roll - optimal_roll) + (current_pitch - optimal_pitch);
-          control_excess = std::max(static_cast<gp_scalar>(0.0f), control_excess); // Only penalize excess, not deficit
-          
-          movement_efficiency += control_excess * 0.5; // Add control excess penalty
-          movement_efficiency += saturation_penalty; // Add saturation penalty
-          movement_efficiency += control_rate_penalty; // Add rate change penalty
-        }
-      }
-      // Normalize to [100:0] scale - increased max penalty due to saturation/rate penalties  
-      movement_efficiency = movement_efficiency * static_cast<gp_scalar>(100.0f) / static_cast<gp_scalar>(MOVEMENT_EFFICIENCY_MAX_PENALTY);
+      gp_scalar crossTrackPercentForLog = crossTrackPercent;
+      gp_scalar oscillationPercentForLog = 0.0f;  // No longer used
+      gp_scalar orientationPenaltyForLog = rollPercent + pitchPercent;
+      gp_scalar movement_efficiency = movementDirectionError;
 
       // ready for next cycle
-      roll_prev = stepAircraftState.getRollCommand();
-      pitch_prev = stepAircraftState.getPitchCommand();
+      roll_prev = current_roll_cmd;
+      pitch_prev = current_pitch_cmd;
       throttle_prev = stepAircraftState.getThrottleCommand();
 
-      // accumulate the error
-      distance_error_sum += pow(distanceFromGoal, FITNESS_DISTANCE_WEIGHT);
-      angle_error_sum += pow(angle_rad, FITNESS_ALIGNMENT_WEIGHT);
-      movement_efficiency_sum += pow(movement_efficiency, MOVEMENT_EFFICIENCY_WEIGHT); // Stronger penalty weight than distance/angle
       simulation_steps++;
 
       // use the ugly global to communicate best of gen
@@ -945,24 +945,39 @@ void MyGP::evalTask(WorkerContext& context)
       }
     }
 
-    // tally up the normlized fitness based on steps and progress
-    gp_scalar normalized_distance_error = (distance_error_sum / simulation_steps);
-    gp_scalar normalized_angle_align = (angle_error_sum / simulation_steps);
-    gp_scalar normalized_movement_efficiency = (movement_efficiency_sum / simulation_steps);
-    gp_scalar normalized_cross_track = (cross_track_error_sum / simulation_steps);
-    gp_scalar normalized_cross_track_osc = cross_track_osc_events > 0
-      ? (cross_track_osc_sum / cross_track_osc_events)
-      : 0.0f;
-    gp_scalar normalized_orientation_penalty = (orientation_alignment_sum / simulation_steps);
-    localFitness = normalized_distance_error + normalized_angle_align + normalized_movement_efficiency
-      + normalized_cross_track + normalized_cross_track_osc + normalized_orientation_penalty;
+    // ========================================================================
+    // SIMPLIFIED FITNESS COMPUTATION
+    // ========================================================================
+    // Get total path distance (odometer) for normalization
+    gp_scalar total_path_distance = path.back().distanceFromStart;
+
+    // Normalize all metrics by total path distance (odometer reading)
+    // This ensures paths of different lengths/granularity are compared fairly
+    gp_scalar normalization_factor = (total_path_distance > 0.0f) ? total_path_distance : 1.0f;
+
+    gp_scalar normalized_waypoint_distance = (waypoint_distance_sum / normalization_factor);
+    gp_scalar normalized_cross_track = (cross_track_error_sum / normalization_factor);
+    gp_scalar normalized_movement_direction = (movement_direction_error_sum / normalization_factor);
+    gp_scalar normalized_roll_energy = (roll_energy_sum / normalization_factor);
+    gp_scalar normalized_pitch_energy = (pitch_energy_sum / normalization_factor);
+    gp_scalar normalized_control_smoothness = (control_smoothness_sum / normalization_factor);
+
+    // Sum all components (lower is better)
+    localFitness = normalized_waypoint_distance +     // Reach waypoints on time
+                   normalized_cross_track +           // Stay near path centerline
+                   normalized_movement_direction +    // Move along path tangent
+                   normalized_roll_energy +           // Minimize roll
+                   normalized_pitch_energy +          // Minimize pitch deviation
+                   normalized_control_smoothness;     // Smooth controls
 
     if (isnan(localFitness)) {
       nanDetector++;
     }
 
+    // Crash penalty: add large penalty scaled by how much path remains
     if (crashReason != CrashReason::None) {
-      gp_scalar fractional_distance_remaining = static_cast<gp_scalar>(1.0f) - path.at(aircraftState.back().getThisPathIndex()).distanceFromStart / path.back().distanceFromStart;
+      gp_scalar fractional_distance_remaining = static_cast<gp_scalar>(1.0f) -
+        path.at(aircraftState.back().getThisPathIndex()).distanceFromStart / path.back().distanceFromStart;
       localFitness += SIM_CRASH_PENALTY * fractional_distance_remaining;
     }
 
@@ -1225,18 +1240,16 @@ int main(int argc, char** argv)
 
           gp_scalar localFitness = 0;
           int stepIndex = 0;
-          
-          gp_scalar distance_error_sum = 0;
-          gp_scalar angle_error_sum = 0;
-          gp_scalar movement_efficiency_sum = 0;
-          gp_scalar cross_track_error_sum = 0;
-          gp_scalar cross_track_osc_sum = 0;
-          int cross_track_osc_events = 0;
-          gp_scalar orientation_alignment_sum = 0;
-          gp_scalar prev_cross_track_signed = 0;
-          bool has_prev_cross_track = false;
+
+          // SIMPLIFIED error accumulators
+          gp_scalar waypoint_distance_sum = 0.0f;
+          gp_scalar cross_track_error_sum = 0.0f;
+          gp_scalar movement_direction_error_sum = 0.0f;
+          gp_scalar roll_energy_sum = 0.0f;
+          gp_scalar pitch_energy_sum = 0.0f;
+          gp_scalar control_smoothness_sum = 0.0f;
           int simulation_steps = 0;
-          
+
           gp_scalar roll_prev = aircraftState.at(stepIndex).getRollCommand();
           gp_scalar pitch_prev = aircraftState.at(stepIndex).getPitchCommand();
           gp_scalar throttle_prev = aircraftState.at(stepIndex).getThrottleCommand();
@@ -1250,9 +1263,65 @@ int main(int argc, char** argv)
             int nextIndex = std::min(pathIndex + 1, static_cast<int>(path.size()) - 1);
             
             gp_vec3 aircraftPosition = stepAircraftState.getPosition();
+            gp_quat craftOrientation = stepAircraftState.getOrientation();
+            gp_vec3 aircraftUp = craftOrientation * gp_vec3::UnitZ();
+
+            // Waypoint distance
+            gp_scalar waypointDistance = (currentPathPoint.start - aircraftPosition).norm();
+            gp_scalar waypointDistancePercent = (waypointDistance * static_cast<gp_scalar>(100.0f)) /
+                                                 (static_cast<gp_scalar>(2.0f) * SIM_PATH_RADIUS_LIMIT);
+            waypoint_distance_sum += pow(waypointDistancePercent, WAYPOINT_DISTANCE_WEIGHT);
+
+            // Cross-track error
+            gp_vec3 craftOffset = aircraftPosition - currentPathPoint.start;
+            gp_vec3 lateral = craftOffset - frame.tangent * craftOffset.dot(frame.tangent);
+            gp_scalar crossTrackMagnitude = lateral.norm();
+            gp_scalar crossTrackPercent = 0.0f;
+            if (SIM_PATH_RADIUS_LIMIT > static_cast<gp_scalar>(0.0f)) {
+              crossTrackPercent = (crossTrackMagnitude * static_cast<gp_scalar>(100.0f)) / SIM_PATH_RADIUS_LIMIT;
+              cross_track_error_sum += pow(crossTrackPercent, CROSS_TRACK_WEIGHT);
+            }
+
+            // Movement direction alignment
+            gp_scalar movementDirectionError = 0.0f;
+            if (stepIndex > 1) {
+              gp_vec3 aircraft_movement = stepAircraftState.getPosition() - aircraftState.at(stepIndex-1).getPosition();
+              gp_scalar aircraft_distance = aircraft_movement.norm();
+              if (aircraft_distance > static_cast<gp_scalar>(0.1f)) {
+                gp_scalar direction_alignment = aircraft_movement.normalized().dot(frame.tangent);
+                movementDirectionError = (static_cast<gp_scalar>(1.0f) - direction_alignment) * static_cast<gp_scalar>(50.0f);
+                movement_direction_error_sum += pow(movementDirectionError, MOVEMENT_DIRECTION_WEIGHT);
+              }
+            }
+
+            // Roll stability
+            Eigen::Matrix3f rotMatrix = craftOrientation.toRotationMatrix();
+            gp_scalar current_roll_rad = atan2(rotMatrix(2, 1), rotMatrix(2, 2));
+            gp_scalar roll_magnitude = std::abs(current_roll_rad);
+            gp_scalar rollPercent = (roll_magnitude * static_cast<gp_scalar>(100.0f)) / static_cast<gp_scalar>(M_PI / 2.0f);
+            rollPercent = std::min(rollPercent, static_cast<gp_scalar>(100.0f));
+            roll_energy_sum += pow(rollPercent, ROLL_STABILITY_WEIGHT);
+
+            // Pitch stability
+            gp_scalar current_pitch_rad = -asin(std::clamp(rotMatrix(2, 0), -1.0f, 1.0f));
+            gp_scalar pitch_deviation = std::abs(current_pitch_rad - static_cast<gp_scalar>(0.087f));
+            gp_scalar pitchPercent = (pitch_deviation * static_cast<gp_scalar>(100.0f)) / static_cast<gp_scalar>(M_PI / 4.0f);
+            pitchPercent = std::min(pitchPercent, static_cast<gp_scalar>(100.0f));
+            pitch_energy_sum += pow(pitchPercent, PITCH_STABILITY_WEIGHT);
+
+            // Control smoothness
+            gp_scalar current_roll_cmd = stepAircraftState.getRollCommand();
+            gp_scalar current_pitch_cmd = stepAircraftState.getPitchCommand();
+            gp_scalar roll_change = std::abs(current_roll_cmd - roll_prev);
+            gp_scalar pitch_change = std::abs(current_pitch_cmd - pitch_prev);
+            gp_scalar control_change = roll_change + pitch_change;
+            gp_scalar smoothnessPercent = (control_change * static_cast<gp_scalar>(100.0f)) / CONTROL_SMOOTHNESS_MAX_PENALTY;
+            control_smoothness_sum += pow(smoothnessPercent, CONTROL_SMOOTHNESS_WEIGHT);
+
+            // Logging variables for compatibility (not used in fitness)
             gp_scalar distanceFromGoal = (currentPathPoint.start - aircraftPosition).norm();
             distanceFromGoal = distanceFromGoal * static_cast<gp_scalar>(100.0f) / (static_cast<gp_scalar>(2.0f) * SIM_PATH_RADIUS_LIMIT);
-            
+
             gp_vec3 target_direction = path.at(nextIndex).start - currentPathPoint.start;
             if (target_direction.norm() < static_cast<gp_scalar>(1e-5f)) {
               target_direction = frame.tangent;
@@ -1268,123 +1337,15 @@ int main(int argc, char** argv)
             }
             angle_rad = angle_rad * static_cast<gp_scalar>(100.0f) / static_cast<gp_scalar>(M_PI);
 
-            gp_quat craftOrientation = stepAircraftState.getOrientation();
-            gp_vec3 aircraftForward = craftOrientation * gp_vec3::UnitX();
-            gp_vec3 aircraftUp = craftOrientation * gp_vec3::UnitZ();
-
-            gp_scalar crossTrackPercentForLog = 0.0f;
+            gp_scalar crossTrackPercentForLog = crossTrackPercent;
             gp_scalar oscillationPercentForLog = 0.0f;
-            gp_scalar orientationPenaltyForLog = 0.0f;
+            gp_scalar orientationPenaltyForLog = rollPercent + pitchPercent;
+            gp_scalar movement_efficiency = movementDirectionError;
 
-            gp_vec3 craftOffset = aircraftPosition - currentPathPoint.start;
-            gp_vec3 lateral = craftOffset - frame.tangent * craftOffset.dot(frame.tangent);
-            gp_scalar crossTrackSigned = lateral.dot(frame.insideNormal);
-            gp_scalar crossTrackMagnitude = lateral.norm();
-            if (SIM_PATH_RADIUS_LIMIT > static_cast<gp_scalar>(0.0f)) {
-              crossTrackPercentForLog = (crossTrackMagnitude * static_cast<gp_scalar>(100.0f)) / SIM_PATH_RADIUS_LIMIT;
-              cross_track_error_sum += pow(crossTrackPercentForLog, CROSS_TRACK_WEIGHT);
-            }
-
-            gp_scalar oscillationPercent = 0.0f;
-            bool oscillationTriggered = false;
-            if (has_prev_cross_track) {
-              if ((crossTrackSigned > CROSS_TRACK_SIGN_THRESHOLD && prev_cross_track_signed < -CROSS_TRACK_SIGN_THRESHOLD) ||
-                  (crossTrackSigned < -CROSS_TRACK_SIGN_THRESHOLD && prev_cross_track_signed > CROSS_TRACK_SIGN_THRESHOLD)) {
-                gp_scalar denomOsc = std::max(static_cast<gp_scalar>(1.0f), static_cast<gp_scalar>(2.0f) * SIM_PATH_RADIUS_LIMIT);
-                oscillationPercent = (std::abs(prev_cross_track_signed) + std::abs(crossTrackSigned)) * static_cast<gp_scalar>(100.0f) / denomOsc;
-                cross_track_osc_sum += pow(oscillationPercent, CROSS_TRACK_OSC_WEIGHT);
-                cross_track_osc_events++;
-                oscillationTriggered = true;
-              }
-            }
-            oscillationPercentForLog = oscillationTriggered ? oscillationPercent : 0.0;
-            prev_cross_track_signed = crossTrackSigned;
-            has_prev_cross_track = true;
-
-            gp_scalar forwardDot = std::clamp(aircraftForward.dot(frame.tangent), static_cast<gp_scalar>(-1.0f), static_cast<gp_scalar>(1.0f));
-            gp_scalar upDot = std::clamp(aircraftUp.dot(frame.insideNormal), static_cast<gp_scalar>(-1.0f), static_cast<gp_scalar>(1.0f));
-            gp_scalar forwardAngle = static_cast<gp_scalar>(std::acos(forwardDot));
-            gp_scalar upAngle = static_cast<gp_scalar>(std::acos(upDot));
-            gp_scalar forwardPercent = (forwardAngle * static_cast<gp_scalar>(100.0f)) / static_cast<gp_scalar>(M_PI);
-            gp_scalar upPercent = (upAngle * static_cast<gp_scalar>(100.0f)) / static_cast<gp_scalar>(M_PI);
-            gp_scalar orientationStep = pow(forwardPercent, ORIENTATION_TANGENT_WEIGHT) +
-                                        pow(upPercent, ORIENTATION_UP_WEIGHT);
-            gp_scalar inversionPenalty = (upDot < static_cast<gp_scalar>(0.0f)) ? (-upDot) * PATH_UP_INVERSION_PENALTY : static_cast<gp_scalar>(0.0f);
-            orientation_alignment_sum += orientationStep + inversionPenalty;
-            orientationPenaltyForLog = orientationStep + inversionPenalty;
-            
-            // Movement efficiency: compare aircraft movement to optimal path movement
-            gp_scalar movement_efficiency = 0.0f;
-            if (stepIndex > 1 && pathIndex < path.size() - 1) {
-              // Aircraft movement since last step
-              gp_vec3 aircraft_movement = stepAircraftState.getPosition() - aircraftState.at(stepIndex-1).getPosition();
-              gp_scalar aircraft_distance = aircraft_movement.norm();
-              
-              // Optimal path movement (direction from current waypoint to next)
-              int movementNextIndex = std::min(pathIndex + 1, static_cast<int>(path.size()) - 1);
-              gp_vec3 path_direction = path.at(movementNextIndex).start - path.at(pathIndex).start;
-              if (path_direction.norm() < static_cast<gp_scalar>(1e-5f)) {
-                path_direction = frame.tangent;
-              } else {
-                path_direction.normalize();
-              }
-              if (aircraft_distance > static_cast<gp_scalar>(0.1f)) { // Avoid division by zero
-                // Compare directions: dot product shows alignment (-1 to +1)
-                gp_scalar direction_alignment = aircraft_movement.normalized().dot(path_direction);
-                
-                // Movement efficiency penalty: 0 = perfect alignment, 2 = opposite direction
-                movement_efficiency = (static_cast<gp_scalar>(1.0f) - direction_alignment); // 0 to 2 range
-                
-                // Additional penalty for excessive turning/rolling
-                gp_scalar current_roll = abs(stepAircraftState.getRollCommand());
-                gp_scalar current_pitch = abs(stepAircraftState.getPitchCommand());
-                
-                // Control saturation penalty - heavily penalize near ±1.0 commands
-                gp_scalar saturation_penalty = 0.0f;
-                if (current_roll > CONTROL_SATURATION_THRESHOLD) {
-                  saturation_penalty += (current_roll - CONTROL_SATURATION_THRESHOLD) * CONTROL_SATURATION_PENALTY;
-                }
-                if (current_pitch > CONTROL_SATURATION_THRESHOLD) {
-                  saturation_penalty += (current_pitch - CONTROL_SATURATION_THRESHOLD) * CONTROL_SATURATION_PENALTY;
-                }
-                
-                // Control rate penalty - penalize rapid changes (bang-bang behavior)
-                gp_scalar roll_change = abs(stepAircraftState.getRollCommand() - roll_prev);
-                gp_scalar pitch_change = abs(stepAircraftState.getPitchCommand() - pitch_prev);
-                gp_scalar control_rate_penalty = (roll_change + pitch_change) * CONTROL_RATE_PENALTY;
-                
-                // Estimate "optimal" control needed for this path segment
-                // Simple model: straight segments need minimal control, curves need some roll
-                gp_vec3 prev_path_dir = (pathIndex > 0) ?
-                  (path.at(pathIndex).start - path.at(pathIndex-1).start) : path_direction;
-                if (prev_path_dir.norm() < static_cast<gp_scalar>(1e-5f)) {
-                  prev_path_dir = frame.tangent;
-                } else {
-                  prev_path_dir.normalize();
-                }
-                gp_scalar path_curvature = (static_cast<gp_scalar>(1.0f) - prev_path_dir.dot(path_direction)); // 0 to 2
-                gp_scalar optimal_roll = path_curvature * static_cast<gp_scalar>(0.3f); // Scale to reasonable roll estimate
-                gp_scalar optimal_pitch = static_cast<gp_scalar>(0.1f); // Assume minimal pitch needed
-                
-                // Penalty for excessive control relative to path requirements
-                gp_scalar control_excess = (current_roll - optimal_roll) + (current_pitch - optimal_pitch);
-                control_excess = std::max(static_cast<gp_scalar>(0.0f), control_excess); // Only penalize excess, not deficit
-                
-                movement_efficiency += control_excess * static_cast<gp_scalar>(0.5f); // Add control excess penalty
-                movement_efficiency += saturation_penalty; // Add saturation penalty
-                movement_efficiency += control_rate_penalty; // Add rate change penalty
-              }
-            }
-            // Normalize to [100:0] scale - increased max penalty due to saturation/rate penalties  
-            movement_efficiency = movement_efficiency * static_cast<gp_scalar>(100.0f) / static_cast<gp_scalar>(MOVEMENT_EFFICIENCY_MAX_PENALTY);
-            
-            roll_prev = stepAircraftState.getRollCommand();
-            pitch_prev = stepAircraftState.getPitchCommand();
+            roll_prev = current_roll_cmd;
+            pitch_prev = current_pitch_cmd;
             throttle_prev = stepAircraftState.getThrottleCommand();
-            
-            distance_error_sum += pow(distanceFromGoal, FITNESS_DISTANCE_WEIGHT);
-            angle_error_sum += pow(angle_rad, FITNESS_ALIGNMENT_WEIGHT);
-            movement_efficiency_sum += pow(movement_efficiency, MOVEMENT_EFFICIENCY_WEIGHT);
+
             simulation_steps++;
             
             if (printEval) {
@@ -1468,23 +1429,35 @@ int main(int argc, char** argv)
             }
           }
           
-          gp_scalar normalized_distance_error = (distance_error_sum / simulation_steps);
-          gp_scalar normalized_angle_align = (angle_error_sum / simulation_steps);
-          gp_scalar normalized_movement_efficiency = (movement_efficiency_sum / simulation_steps);
-          gp_scalar normalized_cross_track = (cross_track_error_sum / simulation_steps);
-          gp_scalar normalized_cross_track_osc = cross_track_osc_events > 0
-            ? (cross_track_osc_sum / cross_track_osc_events)
-            : static_cast<gp_scalar>(0.0f);
-          gp_scalar normalized_orientation_penalty = (orientation_alignment_sum / simulation_steps);
-          localFitness = normalized_distance_error + normalized_angle_align + normalized_movement_efficiency
-            + normalized_cross_track + normalized_cross_track_osc + normalized_orientation_penalty;
-          
+          // SIMPLIFIED FITNESS COMPUTATION
+          // Get total path distance (odometer) for normalization
+          gp_scalar total_path_distance = path.back().distanceFromStart;
+
+          // Normalize all metrics by total path distance (odometer reading)
+          // This ensures paths of different lengths/granularity are compared fairly
+          gp_scalar normalization_factor = (total_path_distance > 0.0f) ? total_path_distance : 1.0f;
+
+          gp_scalar normalized_waypoint_distance = (waypoint_distance_sum / normalization_factor);
+          gp_scalar normalized_cross_track = (cross_track_error_sum / normalization_factor);
+          gp_scalar normalized_movement_direction = (movement_direction_error_sum / normalization_factor);
+          gp_scalar normalized_roll_energy = (roll_energy_sum / normalization_factor);
+          gp_scalar normalized_pitch_energy = (pitch_energy_sum / normalization_factor);
+          gp_scalar normalized_control_smoothness = (control_smoothness_sum / normalization_factor);
+
+          localFitness = normalized_waypoint_distance +
+                         normalized_cross_track +
+                         normalized_movement_direction +
+                         normalized_roll_energy +
+                         normalized_pitch_energy +
+                         normalized_control_smoothness;
+
           if (isnan(localFitness)) {
             nanDetector++;
           }
-          
+
           if (crashReason != CrashReason::None) {
-            gp_scalar fractional_distance_remaining = static_cast<gp_scalar>(1.0f) - path.at(aircraftState.back().getThisPathIndex()).distanceFromStart / path.back().distanceFromStart;
+            gp_scalar fractional_distance_remaining = static_cast<gp_scalar>(1.0f) -
+              path.at(aircraftState.back().getThisPathIndex()).distanceFromStart / path.back().distanceFromStart;
             localFitness += SIM_CRASH_PENALTY * fractional_distance_remaining;
           }
           

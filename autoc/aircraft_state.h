@@ -32,7 +32,7 @@
 #define SIM_INITIAL_VELOCITY static_cast<gp_scalar>(20.0f)
 #define SIM_RABBIT_VELOCITY static_cast<gp_scalar>(16.0f)
 #define SIM_THROTTLE_SCALE static_cast<gp_scalar>(10.0f)
-#define SIM_CRASH_PENALTY static_cast<gp_scalar>(100.0f + 100.0f + 100.0f)
+#define SIM_CRASH_PENALTY static_cast<gp_scalar>(300.0f)  // Large penalty to ensure path completion
 #define SIM_INITIAL_ALTITUDE static_cast<gp_scalar>(-25.0f)
 #define SIM_INITIAL_THROTTLE static_cast<gp_scalar>(0.0f)
 #define SIM_INITIAL_LOCATION_DITHER static_cast<gp_scalar>(30.0f)

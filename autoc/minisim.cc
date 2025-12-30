@@ -138,22 +138,16 @@ public:
         // accumulate steps
         std::vector<AircraftState> aircraftStateSteps;
 
-        // random initial orientation
+        // Fixed initial orientation and position for deterministic evaluation
         gp_quat aircraft_orientation;
         gp_vec3 initialPosition;
         {
-          aircraft_orientation = gp_quat::UnitRandom();
-
-          initialPosition = gp_vec3((((gp_scalar)GPrand() / RAND_MAX) - 0.5f) * SIM_INITIAL_LOCATION_DITHER,
-            (((gp_scalar)GPrand() / RAND_MAX) - 0.5f) * SIM_INITIAL_LOCATION_DITHER,
-            SIM_INITIAL_ALTITUDE - ((gp_scalar)GPrand() / RAND_MAX) * SIM_INITIAL_LOCATION_DITHER);
-
-          // override orientation of aircraft to be upright and level
+          // Set orientation to be upright and level (180 deg yaw, 0 pitch, 0 roll)
           aircraft_orientation = gp_quat(Eigen::AngleAxis<gp_scalar>(static_cast<gp_scalar>(M_PI), gp_vec3::UnitZ())) *
             gp_quat(Eigen::AngleAxis<gp_scalar>(0, gp_vec3::UnitY())) *
             gp_quat(Eigen::AngleAxis<gp_scalar>(0, gp_vec3::UnitX()));
 
-          // override position of aircraft to be at the origin
+          // Set fixed starting position
           initialPosition = gp_vec3(static_cast<gp_scalar>(-2.19f), static_cast<gp_scalar>(5.49f), static_cast<gp_scalar>(-36.93f));
         }
 
