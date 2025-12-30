@@ -442,6 +442,7 @@ public:
         // and update bestOfPopulation to point to the bakeoff winner
         if (best) {
           best->setFitness(bestAggregatedFitness);
+          best->setHasAggregatedFitness(true);  // Mark as having aggregated fitness
           // Find the index of the best candidate in the population
           for (int idx = 0; idx < containerSize(); ++idx) {
             if (NthMyGP(idx) == best) {
@@ -491,7 +492,9 @@ public:
               // Don't replace the bakeoff winner itself (elitism protection)
               if (worstInDeme != bestOfPopulation) {
                 // Clone the winner and replace the worst
-                put(worstInDeme, best->duplicate());
+                MyGP* clone = (MyGP*)&best->duplicate();
+                clone->setHasAggregatedFitness(false);  // Clear flag on copy
+                put(worstInDeme, *clone);
                 demesPropagated++;
               }
             }
@@ -550,6 +553,19 @@ void MyPopulation::evaluate() {
   const GPVariables& gpCfg = ConfigManager::getGPConfig();
   int scenarioCount = std::max<int>(generationScenarios.size(), 1);
 
+  // Clear aggregated fitness flags for all individuals except the elite
+  // This handles cases where flag might have been inherited through genetic ops
+  if (gpCfg.DemeticGrouping) {
+    for (int n = 0; n < containerSize(); ++n) {
+      if (n != bestOfPopulation) {
+        MyGP* current = NthMyGP(n);
+        if (current) {
+          current->setHasAggregatedFitness(false);
+        }
+      }
+    }
+  }
+
   // When DemeticGrouping is disabled, evaluate ALL individuals on ALL scenarios
   // and average their fitness. This ensures fair comparison across the population.
   if (!gpCfg.DemeticGrouping && scenarioCount > 1) {
@@ -592,9 +608,31 @@ void MyPopulation::evaluate() {
         GPExitSystem("MyPopulation::evaluate", "Member of population is NULL");
       }
 #endif
+
+      // Skip individuals with locked aggregated fitness (from bakeoff)
+      // Their fitness should not be overwritten with single-scenario fitness
+      // IMPORTANT: Only do this in demetic mode
+      if (gpCfg.DemeticGrouping && current->getHasAggregatedFitness()) {
+        continue;
+      }
+
       current->setScenarioIndex(computeScenarioIndexForIndividual(n));
     }
     GPPopulation::evaluate();
+  }
+
+  // After evaluation and statistics, restore bestOfPopulation to the elite
+  // (the individual with hasAggregatedFitness=true) to prevent it from being
+  // replaced by individuals with single-scenario fitness
+  if (gpCfg.DemeticGrouping) {
+    for (int n = 0; n < containerSize(); ++n) {
+      MyGP* current = NthMyGP(n);
+      if (current && current->getHasAggregatedFitness()) {
+        // Found the elite - make sure bestOfPopulation points to it
+        bestOfPopulation = n;
+        break;
+      }
+    }
   }
 }
 
@@ -607,6 +645,16 @@ void MyGP::evaluate()
 // fitness.
 void MyGP::evalTask(WorkerContext& context)
 {
+  // Skip evaluation if this individual has locked aggregated fitness
+  if (hasAggregatedFitness) {
+    static int skipCount = 0;
+    if (++skipCount <= 10) {  // Only log first 10 skips to avoid spam
+      std::cerr << "DEBUG: Skipping eval for elite (fitness=" << stdFitness
+                << ", hasAggregatedFitness=" << hasAggregatedFitness << ")" << std::endl;
+    }
+    return;
+  }
+
   stdFitness = 0;
 
   // TODO this save is probably cheaper when GP knows about boost archives...

@@ -129,7 +129,10 @@ class MyGP : public GP
 {
 public:
   // Duplication (mandatory)
-  MyGP(MyGP& gpo) : GP(gpo) { }
+  MyGP(MyGP& gpo) : GP(gpo),
+                     scenarioIndex(gpo.scenarioIndex),
+                     bakeoffMode(gpo.bakeoffMode),
+                     hasAggregatedFitness(gpo.hasAggregatedFitness) { }
   virtual GPObject& duplicate() { return *(new MyGP(*this)); }
 
   // Creation of own class objects (mandatory)
@@ -161,6 +164,8 @@ public:
   void setBakeoffMode(bool mode) { bakeoffMode = mode; }
   bool isBakeoffMode() const { return bakeoffMode; }
   void setFitness(gp_scalar fitness) { stdFitness = fitness; fitnessValid = 1; }
+  void setHasAggregatedFitness(bool value) { hasAggregatedFitness = value; }
+  bool getHasAggregatedFitness() const { return hasAggregatedFitness; }
 
   // async evaluator
   virtual void evalTask(WorkerContext& context);
@@ -168,6 +173,7 @@ public:
 private:
   int scenarioIndex = 0;
   bool bakeoffMode = false;
+  bool hasAggregatedFitness = false;
 };
 
 
