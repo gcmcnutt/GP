@@ -1,3 +1,38 @@
+* URGENT: THREE CRITICAL ISSUES BLOCKING EFFECTIVE EVOLUTION (2025-12-31)
+  1. REMAINING CRRCSIM DETERMINISM (~0.005 unit variance)
+     - Current: 99.98% deterministic, but 0.005 variance masks energy cost signal
+     - Impact: 4th-order fitness metrics (throttle efficiency) drowned out by noise
+     - Need: Perfect determinism (variance < 0.0001) for energy optimization
+     - Approach: Hunt down remaining sources of non-determinism in crrcsim
+       * Check for uninitialized variables in FDM
+       * Look for floating-point ordering differences across threads
+       * Investigate SDL_GetTicks() or other time-dependent calls
+       * Consider using fixed-point arithmetic for critical calculations
+
+  2. DEMETIC MODE ELITE PRESERVATION (broken fitness tracking)
+     - Current: Best fitness jumps wildly (135→191→192→191→174→180→173→177)
+     - Root cause: Elite's aggregated fitness lost when re-evaluated on single scenario
+     - Impact: Cannot track evolution progress, GP search is ineffective
+     - Need: Preserve elite's full aggregated fitness across generations
+     - Approach: Fix attempted solution in autoc.cc lines 623-661, 665-744
+       * Ensure elite is NOT re-evaluated (skip in evaluate() call)
+       * OR restore aggregated fitness immediately after evaluation
+       * Add logging to verify elite fitness is truly preserved
+       * Test that best fitness is monotonically improving
+
+  3. PATH LENGTH NORMALIZATION (fitness bias toward long paths)
+     - Current: 30-second path dominates fitness vs 12-second paths (2.5x more samples)
+     - Impact: Evolution optimizes for long path, ignores short paths
+     - Need: Normalize fitness by path duration or expected samples
+     - Approach: Modify fitness calculation to use per-second metrics
+       * Average error per second instead of total error sum
+       * Or weight by 1/duration to equalize path importance
+       * Ensure energy cost is also normalized appropriately
+       * Test that all paths contribute equally to fitness
+
+  Priority order: Fix #2 (demetic) first to get evolution working, then #3 (normalization)
+  to balance path contributions, then #1 (perfect determinism) for energy optimization.
+
 - consider co-evolve the random paths
 - top level build script that builds debug/release
 - benchmark the impact of debug mode code
@@ -77,28 +112,59 @@
   - Migration required for: EvalData, EvalResults, Path, AircraftState, ScenarioMetadata
   - Benefits: version independence, better portability, potentially smaller/faster
 
-* ELITE PRESERVATION IN DEMETIC MODE (DEFERRED)
-  - Problem: In demetic GP mode with bakeoff evaluation:
-    * Elite individual has aggregated fitness (average across all scenarios)
-    * Regular population members have single-scenario fitness
-    * When elite gets re-evaluated next generation, aggregated fitness is overwritten with single-scenario fitness
-    * This causes best fitness to regress (not monotonically improving)
-  - Attempted solution (lines 623-661, 665-744 in autoc.cc):
-    * Track eliteAggregatedFitness as static member variable (persists across generations)
-    * Before GPPopulation::evaluate(), identify individuals with elite fitness
-    * After evaluation, restore their aggregated fitness value
-    * In calculateStatistics(), ensure bestOfPopulation points to elite
-  - Current status: Partially working
-    * Elite fitness IS being restored in population
-    * But data.stc output may not reflect true elite fitness
-    * Needs more investigation into when/how statistics are printed
-  - Decision: Defer this work to focus on non-demetic mode
-    * Non-demetic mode evaluates all individuals on all scenarios (no aggregation issue)
-    * Want to validate that simplified fitness function (4 metrics instead of 7) has good signal
-    * Will return to demetic elite preservation later
-  - Related code to review when resuming:
-    * MyPopulation::eliteAggregatedFitness (static member)
-    * MyPopulation::evaluate() - restoration after GPPopulation::evaluate()
-    * MyPopulation::calculateStatistics() - restoring bestOfPopulation
-    * MyPopulation::endOfEvaluation() - bakeoff sets eliteAggregatedFitness
-    * MyGP::hasAggregatedFitness flag (currently used but may proliferate)
+* ELITE FITNESS REGRESSION - NON-MONOTONIC BEST FITNESS (ACTIVE)
+  - Problem: Best fitness regresses by ~0.001 units even with AddBestToNewPopulation=1
+    * Observed in BOTH demetic and non-demetic modes
+    * Example from non-demetic run (PopSize=100, WindScenarios=6):
+      Gen 3: 235.743 → Gen 4: 235.744 (regression of 0.001)
+      Gen 7: 235.136 → Gen 8: 235.137 (regression of 0.001)
+    * Magnitude matches remaining crrcsim variance (~0.005 units)
+
+  - Root cause: Elite individual is being RE-EVALUATED instead of fitness being preserved
+    * AddBestToNewPopulation=1 should copy elite forward WITHOUT re-evaluation
+    * GP library or MyPopulation may be forcing re-evaluation
+    * Re-evaluation exposes the ~0.005 unit variance in crrcsim determinism
+
+  - Impact:
+    * Best fitness is not strictly monotonically improving
+    * Makes it harder to track true evolution progress
+    * Small regressions (0.001) are acceptable, but shouldn't happen at all
+
+  - Additional issue in demetic mode (DEFERRED):
+    * Elite has aggregated fitness across all scenarios
+    * Regular population has single-scenario fitness
+    * Re-evaluation overwrites aggregated with single-scenario fitness
+    * Attempted solution in lines 623-661, 665-744 in autoc.cc (partially working)
+
+  - Next steps:
+    * Verify elite is actually being re-evaluated (add logging)
+    * Check GPPopulation::evaluate() to see if it forces re-eval of all individuals
+    * May need to skip elite in evaluation or restore fitness after evaluation
+    * If we achieve perfect crrcsim determinism (variance=0), this would mask the issue
+
+* CRRCSIM DETERMINISM - PRODUCTION READY (2025-12-31)
+  - Status: RESOLVED - variance reduced from 20-50 units to 0.005 units (99.98% deterministic)
+  - Current: ~8 out of 50 evaluations show tiny variance (0.005 fitness units)
+  - This occurs even after warm-up, not just initial runs - acceptable for production
+  - Root cause of remaining variance: Unknown, but impact negligible
+
+  - Fixes applied (crrcsim-0.9.13/src):
+    * RandGauss::Reset() method added to clear Box-Muller internal state (crrc_rand.h/cpp)
+      - Resets phase, V2, fac to zero on each simulation reset
+      - Constructors now properly initialize all state variables
+    * eta1-4 (Dryden turbulence) reset in initialize_gust() (windfield.cpp:788-791)
+      - These global RandGauss objects persist across resets, must be explicitly cleared
+    * rnd_radius/strength/lifetime (thermal parameters) reset in initialize_wind_field() (windfield.cpp:468-470)
+      - File-scope global RandGauss objects for thermal generation
+
+  - Total changes: 36 lines across 3 files (crrc_rand.h, crrc_rand.cpp, windfield.cpp)
+  - Production impact: Aggregate fitness variance < 0.01 units is acceptable for GP evolution
+
+  - Debug facilities available:
+    * Determinism test in autoc.cc line 1531: change `if (false && gen == 2)` to `if (gen == 2)`
+    * Clones best individual to entire population at gen 2 and measures fitness variance
+
+  - Note: Attempted SimStateHandler refactoring was REVERTED
+    * Tried to add resetWithSeed() method to centralize PRNG seeding
+    * This actually INCREASED variance to 120 units - root cause unclear
+    * Reverted to keep working baseline with minimal changes

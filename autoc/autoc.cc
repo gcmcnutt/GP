@@ -92,11 +92,6 @@ unsigned int sanitizeStride(int stride) {
   return static_cast<unsigned int>(absStride);
 }
 
-ScenarioDescriptor& defaultScenario() {
-  static ScenarioDescriptor fallback;
-  return fallback;
-}
-
 void rebuildGenerationScenarios(const std::vector<std::vector<Path>>& basePaths) {
   generationScenarios.clear();
 
@@ -243,18 +238,7 @@ int computeScenarioIndexForIndividual(int individualIndex) {
 
 const ScenarioDescriptor& scenarioForIndex(int scenarioIndex) {
   if (generationScenarios.empty()) {
-    ScenarioDescriptor& fallback = defaultScenario();
-    fallback.pathList = generationPaths;
-    fallback.windSeed = static_cast<unsigned int>(ConfigManager::getExtraConfig().windSeedBase);
-    fallback.pathVariantIndex = -1;
-    fallback.windVariantIndex = 0;
-    fallback.windScenarios.clear();
-    fallback.windScenarios.resize(fallback.pathList.size());
-    for (size_t idx = 0; idx < fallback.windScenarios.size(); ++idx) {
-      fallback.windScenarios[idx].windSeed = fallback.windSeed;
-      fallback.windScenarios[idx].windVariantIndex = static_cast<int>(idx);
-    }
-    return fallback;
+    GPExitSystem("scenarioForIndex", "generationScenarios is empty - this should never happen!");
   }
   int clampedIndex = ((scenarioIndex % static_cast<int>(generationScenarios.size())) + static_cast<int>(generationScenarios.size())) % static_cast<int>(generationScenarios.size());
   return generationScenarios[clampedIndex];
@@ -1541,6 +1525,79 @@ int main(int argc, char** argv)
       }
       pop->createGenerationReport(0, gen, fout, bout, *logger.info());
       logGenerationStats(gen);
+
+      // DETERMINISM TEST: Clone best to entire population and check for identical fitness
+      // Disabled for production runs - uncomment to test determinism
+      if (false && gen == 2) {
+        *logger.info() << "=== DETERMINISM TEST: Cloning best individual to entire population ===" << endl;
+        MyGP* bestGP = pop->NthMyGP(pop->bestOfPopulation);
+        gp_scalar bestFitness = bestGP->getFitness();
+        *logger.info() << "Best fitness before cloning: " << bestFitness << endl;
+
+        // Clone best to everyone
+        for (int n = 0; n < pop->containerSize(); ++n) {
+          if (n != pop->bestOfPopulation) {
+            MyGP* clone = (MyGP*)&bestGP->duplicate();
+            pop->put(n, *clone);
+          }
+        }
+
+        // Re-evaluate entire population
+        *logger.info() << "Re-evaluating cloned population..." << endl;
+        pop->evaluate();
+
+        // Check for fitness variance
+        gp_scalar minFit = std::numeric_limits<gp_scalar>::infinity();
+        gp_scalar maxFit = -std::numeric_limits<gp_scalar>::infinity();
+        gp_scalar sumFit = 0.0f;
+
+        // Collect all fitness values for detailed analysis
+        std::vector<std::pair<int, gp_scalar>> fitnessValues;
+        for (int n = 0; n < pop->containerSize(); ++n) {
+          gp_scalar fit = pop->NthMyGP(n)->getFitness();
+          fitnessValues.push_back(std::make_pair(n, fit));
+          minFit = std::min(minFit, fit);
+          maxFit = std::max(maxFit, fit);
+          sumFit += fit;
+        }
+        gp_scalar avgFit = sumFit / static_cast<gp_scalar>(pop->containerSize());
+        gp_scalar variance = maxFit - minFit;
+
+        // Sort by fitness to see groupings
+        std::sort(fitnessValues.begin(), fitnessValues.end(),
+                  [](const std::pair<int, gp_scalar>& a, const std::pair<int, gp_scalar>& b) {
+                    return a.second < b.second;
+                  });
+
+        *logger.info() << "Determinism test results:" << endl;
+        *logger.info() << "  Population size: " << pop->containerSize() << endl;
+        *logger.info() << "  Num threads: " << ConfigManager::getExtraConfig().evalThreads << endl;
+        *logger.info() << "  Wind scenarios: " << ConfigManager::getExtraConfig().windScenarioCount << endl;
+        *logger.info() << "  Wind seed base: " << ConfigManager::getExtraConfig().windSeedBase << endl;
+        *logger.info() << "  Min fitness: " << minFit << endl;
+        *logger.info() << "  Max fitness: " << maxFit << endl;
+        *logger.info() << "  Avg fitness: " << avgFit << endl;
+        *logger.info() << "  Variance (max-min): " << variance << endl;
+        *logger.info() << endl;
+
+        // Print all fitness values (sorted)
+        *logger.info() << "All fitness values (sorted, showing [index] = fitness):" << endl;
+        for (size_t i = 0; i < fitnessValues.size(); ++i) {
+          *logger.info() << "  [" << std::setw(3) << fitnessValues[i].first << "] = "
+                        << std::fixed << std::setprecision(6) << fitnessValues[i].second << endl;
+        }
+        *logger.info() << std::defaultfloat << endl;
+
+        if (variance < 1e-6) {
+          *logger.info() << "SUCCESS: All individuals have identical fitness (deterministic)" << endl;
+        } else {
+          *logger.warn() << "FAILURE: Fitness varies across identical individuals (non-deterministic!)" << endl;
+          *logger.warn() << "Possible causes: PRNG seeding, threading race conditions, uninitialized vars" << endl;
+        }
+
+        *logger.info() << "=== Exiting after determinism test ===" << endl;
+        break;  // Exit after test
+      }
     }
 
     // TODO send exit message to workers
