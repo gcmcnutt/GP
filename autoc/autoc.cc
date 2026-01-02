@@ -759,6 +759,8 @@ void MyGP::evalTask(WorkerContext& context)
         if (aircraft_distance > static_cast<gp_scalar>(0.1f)) {
           // Path direction is the tangent
           gp_scalar direction_alignment = aircraft_movement.normalized().dot(frame.tangent);
+          // Clamp to valid range to handle floating-point precision errors at boundaries
+          direction_alignment = std::clamp(direction_alignment, static_cast<gp_scalar>(-1.0f), static_cast<gp_scalar>(1.0f));
           // Convert to 0-100 scale: perfect=0, opposite=100
           movementDirectionError = (static_cast<gp_scalar>(1.0f) - direction_alignment) * static_cast<gp_scalar>(50.0f);
           movement_direction_error_sum += pow(movementDirectionError, MOVEMENT_DIRECTION_WEIGHT);
@@ -769,8 +771,9 @@ void MyGP::evalTask(WorkerContext& context)
       // METRIC 3: Throttle efficiency (minimize energy consumption)
       // ====================================================================
       gp_scalar current_throttle = stepAircraftState.getThrottleCommand();
-      // Throttle is 0-1 range, convert to 0-100 scale
-      gp_scalar throttlePercent = current_throttle * static_cast<gp_scalar>(100.0f);
+      // Throttle is -1 to 1 range, map to 0-1 range for energy (motor off at -1, full power at +1)
+      gp_scalar throttleNormalized = (current_throttle + 1.0f) * 0.5f;  // Maps [-1,1] -> [0,1]
+      gp_scalar throttlePercent = throttleNormalized * static_cast<gp_scalar>(100.0f);
       throttle_energy_sum += pow(throttlePercent, THROTTLE_EFFICIENCY_WEIGHT);
 
       // ====================================================================
@@ -901,7 +904,8 @@ void MyGP::evalTask(WorkerContext& context)
 
     // Normalize all metrics by total path distance (odometer reading)
     // This ensures paths of different lengths/granularity are compared fairly
-    gp_scalar normalization_factor = (total_path_distance > 0.0f) ? total_path_distance : 1.0f;
+    // Guard against near-zero to prevent divide-by-near-zero overflow
+    gp_scalar normalization_factor = (total_path_distance > 0.1f) ? total_path_distance : 1.0f;
 
     gp_scalar normalized_waypoint_distance = (waypoint_distance_sum / normalization_factor);
     gp_scalar normalized_cross_track = (cross_track_error_sum / normalization_factor);
@@ -1227,6 +1231,8 @@ int main(int argc, char** argv)
               gp_scalar aircraft_distance = aircraft_movement.norm();
               if (aircraft_distance > static_cast<gp_scalar>(0.1f)) {
                 gp_scalar direction_alignment = aircraft_movement.normalized().dot(frame.tangent);
+                // Clamp to valid range to handle floating-point precision errors at boundaries
+                direction_alignment = std::clamp(direction_alignment, static_cast<gp_scalar>(-1.0f), static_cast<gp_scalar>(1.0f));
                 movementDirectionError = (static_cast<gp_scalar>(1.0f) - direction_alignment) * static_cast<gp_scalar>(50.0f);
                 movement_direction_error_sum += pow(movementDirectionError, MOVEMENT_DIRECTION_WEIGHT);
               }
@@ -1234,7 +1240,9 @@ int main(int argc, char** argv)
 
             // Throttle efficiency
             gp_scalar current_throttle = stepAircraftState.getThrottleCommand();
-            gp_scalar throttlePercent = current_throttle * static_cast<gp_scalar>(100.0f);
+            // Throttle is -1 to 1 range, map to 0-1 range for energy (motor off at -1, full power at +1)
+            gp_scalar throttleNormalized = (current_throttle + 1.0f) * 0.5f;  // Maps [-1,1] -> [0,1]
+            gp_scalar throttlePercent = throttleNormalized * static_cast<gp_scalar>(100.0f);
             throttle_energy_sum += pow(throttlePercent, THROTTLE_EFFICIENCY_WEIGHT);
 
             // Logging variables for compatibility (not used in fitness)
@@ -1350,7 +1358,8 @@ int main(int argc, char** argv)
 
           // Normalize all metrics by total path distance (odometer reading)
           // This ensures paths of different lengths/granularity are compared fairly
-          gp_scalar normalization_factor = (total_path_distance > 0.0f) ? total_path_distance : 1.0f;
+          // Guard against near-zero to prevent divide-by-near-zero overflow
+          gp_scalar normalization_factor = (total_path_distance > 0.1f) ? total_path_distance : 1.0f;
 
           gp_scalar normalized_waypoint_distance = (waypoint_distance_sum / normalization_factor);
           gp_scalar normalized_cross_track = (cross_track_error_sum / normalization_factor);
