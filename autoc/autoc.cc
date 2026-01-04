@@ -58,6 +58,7 @@ namespace logging = boost::log;
 
 Logger logger;
 std::atomic_bool printEval = false; // verbose (used for rendering best of population)
+std::atomic_bool enableDeterministicTestLogging = false; // enable detailed logging during determinism test
 std::vector<MyGP*> tasks = std::vector<MyGP*>();
 
 // Forward declarations for global variables
@@ -75,6 +76,7 @@ std::ofstream bout;
 EvalResults bestOfEvalResults;
 EvalResults aggregatedEvalResults;
 EvalResults* activeEvalCollector = nullptr;
+boost::mutex evalCollectorMutex;  // Protects activeEvalCollector and aggregatedEvalResults
 std::atomic<uint64_t> evaluationProgress{0};
 std::atomic<uint64_t> globalScenarioCounter{0};
 std::atomic<uint64_t> bakeoffPathCounter{0};
@@ -111,19 +113,50 @@ void rebuildGenerationScenarios(const std::vector<std::vector<Path>>& basePaths)
     return;
   }
 
-  // Create one scenario per path. Each scenario contains ONE path evaluated
-  // across ALL wind conditions. This allows demes to specialize on specific
-  // path geometries while being robust to wind variations.
-  for (size_t pathIdx = 0; pathIdx < basePaths.size(); ++pathIdx) {
+  const GPVariables& gpCfg = ConfigManager::getGPConfig();
+
+  if (gpCfg.DemeticGrouping && gpCfg.DemeSize > 0) {
+    // DEMETIC MODE: Create one scenario per path variant.
+    // Each scenario contains ONE path geometry evaluated across ALL wind conditions.
+    // This allows demes to specialize on specific path geometries while being
+    // robust to wind variations.
+    for (size_t pathIdx = 0; pathIdx < basePaths.size(); ++pathIdx) {
+      ScenarioDescriptor scenario;
+      scenario.pathVariantIndex = static_cast<int>(pathIdx);
+      for (int windIdx = 0; windIdx < windScenarioCount; ++windIdx) {
+        scenario.pathList.push_back(basePaths[pathIdx]);
+        WindScenarioConfig windScenario;
+        windScenario.windSeed = seedBase + seedStride * static_cast<unsigned int>(windIdx);
+        windScenario.windVariantIndex = windIdx;
+        scenario.windScenarios.push_back(windScenario);
+      }
+      if (!scenario.windScenarios.empty()) {
+        scenario.windSeed = scenario.windScenarios.front().windSeed;
+        scenario.windVariantIndex = scenario.windScenarios.front().windVariantIndex;
+      } else {
+        scenario.windSeed = seedBase;
+        scenario.windVariantIndex = 0;
+      }
+      generationScenarios.push_back(std::move(scenario));
+    }
+  } else {
+    // NON-DEMETIC MODE: Create ONE scenario containing ALL path variants × ALL winds.
+    // Each individual evaluates on the same complete test suite for fair comparison.
     ScenarioDescriptor scenario;
-    scenario.pathVariantIndex = static_cast<int>(pathIdx);
+    scenario.pathVariantIndex = -1;  // Multiple paths, no single variant
+
+    // Add all combinations of paths × winds
     for (int windIdx = 0; windIdx < windScenarioCount; ++windIdx) {
-      scenario.pathList.push_back(basePaths[pathIdx]);
       WindScenarioConfig windScenario;
       windScenario.windSeed = seedBase + seedStride * static_cast<unsigned int>(windIdx);
       windScenario.windVariantIndex = windIdx;
       scenario.windScenarios.push_back(windScenario);
+
+      for (size_t pathIdx = 0; pathIdx < basePaths.size(); ++pathIdx) {
+        scenario.pathList.push_back(basePaths[pathIdx]);
+      }
     }
+
     if (!scenario.windScenarios.empty()) {
       scenario.windSeed = scenario.windScenarios.front().windSeed;
       scenario.windVariantIndex = scenario.windScenarios.front().windVariantIndex;
@@ -142,6 +175,27 @@ void rebuildGenerationScenarios(const std::vector<std::vector<Path>>& basePaths)
     scenario.pathList = basePaths;
     scenario.windScenarios.push_back({seedBase, 0});
     generationScenarios.push_back(std::move(scenario));
+  }
+
+  // Log scenario structure for verification (only once, not every generation)
+  static bool logged = false;
+  if (!logged) {
+    logged = true;
+    *logger.info() << "Scenario structure: " << generationScenarios.size() << " scenario(s)" << endl;
+    for (size_t i = 0; i < generationScenarios.size(); ++i) {
+      const auto& scenario = generationScenarios[i];
+      if (scenario.pathVariantIndex == -1) {
+        size_t numWinds = std::max(size_t(1), scenario.windScenarios.size());
+        size_t numPaths = scenario.pathList.size() / numWinds;
+        *logger.info() << "  Scenario " << i << ": ALL path variants"
+                       << " (" << scenario.pathList.size() << " total flights = "
+                       << numPaths << " paths × " << numWinds << " winds)" << endl;
+      } else {
+        *logger.info() << "  Scenario " << i << ": path variant " << scenario.pathVariantIndex
+                       << " (" << scenario.pathList.size() << " flights across "
+                       << scenario.windScenarios.size() << " winds)" << endl;
+      }
+    }
   }
 }
 
@@ -537,52 +591,21 @@ void MyPopulation::evaluate() {
   const GPVariables& gpCfg = ConfigManager::getGPConfig();
   int scenarioCount = std::max<int>(generationScenarios.size(), 1);
 
-  // When DemeticGrouping is disabled, evaluate ALL individuals on ALL scenarios
-  // and average their fitness. This ensures fair comparison across the population.
-  if (!gpCfg.DemeticGrouping && scenarioCount > 1) {
-    for (int n = 0; n < containerSize(); ++n) {
-      MyGP* current = NthMyGP(n);
+  // Assign scenario index to each individual based on demetic grouping
+  for (int n = 0; n < containerSize(); ++n) {
+    MyGP* current = NthMyGP(n);
 #if GPINTERNALCHECK
-      if (!current) {
-        GPExitSystem("MyPopulation::evaluate", "Member of population is NULL");
-      }
-#endif
-
-      gp_scalar cumulativeFitness = 0.0f;
-
-      // Evaluate on each scenario
-      for (int scenarioIdx = 0; scenarioIdx < scenarioCount; ++scenarioIdx) {
-        current->setScenarioIndex(scenarioIdx);
-
-        // Queue evaluation task
-        threadPool->enqueue([current](WorkerContext& context) {
-          current->evalTask(context);
-        });
-        threadPool->wait_for_tasks();
-
-        cumulativeFitness += static_cast<gp_scalar>(current->getFitness());
-      }
-
-      // Set final fitness as average across all scenarios
-      gp_scalar averageFitness = cumulativeFitness / static_cast<gp_scalar>(scenarioCount);
-      current->setFitness(averageFitness);
-
-      // Reset to scenario 0 for consistency
-      current->setScenarioIndex(0);
+    if (!current) {
+      GPExitSystem("MyPopulation::evaluate", "Member of population is NULL");
     }
-  } else {
-    // Demetic mode or single scenario: assign one scenario per individual
-    for (int n = 0; n < containerSize(); ++n) {
-      MyGP* current = NthMyGP(n);
-#if GPINTERNALCHECK
-      if (!current) {
-        GPExitSystem("MyPopulation::evaluate", "Member of population is NULL");
-      }
 #endif
-      current->setScenarioIndex(computeScenarioIndexForIndividual(n));
-    }
-    GPPopulation::evaluate();
+    current->setScenarioIndex(computeScenarioIndexForIndividual(n));
   }
+
+  // Evaluate all individuals using their assigned scenarios
+  // In non-demetic mode: all individuals use scenario 0 (which contains all paths × all winds)
+  // In demetic mode: each deme uses its own scenario (one path variant × all winds)
+  GPPopulation::evaluate();
 }
 
 void MyGP::evaluate()
@@ -613,22 +636,56 @@ void MyGP::evalTask(WorkerContext& context)
   evalData.scenarioList.clear();
   evalData.scenarioList.reserve(scenario.pathList.size());
   bool isBakeoff = bakeoffMode;
+  bool enableLogging = enableDeterministicTestLogging.load(std::memory_order_relaxed);
+
+  const GPVariables& gpCfg = ConfigManager::getGPConfig();
+
   for (size_t idx = 0; idx < scenario.pathList.size(); ++idx) {
     ScenarioMetadata meta;
-    meta.pathVariantIndex = scenario.pathVariantIndex;
     meta.scenarioSequence = scenarioSequence;
+    meta.enableDeterministicLogging = enableLogging;
+
     if (isBakeoff) {
       meta.bakeoffSequence = bakeoffPathCounter.fetch_add(1, std::memory_order_relaxed) + 1;
     } else {
       meta.bakeoffSequence = 0;
     }
-    if (idx < scenario.windScenarios.size()) {
-      meta.windVariantIndex = scenario.windScenarios[idx].windVariantIndex;
-      meta.windSeed = scenario.windScenarios[idx].windSeed;
+
+    if (gpCfg.DemeticGrouping && gpCfg.DemeSize > 0) {
+      // Demetic mode: scenario has one path variant across multiple winds
+      meta.pathVariantIndex = scenario.pathVariantIndex;
+      if (idx < scenario.windScenarios.size()) {
+        meta.windVariantIndex = scenario.windScenarios[idx].windVariantIndex;
+        meta.windSeed = scenario.windScenarios[idx].windSeed;
+      } else {
+        meta.windVariantIndex = scenario.windVariantIndex;
+        meta.windSeed = scenario.windSeed;
+      }
     } else {
-      meta.windVariantIndex = scenario.windVariantIndex;
-      meta.windSeed = scenario.windSeed;
+      // Non-demetic mode: scenario has all paths × all winds
+      // pathList is organized as [wind0:path0, wind0:path1, ..., wind1:path0, wind1:path1, ...]
+      size_t numWindScenarios = scenario.windScenarios.size();
+      if (numWindScenarios > 0 && scenario.pathList.size() > 0) {
+        size_t numBasePaths = scenario.pathList.size() / numWindScenarios;
+        size_t windIdx = idx / numBasePaths;
+        size_t pathIdx = idx % numBasePaths;
+
+        meta.pathVariantIndex = static_cast<int>(pathIdx);
+        if (windIdx < scenario.windScenarios.size()) {
+          meta.windVariantIndex = scenario.windScenarios[windIdx].windVariantIndex;
+          meta.windSeed = scenario.windScenarios[windIdx].windSeed;
+        } else {
+          meta.windVariantIndex = scenario.windVariantIndex;
+          meta.windSeed = scenario.windSeed;
+        }
+      } else {
+        // Fallback if structure is unexpected
+        meta.pathVariantIndex = static_cast<int>(idx);
+        meta.windVariantIndex = scenario.windVariantIndex;
+        meta.windSeed = scenario.windSeed;
+      }
     }
+
     evalData.scenarioList.push_back(meta);
   }
   if (!evalData.scenarioList.empty()) {
@@ -658,6 +715,7 @@ void MyGP::evalTask(WorkerContext& context)
   // context.evalResults.dump(std::cerr);
 
   if (printEval) {
+    boost::unique_lock<boost::mutex> lock(evalCollectorMutex);
     if (activeEvalCollector) {
       *logger.debug() << "Incoming eval results has "
                       << context.evalResults.pathList.size() << " paths" << endl;
@@ -991,11 +1049,11 @@ int main(int argc, char** argv)
   // we don't know it's there.
   set_new_handler(newHandler);
 
-  // Init GP system.
-  GPInit(1, -1);
-
-  // Initialize ConfigManager (this replaces the old GPConfiguration call)
+  // Initialize ConfigManager first so we can access gpSeed
   ConfigManager::initialize(configFile, *logger.info());
+
+  // Init GP system with seed from config
+  GPInit(1, ConfigManager::getExtraConfig().gpSeed);
 
   // AWS setup
   Aws::SDKOptions options;
@@ -1013,7 +1071,8 @@ int main(int argc, char** argv)
   *logger.info() << "EvaluateMode: " << ConfigManager::getExtraConfig().evaluateMode << endl;
   *logger.info() << "WindScenarios: " << ConfigManager::getExtraConfig().windScenarioCount << endl;
   *logger.info() << "WindSeedBase: " << ConfigManager::getExtraConfig().windSeedBase << endl;
-  *logger.info() << "WindSeedStride: " << ConfigManager::getExtraConfig().windSeedStride << endl << endl;
+  *logger.info() << "WindSeedStride: " << ConfigManager::getExtraConfig().windSeedStride << endl;
+  *logger.info() << "GPSeed: " << ConfigManager::getExtraConfig().gpSeed << endl << endl;
 
   // Create the adf function/terminal set and print it out.
   createNodeSet(adfNs);
@@ -1027,6 +1086,9 @@ int main(int argc, char** argv)
   strStatFile << "data.stc" << ends;
   fout.open(strOutFile.str());
   bout.open(strStatFile.str());
+
+  // Set fixed-point notation for statistics file
+  bout << std::fixed << std::setprecision(6);
 
   std::string startTime = generate_iso8601_timestamp();
   auto runStartTime = std::chrono::steady_clock::now();
@@ -1046,7 +1108,7 @@ int main(int argc, char** argv)
          << " total=" << currentRuns
          << " durationSec=" << deltaSec
          << " rate=" << rate
-         << std::defaultfloat << std::endl;
+         << std::setprecision(6) << std::endl;
     bout.flush();
     lastThroughputTime = now;
     lastSimRunCount = currentRuns;
@@ -1159,6 +1221,7 @@ int main(int argc, char** argv)
         globalSimRunCounter.fetch_add(context.evalResults.pathList.size(), std::memory_order_relaxed);
 
         if (printEval) {
+          boost::unique_lock<boost::mutex> lock(evalCollectorMutex);
           if (activeEvalCollector) {
             appendEvalResults(*activeEvalCollector, context.evalResults);
           } else {
@@ -1532,12 +1595,62 @@ int main(int argc, char** argv)
       if (nanDetector > 0) {
         *logger.warn() << "NanDetector count: " << nanDetector << endl;
       }
-      pop->createGenerationReport(0, gen, fout, bout, *logger.info());
+      auto logStream = logger.info();
+      pop->createGenerationReport(0, gen, fout, bout, *logStream);
       logGenerationStats(gen);
 
+      // ELITE TRACKING: Verify elite is preserved across generations
+      if (gen > 0) {
+        MyGP* currentElite = pop->NthMyGP(pop->bestOfPopulation);
+        gp_scalar currentFitness = currentElite->getFitness();
+        static gp_scalar lastEliteFitness = std::numeric_limits<gp_scalar>::infinity();
+        static std::string lastEliteHash;
+
+        // Compute hash of elite's tree structure
+        std::ostringstream eliteStream;
+        currentElite->save(eliteStream);
+        std::string currentEliteHash = eliteStream.str();
+
+        if (gen == 1) {
+          lastEliteFitness = currentFitness;
+          lastEliteHash = currentEliteHash;
+          *logger.info() << "ELITE_TRACK gen=" << gen << ": Initial elite fitness="
+                        << std::fixed << std::setprecision(6) << currentFitness
+                        << " hash_len=" << currentEliteHash.length() << endl;
+        } else {
+          bool fitnessImproved = currentFitness < lastEliteFitness;
+          bool fitnessWorsened = currentFitness > lastEliteFitness;
+          bool structureChanged = (currentEliteHash != lastEliteHash);
+
+          if (fitnessWorsened) {
+            *logger.warn() << "ELITE_TRACK gen=" << gen << ": ELITISM VIOLATION! Fitness worsened: "
+                          << std::fixed << std::setprecision(6) << lastEliteFitness
+                          << " -> " << currentFitness
+                          << " (delta=" << std::scientific << (currentFitness - lastEliteFitness) << ")" << endl;
+          } else if (fitnessImproved && !structureChanged) {
+            *logger.warn() << "ELITE_TRACK gen=" << gen << ": FITNESS PARADOX! Same structure, different fitness: "
+                          << std::fixed << std::setprecision(6) << lastEliteFitness
+                          << " -> " << currentFitness << " (non-deterministic evaluation!)" << endl;
+          } else if (!fitnessImproved && structureChanged) {
+            *logger.info() << "ELITE_TRACK gen=" << gen << ": Elite replaced by equal/better individual, fitness="
+                          << std::fixed << std::setprecision(6) << currentFitness << endl;
+          } else if (!fitnessImproved && !structureChanged) {
+            *logger.info() << "ELITE_TRACK gen=" << gen << ": Elite preserved unchanged, fitness="
+                          << std::fixed << std::setprecision(6) << currentFitness << endl;
+          } else {
+            *logger.info() << "ELITE_TRACK gen=" << gen << ": Elite improved, fitness="
+                          << std::fixed << std::setprecision(6) << lastEliteFitness
+                          << " -> " << currentFitness << endl;
+          }
+
+          lastEliteFitness = currentFitness;
+          lastEliteHash = currentEliteHash;
+        }
+      }
+
       // DETERMINISM TEST: Clone best to entire population and check for identical fitness
-      // Disabled for production runs - uncomment to test determinism
-      if (false && gen == 2) {
+      // Run at generation 20 for final verification
+      if (gen == 20) {
         *logger.info() << "=== DETERMINISM TEST: Cloning best individual to entire population ===" << endl;
         MyGP* bestGP = pop->NthMyGP(pop->bestOfPopulation);
         gp_scalar bestFitness = bestGP->getFitness();
@@ -1551,14 +1664,20 @@ int main(int argc, char** argv)
           }
         }
 
+        // Enable deterministic logging for this evaluation
+        *logger.info() << "Enabling deterministic logging for cloned population evaluation..." << endl;
+        enableDeterministicTestLogging = true;
+
         // Re-evaluate entire population
         *logger.info() << "Re-evaluating cloned population..." << endl;
         pop->evaluate();
 
-        // Check for fitness variance
+        // Disable deterministic logging after evaluation
+        enableDeterministicTestLogging = false;
+
+        // Check for fitness variance (use double precision for accurate variance calc)
         gp_scalar minFit = std::numeric_limits<gp_scalar>::infinity();
         gp_scalar maxFit = -std::numeric_limits<gp_scalar>::infinity();
-        gp_scalar sumFit = 0.0f;
 
         // Collect all fitness values for detailed analysis
         std::vector<std::pair<int, gp_scalar>> fitnessValues;
@@ -1567,33 +1686,47 @@ int main(int argc, char** argv)
           fitnessValues.push_back(std::make_pair(n, fit));
           minFit = std::min(minFit, fit);
           maxFit = std::max(maxFit, fit);
-          sumFit += fit;
         }
-        gp_scalar avgFit = sumFit / static_cast<gp_scalar>(pop->containerSize());
-        gp_scalar variance = maxFit - minFit;
+        // Use double precision for variance to avoid fp32 rounding issues
+        double variance = static_cast<double>(maxFit) - static_cast<double>(minFit);
 
-        // Sort by fitness to see groupings
-        std::sort(fitnessValues.begin(), fitnessValues.end(),
-                  [](const std::pair<int, gp_scalar>& a, const std::pair<int, gp_scalar>& b) {
-                    return a.second < b.second;
-                  });
+        // Group by exact bit-for-bit equality
+        std::map<gp_scalar, std::vector<int>> fitnessGroups;
+        for (const auto& pair : fitnessValues) {
+          fitnessGroups[pair.second].push_back(pair.first);
+        }
 
         *logger.info() << "Determinism test results:" << endl;
         *logger.info() << "  Population size: " << pop->containerSize() << endl;
         *logger.info() << "  Num threads: " << ConfigManager::getExtraConfig().evalThreads << endl;
         *logger.info() << "  Wind scenarios: " << ConfigManager::getExtraConfig().windScenarioCount << endl;
         *logger.info() << "  Wind seed base: " << ConfigManager::getExtraConfig().windSeedBase << endl;
-        *logger.info() << "  Min fitness: " << minFit << endl;
-        *logger.info() << "  Max fitness: " << maxFit << endl;
-        *logger.info() << "  Avg fitness: " << avgFit << endl;
-        *logger.info() << "  Variance (max-min): " << variance << endl;
-        *logger.info() << endl;
+        *logger.info() << "  Min fitness (fp32): " << std::fixed << std::setprecision(6) << minFit << endl;
+        *logger.info() << "  Max fitness (fp32): " << std::fixed << std::setprecision(6) << maxFit << endl;
+        *logger.info() << "  Variance (fp64): " << std::scientific << std::setprecision(12) << variance << endl;
+        *logger.info() << "  Unique fitness values: " << fitnessGroups.size() << endl;
+        *logger.info() << std::defaultfloat << endl;
 
-        // Print all fitness values (sorted)
-        *logger.info() << "All fitness values (sorted, showing [index] = fitness):" << endl;
-        for (size_t i = 0; i < fitnessValues.size(); ++i) {
-          *logger.info() << "  [" << std::setw(3) << fitnessValues[i].first << "] = "
-                        << std::fixed << std::setprecision(6) << fitnessValues[i].second << endl;
+        // Print groups of identical fitness values
+        *logger.info() << "Fitness groups (bit-for-bit identical):" << endl;
+        int groupNum = 1;
+        for (const auto& group : fitnessGroups) {
+          gp_scalar fitness = group.first;
+          const std::vector<int>& indices = group.second;
+          std::ostringstream indexList;
+          for (size_t i = 0; i < indices.size(); ++i) {
+            if (i > 0) indexList << ", ";
+            indexList << indices[i];
+            // Limit output for large groups
+            if (i >= 19 && indices.size() > 20) {
+              indexList << ", ... (" << (indices.size() - 20) << " more)";
+              break;
+            }
+          }
+          *logger.info() << "Group " << groupNum << ": fitness = "
+                        << std::fixed << std::setprecision(6) << fitness
+                        << " (count=" << indices.size() << ") - indices: " << indexList.str() << endl;
+          groupNum++;
         }
         *logger.info() << std::defaultfloat << endl;
 

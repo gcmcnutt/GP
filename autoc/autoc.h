@@ -51,6 +51,7 @@ public:
   int windSeedBase = 1337;
   int windSeedStride = 1;
   unsigned int randomPathSeedB = 67890;  // Seed for SeededRandomB path generation
+  int gpSeed = -1;  // Seed for GP initialization (-1 = use time-based seed)
 
   // // Custom implementation of the << operator for the extraCfg type
   // std::ostream& operator << (std::ostream& os) {

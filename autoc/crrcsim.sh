@@ -28,7 +28,8 @@ cd $PROGDIR
 # Enable valgrind for debugging if USE_VALGRIND env var is set
 if [ -n "$USE_VALGRIND" ]; then
   VALGRIND_LOG=${CRRCSIM_LOGDIR}/valgrind-$1.$$.log
-  VALGRIND_CMD="valgrind --track-origins=yes --leak-check=no --undef-value-errors=yes --log-file=$VALGRIND_LOG"
+  VALGRIND_SUPP=${PROGDIR}/valgrind-graphics.supp
+  VALGRIND_CMD="valgrind --track-origins=yes --leak-check=no --undef-value-errors=yes --suppressions=$VALGRIND_SUPP --log-file=$VALGRIND_LOG"
   echo "Running with valgrind, log: $VALGRIND_LOG"
 else
   VALGRIND_CMD=""

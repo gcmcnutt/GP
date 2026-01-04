@@ -87,6 +87,7 @@ struct ScenarioMetadata {
   unsigned int windSeed = 0;
   uint64_t scenarioSequence = 0;
   uint64_t bakeoffSequence = 0;
+  bool enableDeterministicLogging = false;
 
   friend class boost::serialization::access;
 
@@ -98,6 +99,9 @@ struct ScenarioMetadata {
     if (version > 2) {
       ar& scenarioSequence;
       ar& bakeoffSequence;
+    }
+    if (version > 3) {
+      ar& enableDeterministicLogging;
     } else if (version > 1) {
       ar& scenarioSequence;
       if (Archive::is_loading::value) {
@@ -109,7 +113,7 @@ struct ScenarioMetadata {
     }
   }
 };
-BOOST_CLASS_VERSION(ScenarioMetadata, 3)
+BOOST_CLASS_VERSION(ScenarioMetadata, 4)
 
 struct EvalData {
   std::vector<char> gp;
