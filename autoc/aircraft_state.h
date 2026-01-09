@@ -4,6 +4,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <stdexcept>
+#include <string>
 #include "gp_types.h"
 
 #ifdef GP_BUILD
@@ -176,23 +179,29 @@ inline int getPathIndex(PathProvider& pathProvider, AircraftState& aircraftState
     if (std::isnan(arg)) {
         return pathProvider.getCurrentIndex();
     }
-    
+
     int steps = CLAMP_DEF((int)arg, -5, 5);
-    gp_scalar distanceSoFar = pathProvider.getPath(pathProvider.getCurrentIndex()).distanceFromStart;
-    gp_scalar distanceGoal = distanceSoFar + steps * SIM_RABBIT_VELOCITY * (SIM_TIME_STEP_MSEC / 1000.0f);
-    int currentStep = pathProvider.getCurrentIndex();
-    
+    // Clamp current index defensively
+    int currentStep = std::clamp(pathProvider.getCurrentIndex(), 0, pathProvider.getPathSize() - 1);
+    const gp_scalar distanceSoFar = pathProvider.getPath(currentStep).distanceFromStart;
+    const gp_scalar distanceGoal = distanceSoFar + steps * SIM_RABBIT_VELOCITY * (SIM_TIME_STEP_MSEC / 1000.0f);
+
+    // Use a small epsilon to avoid off-by-one flip-flops when distanceGoal is
+    // very close to a waypoint boundary.
+    constexpr gp_scalar kEps = static_cast<gp_scalar>(1e-6f);
+
     if (steps > 0) {
-        while (pathProvider.getPath(currentStep).distanceFromStart < distanceGoal && 
-               currentStep < pathProvider.getPathSize() - 1) {
+        while (currentStep < pathProvider.getPathSize() - 1 &&
+               pathProvider.getPath(currentStep).distanceFromStart + kEps < distanceGoal) {
             currentStep++;
         }
-    } else {
-        while (pathProvider.getPath(currentStep).distanceFromStart > distanceGoal && 
-               currentStep > 0) {
+    } else if (steps < 0) {
+        while (currentStep > 0 &&
+               pathProvider.getPath(currentStep).distanceFromStart - kEps > distanceGoal) {
             currentStep--;
         }
     }
+
     return currentStep;
 }
 
@@ -202,12 +211,23 @@ inline int getPathIndex(PathProvider& pathProvider, AircraftState& aircraftState
 struct AircraftState {
   public:
 
-    AircraftState() {}
+    AircraftState()
+      : thisPathIndex(0),
+        dRelVel(0.0f),
+        velocity(gp_vec3::Zero()),
+        aircraft_orientation(gp_quat::Identity()),
+        position(gp_vec3::Zero()),
+        simTimeMsec(0),
+        pitchCommand(0.0f),
+        rollCommand(0.0f),
+        throttleCommand(0.0f),
+        wind_velocity(gp_vec3::Zero()) {}
     AircraftState(int thisPathIndex, gp_scalar relVel, gp_vec3 vel, gp_quat orientation,
       gp_vec3 pos, gp_scalar pc, gp_scalar rc, gp_scalar tc,
       unsigned long int timeMsec)
       : thisPathIndex(thisPathIndex), dRelVel(relVel), velocity(vel), aircraft_orientation(orientation), position(pos), simTimeMsec(timeMsec),
-      pitchCommand(pc), rollCommand(rc), throttleCommand(tc) {
+      pitchCommand(pc), rollCommand(rc), throttleCommand(tc),
+      wind_velocity(gp_vec3::Zero()) {
     }
 
     // Casting ctor for external Eigen scalar types while migrating callers to float
@@ -223,7 +243,8 @@ struct AircraftState {
         simTimeMsec(timeMsec),
         pitchCommand(static_cast<gp_scalar>(pc)),
         rollCommand(static_cast<gp_scalar>(rc)),
-        throttleCommand(static_cast<gp_scalar>(tc)) {}
+        throttleCommand(static_cast<gp_scalar>(tc)),
+        wind_velocity(gp_vec3::Zero()) {}
 
     // generate setters and getters
     int getThisPathIndex() const { return thisPathIndex; }
@@ -250,6 +271,9 @@ struct AircraftState {
     gp_scalar setRollCommand(gp_scalar roll) { return (rollCommand = CLAMP_DEF(roll, -1.0f, 1.0f)); }
     gp_scalar getThrottleCommand() const { return throttleCommand; }
     gp_scalar setThrottleCommand(gp_scalar throttle) { return (throttleCommand = CLAMP_DEF(throttle, -1.0f, 1.0f)); }
+
+    gp_vec3 getWindVelocity() const { return wind_velocity; }
+    void setWindVelocity(const gp_vec3& wind) { wind_velocity = wind; }
 
     void minisimAdvanceState(gp_scalar dt) {
       gp_scalar dtSec = dt / 1000.0f;
@@ -301,6 +325,9 @@ struct AircraftState {
     gp_scalar rollCommand;
     gp_scalar throttleCommand;
 
+    // Wind diagnostic fields (for debugging non-determinism)
+    gp_vec3 wind_velocity;  // Wind vector (north, east, down) from calculate_wind()
+
 #ifdef GP_BUILD
     friend class boost::serialization::access;
 
@@ -315,11 +342,107 @@ struct AircraftState {
       ar& rollCommand;
       ar& throttleCommand;
       ar& simTimeMsec;
+      ar& wind_velocity;
     }
 #endif
 };
 #ifdef GP_BUILD
-BOOST_CLASS_VERSION(AircraftState, 1)
+BOOST_CLASS_VERSION(AircraftState, 2)
 #endif
+
+// Physics trace entry - captures complete FDM state at a single timestep
+// Uses crrcsim native types for bit-exact copying (SCALAR = double)
+// WARNING: Do NOT introduce type conversions - causes rounding errors!
+struct PhysicsTraceEntry {
+  // Simulation metadata
+  uint32_t step;          // Timestep number
+  double simTimeMsec;     // Simulation time in milliseconds (native: double)
+  double dtSec;           // Timestep delta in seconds (SCALAR)
+
+  // Worker identity (for multi-process determinism debugging)
+  int32_t workerId;       // Worker ID (0-7 typically)
+  int32_t workerPid;      // Worker process ID
+  int32_t evalCounter;    // Evaluation counter on this worker
+
+  // Position, velocity, acceleration (world frame) - all SCALAR (double)
+  double pos[3];          // Position [x, y, z]
+  double vel[3];          // Velocity [x, y, z]
+  double acc[3];          // Acceleration [x, y, z]
+  double accPast[3];      // Previous acceleration
+
+  // Orientation and rotation - all SCALAR (double)
+  double quat[4];         // Quaternion [x, y, z, w]
+  double quatDotPast[4];  // Previous quaternion derivative
+  double omegaBody[3];    // Angular velocity in body frame
+  double omegaDotBody[3]; // Angular acceleration
+  double rate[3];         // Rate (may alias omegaBody)
+  double ratePast[3];     // Previous rate
+
+  // Aerodynamic state - all SCALAR (double)
+  double alpha;           // Angle of attack (rad)
+  double beta;            // Sideslip angle (rad)
+  double vRelWind;        // Airspeed magnitude
+  double velRelGround[3]; // Velocity relative to ground
+  double velRelAir[3];    // Velocity relative to air
+  double vLocal[3];       // Local velocity
+  double vLocalDot[3];    // Local velocity derivative
+
+  // Aero calculation details - all SCALAR (double)
+  double cosAlpha, sinAlpha, cosBeta;     // Trig values
+  double CL, CD;                          // Lift and drag coefficients
+  double CL_left, CL_cent, CL_right;     // Spanwise lift distribution
+  double CL_wing;                         // Wing lift coefficient
+  double Cl, Cm, Cn;                      // Moment coefficients
+  double QS;                              // Dynamic pressure × ref area
+
+  // Forces and moments (body frame) - all SCALAR (double)
+  double forceBody[3];    // Total force
+  double momentBody[3];   // Total moment
+
+  // Environment - all SCALAR (double)
+  double wind[3];         // Wind velocity
+  double localAirmass[3]; // Local airmass velocity
+  double gustBody[6];     // Gust in body frame: [v_V_gust_body (3), v_R_omega_gust_body (3)]
+  double density;         // Air density
+  double gravity;         // Gravity magnitude
+  double geocentricLat, geocentricLon, geocentricR;  // Geocentric position
+
+  // Control inputs - all SCALAR (double) from TSimInputs
+  double pitchCommand;    // GP pitch command
+  double rollCommand;     // GP roll command
+  double throttleCommand; // GP throttle command
+  double elevator;        // Sim elevator input
+  double aileron;         // Sim aileron input
+  double rudder;          // Sim rudder input
+  double throttle;        // Sim throttle input
+
+  // RNG state - exact integer types
+  uint16_t rngState16;    // 16-bit RNG state
+  uint32_t rngState32;    // 32-bit RNG state
+
+  // Path tracking
+  int32_t pathIndex;      // Current path index
+
+  PhysicsTraceEntry() { memset(this, 0, sizeof(*this)); }
+
+#ifdef GP_BUILD
+  template <class Archive>
+  void serialize(Archive& ar, const unsigned int version) {
+    ar& step & simTimeMsec & dtSec;
+    ar& workerId & workerPid & evalCounter;
+    ar& pos & vel & acc & accPast;
+    ar& quat & quatDotPast & omegaBody & omegaDotBody & rate & ratePast;
+    ar& alpha & beta & vRelWind & velRelGround & velRelAir & vLocal & vLocalDot;
+    ar& cosAlpha & sinAlpha & cosBeta;
+    ar& CL & CD & CL_left & CL_cent & CL_right & CL_wing & Cl & Cm & Cn & QS;
+    ar& forceBody & momentBody;
+    ar& wind & localAirmass & gustBody & density & gravity;
+    ar& geocentricLat & geocentricLon & geocentricR;
+    ar& pitchCommand & rollCommand & throttleCommand;
+    ar& elevator & aileron & rudder & throttle;
+    ar& rngState16 & rngState32 & pathIndex;
+  }
+#endif
+};
 
 #endif

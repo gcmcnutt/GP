@@ -8,7 +8,9 @@ PORT=$3
 PROGDIR=${HOME}/crsim/crrcsim-0.9.13
 PROG=build/crrcsim
 CRRCSIM_LOGDIR=/tmp/crrcsim
-CRRCSIM_LOG=${CRRCSIM_LOGDIR}/autoc_crrcsim-$1.$$.log
+# Include worker index and pid in the log name for easier correlation
+CRRCSIM_LOG=${CRRCSIM_LOGDIR}/autoc_crrcsim-${BASE}.${INSTANCE}.$$.log
+export AUTOC_WORKER_INDEX=${INSTANCE}
 
 # point to an instance of Xvfb for all but the first
 # Xvfb :2 -screen 0 1024x768x8 &
@@ -25,14 +27,5 @@ esac
 
 cd $PROGDIR
 
-# Enable valgrind for debugging if USE_VALGRIND env var is set
-if [ -n "$USE_VALGRIND" ]; then
-  VALGRIND_LOG=${CRRCSIM_LOGDIR}/valgrind-$1.$$.log
-  VALGRIND_SUPP=${PROGDIR}/valgrind-graphics.supp
-  VALGRIND_CMD="valgrind --track-origins=yes --leak-check=no --undef-value-errors=yes --suppressions=$VALGRIND_SUPP --log-file=$VALGRIND_LOG"
-  echo "Running with valgrind, log: $VALGRIND_LOG"
-else
-  VALGRIND_CMD=""
-fi
 
 DISPLAY=$DISPLAY stdbuf -o0 -e0 $VALGRIND_CMD $PROG -g autoc_config.xml -p "$PORT" -i AUTOC > $CRRCSIM_LOG 2>&1

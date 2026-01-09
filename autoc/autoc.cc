@@ -22,6 +22,9 @@ From skeleton/skeleton.cc
 #include <limits>
 #include <iomanip>
 #include <random>
+#include <unistd.h>
+#include <cstring>
+#include <mutex>
 
 #include "gp.h"
 #include "gp_bytecode.h"
@@ -50,7 +53,6 @@ From skeleton/skeleton.cc
 #include <boost/log/support/date_time.hpp>
 #include <boost/iostreams/stream.hpp>
 #include <boost/iostreams/device/back_inserter.hpp>
-#include <boost/archive/text_oarchive.hpp>
 #include <boost/archive/binary_oarchive.hpp>
 
 using namespace std;
@@ -59,6 +61,26 @@ namespace logging = boost::log;
 Logger logger;
 std::atomic_bool printEval = false; // verbose (used for rendering best of population)
 std::atomic_bool enableDeterministicTestLogging = false; // enable detailed logging during determinism test
+
+// FNV-1a hash for verification (same as dtest_tracker)
+static uint64_t hashData(const void* data, size_t len) {
+    const uint8_t* bytes = static_cast<const uint8_t*>(data);
+    uint64_t hash = 0xcbf29ce484222325ULL;
+    for (size_t i = 0; i < len; i++) {
+        hash ^= bytes[i];
+        hash *= 0x100000001b3ULL;
+    }
+    return hash;
+}
+
+// Hash serialized AircraftState vector to avoid padding issues
+static uint64_t hashAircraftStateVector(const std::vector<AircraftState>& vec) {
+    std::ostringstream oss(std::ios::binary);
+    boost::archive::binary_oarchive oa(oss);
+    oa << vec;
+    std::string serialized = oss.str();
+    return hashData(serialized.data(), serialized.size());
+}
 std::vector<MyGP*> tasks = std::vector<MyGP*>();
 
 // Forward declarations for global variables
@@ -81,6 +103,61 @@ std::atomic<uint64_t> evaluationProgress{0};
 std::atomic<uint64_t> globalScenarioCounter{0};
 std::atomic<uint64_t> bakeoffPathCounter{0};
 std::atomic<uint64_t> globalSimRunCounter{0};
+
+// Global elite tracking across generations (dispatcher-side)
+static gp_scalar gLastEliteFitness = std::numeric_limits<gp_scalar>::infinity();
+static std::string gLastEliteHash;
+static EvalResults gLastEliteTrace;
+static std::string gLastEliteKey;
+static uint64_t gLastEliteGpHash = 0;
+static std::string gLastEliteGpString;  // Lisp form of elite GP for exact comparison
+static int gLastEliteLength = std::numeric_limits<int>::max();
+static int gLastEliteDepth = std::numeric_limits<int>::max();
+static int gEliteDivergenceCount = 0;
+static int gEliteCheckCount = 0;
+static EvalResults gPriorEliteEval;
+static gp_scalar gPriorEliteFitness = std::numeric_limits<gp_scalar>::infinity();
+static bool gPriorEliteCaptured = false;
+static size_t gLastEliteNumPaths = 0;  // Number of paths in elite evaluation
+static uint64_t gLastEliteScenarioHash = 0;  // Hash of scenario metadata
+static bool gLastEliteWasBakeoff = false;  // Whether baseline elite was evaluated in bakeoff mode
+static std::mutex gPriorEliteMutex;
+
+// Store ALL eval results during current generation, keyed by gpHash
+// This allows us to look up the elite's trace after selection completes
+static std::map<uint64_t, EvalResults> gCurrentGenEvalResults;
+static std::mutex gCurrentGenEvalResultsMutex;
+static std::mutex gEliteTrackingMutex;  // Protects all gLastElite* variables for reads/writes
+
+static bool bitwiseEqual(gp_scalar a, gp_scalar b) {
+  return std::memcmp(&a, &b, sizeof(gp_scalar)) == 0;
+}
+
+static uint64_t computeGpHash(const EvalResults& res) {
+  if (res.gpHash != 0) {
+    return res.gpHash;
+  }
+  // gpHash must be populated; fallback only to maintain runtime safety in debug.
+  if (!res.gp.empty()) {
+    return hashByteVector(res.gp);
+  }
+  return 0;
+}
+
+// Hash scenario metadata to detect if path set changed
+static uint64_t computeScenarioHash(const std::vector<ScenarioMetadata>& scenarios) {
+  uint64_t hash = 0xcbf29ce484222325ULL; // FNV-1a offset basis
+  for (const auto& s : scenarios) {
+    // Hash: pathVariantIndex, windVariantIndex, windSeed
+    hash ^= s.pathVariantIndex;
+    hash *= 0x100000001b3ULL;
+    hash ^= s.windVariantIndex;
+    hash *= 0x100000001b3ULL;
+    hash ^= s.windSeed;
+    hash *= 0x100000001b3ULL;
+  }
+  return hash;
+}
 
 
 
@@ -312,21 +389,36 @@ void warnIfScenarioMismatch() {
 
 void clearEvalResults(EvalResults& result) {
   result.gp.clear();
+  result.gpHash = 0;
   result.crashReasonList.clear();
   result.pathList.clear();
   result.aircraftStateList.clear();
   result.scenario = ScenarioMetadata();
   result.scenarioList.clear();
+  result.debugSamples.clear();
+  result.physicsTrace.clear();
+  result.workerId = -1;
+  result.workerPid = 0;
+  result.workerEvalCounter = 0;
 }
 
 void appendEvalResults(EvalResults& dest, const EvalResults& src) {
   if (dest.gp.empty()) {
     dest.gp = src.gp;
   }
+  // Copy gpHash from first evaluation (should be same for all scenarios of same GP)
+  if (dest.gpHash == 0 && src.gpHash != 0) {
+    dest.gpHash = src.gpHash;
+  }
   dest.crashReasonList.insert(dest.crashReasonList.end(), src.crashReasonList.begin(), src.crashReasonList.end());
   dest.pathList.insert(dest.pathList.end(), src.pathList.begin(), src.pathList.end());
   dest.aircraftStateList.insert(dest.aircraftStateList.end(), src.aircraftStateList.begin(), src.aircraftStateList.end());
   dest.scenarioList.insert(dest.scenarioList.end(), src.scenarioList.begin(), src.scenarioList.end());
+  dest.debugSamples.insert(dest.debugSamples.end(), src.debugSamples.begin(), src.debugSamples.end());
+  dest.physicsTrace.insert(dest.physicsTrace.end(), src.physicsTrace.begin(), src.physicsTrace.end());
+  dest.workerId = src.workerId;
+  dest.workerPid = src.workerPid;
+  dest.workerEvalCounter = src.workerEvalCounter;
 }
 
 } // namespace
@@ -439,6 +531,10 @@ public:
             continue;
           }
 
+          // Enable detailed logging only when re-evaluating the previous elite.
+          bool enableLogging = (candidateIndex == bestOfPopulation);
+          bool prevLogging = enableDeterministicTestLogging.exchange(enableLogging, std::memory_order_relaxed);
+
           int originalScenarioIndex = candidate->getScenarioIndex();
           candidate->setBakeoffMode(true);
           clearEvalResults(aggregatedEvalResults);
@@ -467,10 +563,35 @@ public:
             ? cumulativeFitness / static_cast<gp_scalar>(scenariosEvaluated)
             : std::numeric_limits<gp_scalar>::infinity();
 
+          // If this candidate is the prior elite, detect drift even if it loses the top slot.
+          std::ostringstream candStream;
+          candidate->save(candStream);
+          std::string candHash = candStream.str();
+          if (!gLastEliteHash.empty() && candHash == gLastEliteHash && !bitwiseEqual(averageFitness, gLastEliteFitness)) {
+            gp_scalar delta = averageFitness - gLastEliteFitness;
+            *logger.warn() << "ELITE_TRACE: prior elite re-evaluated with different fitness before selection"
+                           << " prev=" << std::fixed << std::setprecision(6) << gLastEliteFitness
+                           << " current=" << averageFitness
+                           << " delta=" << std::scientific << delta << std::defaultfloat << endl;
+          }
+
+          // Restore previous logging state before moving on.
+          enableDeterministicTestLogging.store(prevLogging, std::memory_order_relaxed);
+
           if (averageFitness < bestAggregatedFitness) {
             bestAggregatedFitness = averageFitness;
             bestOfEvalResults = aggregatedEvalResults;
             best = candidate;
+
+            // Store bakeoff winner's trace for determinism checking
+            // This is the only place where we capture elite's aggregated multi-scenario results
+            if (bestOfEvalResults.gpHash != 0) {
+              std::lock_guard<std::mutex> lock(gCurrentGenEvalResultsMutex);
+              gCurrentGenEvalResults[bestOfEvalResults.gpHash] = bestOfEvalResults;
+              *logger.info() << "ELITE_STORE: Stored bakeoff winner gpHash=0x" << std::hex << bestOfEvalResults.gpHash << std::dec
+                             << " paths=" << bestOfEvalResults.pathList.size()
+                             << " (map now has " << gCurrentGenEvalResults.size() << " entries)" << endl;
+            }
           }
         }
 
@@ -563,8 +684,8 @@ public:
       // path name is $base/RunDate/gen$gen.dmp
       request.SetKey(computedKeyName);
 
-      std::ostringstream oss;
-      boost::archive::text_oarchive oa(oss);
+      std::ostringstream oss(std::ios::binary);
+      boost::archive::binary_oarchive oa(oss);
       oa << bestOfEvalResults;
 
       std::shared_ptr<Aws::StringStream> ss = Aws::MakeShared<Aws::StringStream>("");
@@ -628,8 +749,16 @@ void MyGP::evalTask(WorkerContext& context)
   const ScenarioDescriptor& scenario = scenarioForIndex(getScenarioIndex());
   uint64_t scenarioSequence = globalScenarioCounter.fetch_add(1, std::memory_order_relaxed) + 1;
 
+  // Generate Lisp-form string of GP for exact comparison
+  std::ostringstream gpStringStream;
+  printOn(gpStringStream);
+  std::string currentGpString = gpStringStream.str();
+
   EvalData evalData;
   evalData.gp = buffer;
+  // Hash the Lisp string (deterministic) instead of binary serialization
+  evalData.gpHash = hashString(currentGpString);
+  evalData.isEliteReeval = false;  // Will be set to true below if this is an elite re-evaluation
   evalData.pathList = scenario.pathList;
   evalData.scenario.scenarioSequence = scenarioSequence;
   evalData.scenario.bakeoffSequence = 0;
@@ -640,6 +769,7 @@ void MyGP::evalTask(WorkerContext& context)
 
   const GPVariables& gpCfg = ConfigManager::getGPConfig();
 
+  // Build scenario list FIRST before checking for elite re-eval
   for (size_t idx = 0; idx < scenario.pathList.size(); ++idx) {
     ScenarioMetadata meta;
     meta.scenarioSequence = scenarioSequence;
@@ -698,10 +828,49 @@ void MyGP::evalTask(WorkerContext& context)
   }
 
   evalData.sanitizePaths();
+
+  // Check if this is an elite re-evaluation BEFORE sending to worker
+  // This allows crrcsim to enable detailed aero logging during the evaluation
+  // IMPORTANT: Must check BOTH GP hash AND scenario configuration (for deme mode)
+  {
+    std::lock_guard<std::mutex> lock(gEliteTrackingMutex);
+    size_t currentNumPaths = evalData.pathList.size();
+    uint64_t currentScenarioHash = computeScenarioHash(evalData.scenarioList);
+
+    bool gpHashMatches = (gLastEliteGpHash != 0) && (evalData.gpHash == gLastEliteGpHash);
+    bool pathCountMatches = (currentNumPaths == gLastEliteNumPaths);
+    bool scenarioMatches = (currentScenarioHash == gLastEliteScenarioHash);
+    bool bakeoffMatches = (isBakeoff == gLastEliteWasBakeoff);
+
+    // Only flag as elite re-eval if ALL conditions match AND both are bakeoff evaluations
+    if (gpHashMatches && pathCountMatches && scenarioMatches && bakeoffMatches && isBakeoff) {
+      evalData.isEliteReeval = true;
+    }
+  }
+
   sendRPC(*context.socket, evalData);
 
   // How did it go?
   context.evalResults = receiveRPC<EvalResults>(*context.socket);
+
+  // Verify GP payload integrity (dispatcher vs worker)
+  if (context.evalResults.gpHash == 0 && !context.evalResults.gp.empty()) {
+    context.evalResults.gpHash = hashByteVector(context.evalResults.gp);
+  }
+  if (evalData.gpHash != 0 && context.evalResults.gpHash != 0 &&
+      evalData.gpHash != context.evalResults.gpHash) {
+    *logger.warn() << "[AUTOC_GP_HASH_MISMATCH] expected=0x"
+                   << std::hex << evalData.gpHash
+                   << " got=0x" << context.evalResults.gpHash
+                   << std::dec
+                   << " workerId=" << context.evalResults.workerId
+                   << " workerPid=" << context.evalResults.workerPid
+                   << " evalCounter=" << context.evalResults.workerEvalCounter
+                   << " size=" << evalData.gp.size()
+                   << endl;
+  }
+
+
   if (context.evalResults.scenario.windSeed == 0 && evalData.scenario.windSeed != 0) {
     context.evalResults.scenario = evalData.scenario;
   }
@@ -726,6 +895,46 @@ void MyGP::evalTask(WorkerContext& context)
       bestOfEvalResults = context.evalResults;
     }
   }
+
+  // NOTE: We no longer store every evaluation in gCurrentGenEvalResults.
+  // This was causing massive memory usage (1.5GB peak from copying physicsTrace 758k times).
+  // Instead, we only store the elite's EvalResults during bakeoff (see line ~1855).
+  // The map is used solely for elite determinism checking, not for all individuals.
+
+  // Capture re-evaluation of prior generation elite (same GP structure AND same path set)
+  // CRITICAL: Must verify GP structure, scenario/path set, AND bakeoff mode match
+  // We only compare bakeoff-to-bakeoff evaluations (same fitness calculation code path)
+  bool isEliteReeval = false;
+  {
+    std::lock_guard<std::mutex> lock(gEliteTrackingMutex);
+    size_t currentNumPaths = context.evalResults.pathList.size();
+    uint64_t currentScenarioHash = computeScenarioHash(context.evalResults.scenarioList);
+
+    bool gpMatches = !gLastEliteGpString.empty() && (currentGpString == gLastEliteGpString);
+    bool pathCountMatches = (currentNumPaths == gLastEliteNumPaths);
+    bool scenarioMatches = (currentScenarioHash == gLastEliteScenarioHash);
+    bool bakeoffMatches = (isBakeoff == gLastEliteWasBakeoff);
+
+    // Only flag as elite re-eval if ALL conditions match AND both are bakeoff evaluations
+    if (gpMatches && pathCountMatches && scenarioMatches && bakeoffMatches && isBakeoff) {
+      isEliteReeval = true;
+      evalData.isEliteReeval = true;  // Enable detailed logging in worker
+    } else if (gpMatches && (!pathCountMatches || !scenarioMatches)) {
+      // Same GP but different path set - NOT a valid re-evaluation for comparison
+      *logger.warn() << "ELITE_REEVAL_MISMATCH: Same GP but different path set detected"
+                     << " paths=" << currentNumPaths << " vs " << gLastEliteNumPaths
+                     << " scenarioHash=0x" << std::hex << currentScenarioHash
+                     << " vs 0x" << gLastEliteScenarioHash << std::dec << endl;
+    } else if (gpMatches && pathCountMatches && scenarioMatches && !bakeoffMatches) {
+      // Same GP and path set, but different evaluation mode (tournament vs bakeoff)
+      *logger.debug() << "ELITE_REEVAL_SKIP: Same GP but different eval mode"
+                      << " current=" << (isBakeoff ? "bakeoff" : "tournament")
+                      << " baseline=" << (gLastEliteWasBakeoff ? "bakeoff" : "tournament") << endl;
+    }
+  }
+
+  // Note: Can't capture fitness here yet - it's computed later in the loop
+  // We'll capture it after stdFitness is finalized (after line 1141)
 
   // Compute the fitness results for each path
   for (int i = 0; i < context.evalResults.pathList.size(); i++) {
@@ -993,10 +1202,35 @@ void MyGP::evalTask(WorkerContext& context)
 
   // normalize
   stdFitness /= context.evalResults.pathList.size();
-  
+
   // Mark fitness as valid for the GP library
   fitnessValid = 1;
-  
+
+  // NOW capture elite re-evaluation (after fitness is computed)
+  if (isEliteReeval) {
+    std::lock_guard<std::mutex> lock(gPriorEliteMutex);
+    gPriorEliteEval = context.evalResults;
+    gPriorEliteFitness = stdFitness;
+    gPriorEliteCaptured = true;
+
+    *logger.info() << "ELITE_REEVAL: Detected re-evaluation of prior elite"
+                   << " gpHash=0x" << std::hex << evalData.gpHash << std::dec
+                   << " fitness=" << std::fixed << std::setprecision(6) << stdFitness << endl;
+
+    // Check for divergence immediately (don't wait until next elite change)
+    {
+      std::lock_guard<std::mutex> eliteLock(gEliteTrackingMutex);
+      if (!bitwiseEqual(stdFitness, gLastEliteFitness)) {
+        gEliteDivergenceCount++;
+        *logger.warn() << "ELITE_REEVAL: DIVERGENCE DETECTED during re-evaluation!"
+                       << " baseline=" << std::fixed << std::setprecision(6) << gLastEliteFitness
+                       << " reeval=" << stdFitness
+                       << " delta=" << std::scientific << (stdFitness - gLastEliteFitness)
+                       << std::defaultfloat << endl;
+      }
+    }
+  }
+
 }
 
 void newHandler()
@@ -1053,7 +1287,14 @@ int main(int argc, char** argv)
   ConfigManager::initialize(configFile, *logger.info());
 
   // Init GP system with seed from config
-  GPInit(1, ConfigManager::getExtraConfig().gpSeed);
+  // Handle -1 as time-based seed (GP library doesn't recognize this convention)
+  long gpSeed;
+  if (ConfigManager::getExtraConfig().gpSeed == -1) {
+    gpSeed = static_cast<long>(time(NULL));
+  } else {
+    gpSeed = static_cast<long>(ConfigManager::getExtraConfig().gpSeed);
+  }
+  GPInit(1, gpSeed);
 
   // AWS setup
   Aws::SDKOptions options;
@@ -1072,7 +1313,8 @@ int main(int argc, char** argv)
   *logger.info() << "WindScenarios: " << ConfigManager::getExtraConfig().windScenarioCount << endl;
   *logger.info() << "WindSeedBase: " << ConfigManager::getExtraConfig().windSeedBase << endl;
   *logger.info() << "WindSeedStride: " << ConfigManager::getExtraConfig().windSeedStride << endl;
-  *logger.info() << "GPSeed: " << ConfigManager::getExtraConfig().gpSeed << endl << endl;
+  *logger.info() << "GPSeed: " << ConfigManager::getExtraConfig().gpSeed << endl;
+  *logger.info() << "RandomPathSeedB: " << ConfigManager::getExtraConfig().randomPathSeedB << endl << endl;
 
   // Create the adf function/terminal set and print it out.
   createNodeSet(adfNs);
@@ -1115,14 +1357,22 @@ int main(int argc, char** argv)
   };
 
   // prime the paths?
+  // Handle -1 as time-based seed for path generation
+  unsigned int pathSeed;
+  if (ConfigManager::getExtraConfig().randomPathSeedB == -1) {
+    pathSeed = static_cast<unsigned int>(time(NULL));
+  } else {
+    pathSeed = static_cast<unsigned int>(ConfigManager::getExtraConfig().randomPathSeedB);
+  }
+
   generationPaths = generateSmoothPaths(ConfigManager::getExtraConfig().generatorMethod,
                                         ConfigManager::getExtraConfig().simNumPathsPerGen,
                                         SIM_PATH_BOUNDS, SIM_PATH_BOUNDS,
-                                        ConfigManager::getExtraConfig().randomPathSeedB);
+                                        pathSeed);
 
   // DEBUG: Log segment counts for each path
   std::cout << "\n=== Path Segment Counts (method=" << ConfigManager::getExtraConfig().generatorMethod
-            << ", seed=" << ConfigManager::getExtraConfig().randomPathSeedB << ") ===" << std::endl;
+            << ", seed=" << pathSeed << ") ===" << std::endl;
   int maxSegments = 0;
   for (size_t i = 0; i < generationPaths.size(); i++) {
     int segCount = generationPaths[i].size();
@@ -1172,6 +1422,7 @@ int main(int argc, char** argv)
         const ScenarioDescriptor& scenario = scenarioForIndex(getScenarioIndex());
         EvalData evalData;
         evalData.gp = bytecodeBuffer;
+        evalData.gpHash = hashByteVector(evalData.gp);
         evalData.pathList = scenario.pathList;
         uint64_t scenarioSequence = globalScenarioCounter.fetch_add(1, std::memory_order_relaxed) + 1;
         evalData.scenario.scenarioSequence = scenarioSequence;
@@ -1205,10 +1456,24 @@ int main(int argc, char** argv)
             : 0;
         }
         evalData.sanitizePaths();
+        const bool logDispatch = enableDeterministicTestLogging.load(std::memory_order_relaxed);
+        if (logDispatch) {
+          *logger.info() << "[AUTOC_SEND_GP] workerId=" << context.workerId
+                         << " gpHash=0x" << std::hex << evalData.gpHash << std::dec
+                         << " bytes=" << evalData.gp.size()
+                         << " scenarioSeq=" << scenarioSequence
+                         << " (bytecode eval)"
+                         << endl;
+        }
         sendRPC(*context.socket, evalData);
         
         // Get simulation results
         context.evalResults = receiveRPC<EvalResults>(*context.socket);
+
+        if (context.evalResults.gpHash == 0 && !context.evalResults.gp.empty()) {
+          context.evalResults.gpHash = hashByteVector(context.evalResults.gp);
+        }
+
         if (context.evalResults.pathList.empty() && !evalData.pathList.empty()) {
           context.evalResults.pathList = evalData.pathList;
         }
@@ -1525,8 +1790,8 @@ int main(int argc, char** argv)
       request.SetBucket(ConfigManager::getExtraConfig().s3Bucket);
       request.SetKey(computedKeyName);
 
-      std::ostringstream oss;
-      boost::archive::text_oarchive oa(oss);
+      std::ostringstream oss(std::ios::binary);
+      boost::archive::binary_oarchive oa(oss);
       oa << bestOfEvalResults;
 
       std::shared_ptr<Aws::StringStream> ss = Aws::MakeShared<Aws::StringStream>("");
@@ -1557,11 +1822,25 @@ int main(int argc, char** argv)
 
     for (int gen = 1; gen <= ConfigManager::getGPConfig().NumberOfGenerations; gen++)
     {
+      // Clear eval results from previous generation
+      {
+        std::lock_guard<std::mutex> lock(gCurrentGenEvalResultsMutex);
+        gCurrentGenEvalResults.clear();
+      }
+
       // For this generation, build a smooth path goal
+      // Handle -1 as time-based seed for path generation
+      unsigned int genPathSeed;
+      if (ConfigManager::getExtraConfig().randomPathSeedB == -1) {
+        genPathSeed = static_cast<unsigned int>(time(NULL));
+      } else {
+        genPathSeed = static_cast<unsigned int>(ConfigManager::getExtraConfig().randomPathSeedB);
+      }
+
       generationPaths = generateSmoothPaths(ConfigManager::getExtraConfig().generatorMethod,
                                             ConfigManager::getExtraConfig().simNumPathsPerGen,
                                             SIM_PATH_BOUNDS, SIM_PATH_BOUNDS,
-                                            ConfigManager::getExtraConfig().randomPathSeedB);
+                                            genPathSeed);
       rebuildGenerationScenarios(generationPaths);
       warnIfScenarioMismatch();
 
@@ -1581,10 +1860,6 @@ int main(int argc, char** argv)
         delete oldPop;
       }
 
-      MyGP* best = pop->NthMyGP(pop->bestOfPopulation);
-      best->setScenarioIndex(computeScenarioIndexForIndividual(pop->bestOfPopulation));
-      best->evaluate();
-
       // reverse order names for s3...
       computedKeyName = startTime + "/gen" + std::to_string(10000 - gen) + ".dmp";
       pop->endOfEvaluation();
@@ -1599,146 +1874,622 @@ int main(int argc, char** argv)
       pop->createGenerationReport(0, gen, fout, bout, *logStream);
       logGenerationStats(gen);
 
-      // ELITE TRACKING: Verify elite is preserved across generations
-      if (gen > 0) {
-        MyGP* currentElite = pop->NthMyGP(pop->bestOfPopulation);
-        gp_scalar currentFitness = currentElite->getFitness();
-        static gp_scalar lastEliteFitness = std::numeric_limits<gp_scalar>::infinity();
-        static std::string lastEliteHash;
+      // ELITE TRACE CAPTURE: Save full simulation trace when elite is evaluated
+      // Compare traces when fitness worsens to identify root cause
 
-        // Compute hash of elite's tree structure
-        std::ostringstream eliteStream;
-        currentElite->save(eliteStream);
-        std::string currentEliteHash = eliteStream.str();
+      // Helper to compute ULP (Units in Last Place) difference for float32
+      auto computeULP = [](float a, float b) -> int64_t {
+        if (std::isnan(a) || std::isnan(b)) return INT64_MAX;
+        if (a == b) return 0;
 
-        if (gen == 1) {
-          lastEliteFitness = currentFitness;
-          lastEliteHash = currentEliteHash;
-          *logger.info() << "ELITE_TRACK gen=" << gen << ": Initial elite fitness="
-                        << std::fixed << std::setprecision(6) << currentFitness
-                        << " hash_len=" << currentEliteHash.length() << endl;
-        } else {
-          bool fitnessImproved = currentFitness < lastEliteFitness;
-          bool fitnessWorsened = currentFitness > lastEliteFitness;
-          bool structureChanged = (currentEliteHash != lastEliteHash);
+        uint32_t bits_a, bits_b;
+        std::memcpy(&bits_a, &a, sizeof(float));
+        std::memcpy(&bits_b, &b, sizeof(float));
 
-          if (fitnessWorsened) {
-            *logger.warn() << "ELITE_TRACK gen=" << gen << ": ELITISM VIOLATION! Fitness worsened: "
-                          << std::fixed << std::setprecision(6) << lastEliteFitness
-                          << " -> " << currentFitness
-                          << " (delta=" << std::scientific << (currentFitness - lastEliteFitness) << ")" << endl;
-          } else if (fitnessImproved && !structureChanged) {
-            *logger.warn() << "ELITE_TRACK gen=" << gen << ": FITNESS PARADOX! Same structure, different fitness: "
-                          << std::fixed << std::setprecision(6) << lastEliteFitness
-                          << " -> " << currentFitness << " (non-deterministic evaluation!)" << endl;
-          } else if (!fitnessImproved && structureChanged) {
-            *logger.info() << "ELITE_TRACK gen=" << gen << ": Elite replaced by equal/better individual, fitness="
-                          << std::fixed << std::setprecision(6) << currentFitness << endl;
-          } else if (!fitnessImproved && !structureChanged) {
-            *logger.info() << "ELITE_TRACK gen=" << gen << ": Elite preserved unchanged, fitness="
-                          << std::fixed << std::setprecision(6) << currentFitness << endl;
-          } else {
-            *logger.info() << "ELITE_TRACK gen=" << gen << ": Elite improved, fitness="
-                          << std::fixed << std::setprecision(6) << lastEliteFitness
-                          << " -> " << currentFitness << endl;
+        // Handle sign bit - convert to signed magnitude representation
+        int32_t signed_a = (bits_a & 0x80000000) ? (0x80000000 - (bits_a & 0x7FFFFFFF)) : bits_a;
+        int32_t signed_b = (bits_b & 0x80000000) ? (0x80000000 - (bits_b & 0x7FFFFFFF)) : bits_b;
+
+        return std::abs(static_cast<int64_t>(signed_a) - static_cast<int64_t>(signed_b));
+      };
+
+      // In-memory trace comparison function
+      auto compareTraces = [&](const EvalResults& trace1, const EvalResults& trace2,
+                               const std::string& label1, const std::string& label2) {
+        *logger.warn() << "=== IN-MEMORY TRACE COMPARISON ===" << endl;
+        *logger.warn() << "Trace 1: " << label1
+                      << " workerId=" << trace1.workerId
+                      << " pid=" << trace1.workerPid
+                      << " evalCounter=" << trace1.workerEvalCounter << endl;
+        *logger.warn() << "Trace 2: " << label2
+                      << " workerId=" << trace2.workerId
+                      << " pid=" << trace2.workerPid
+                      << " evalCounter=" << trace2.workerEvalCounter << endl;
+        *logger.warn() << endl;
+
+        // Helper for computing ULP distance between doubles (native physics precision)
+        auto computeULPDouble = [](double a, double b) -> int64_t {
+          if (a == b) return 0;
+          if (std::isnan(a) || std::isnan(b)) return INT64_MAX;
+
+          int64_t ia, ib;
+          memcpy(&ia, &a, sizeof(double));
+          memcpy(&ib, &b, sizeof(double));
+
+          // Handle sign bit
+          if (ia < 0) ia = INT64_MIN - ia;
+          if (ib < 0) ib = INT64_MIN - ib;
+
+          return std::abs(ia - ib);
+        };
+
+        // Helper for double vectors (3D)
+        auto ulpDouble3 = [&](const double* a, const double* b, int64_t out[3]) {
+          for (int i = 0; i < 3; ++i) {
+            out[i] = computeULPDouble(a[i], b[i]);
+          }
+        };
+
+        // Require physicsTrace - no fallback to debugSamples
+        if (trace1.physicsTrace.empty() || trace2.physicsTrace.empty()) {
+          *logger.error() << "*** ERROR: Physics trace data missing! ***" << endl;
+          *logger.error() << "  Trace1 physicsTrace size: " << trace1.physicsTrace.size()
+                         << " (expected non-empty)" << endl;
+          *logger.error() << "  Trace2 physicsTrace size: " << trace2.physicsTrace.size()
+                         << " (expected non-empty)" << endl;
+          *logger.error() << "  This indicates crrcsim binary was not recompiled with physics trace code." << endl;
+          *logger.error() << "  Trace comparison ABORTED - cannot proceed without native precision data." << endl;
+          return;
+        }
+
+        *logger.warn() << "=== PHYSICS TRACE COMPARISON (native double precision) ===" << endl;
+
+          size_t pathCount = std::min(trace1.physicsTrace.size(), trace2.physicsTrace.size());
+
+          // First pass: scan for RNG divergence to find where non-determinism starts
+          int firstRngDivergenceStep = -1;
+          size_t firstRngDivergencePath = 0;
+          for (size_t pathIdx = 0; pathIdx < pathCount && firstRngDivergenceStep < 0; ++pathIdx) {
+            const auto& p1 = trace1.physicsTrace[pathIdx];
+            const auto& p2 = trace2.physicsTrace[pathIdx];
+            if (p1.empty() || p2.empty()) continue;
+
+            size_t stepCount = std::min(p1.size(), p2.size());
+            for (size_t stepIdx = 0; stepIdx < stepCount; ++stepIdx) {
+              const auto& s1 = p1[stepIdx];
+              const auto& s2 = p2[stepIdx];
+              bool rngDiff = (s1.rngState16 != s2.rngState16) || (s1.rngState32 != s2.rngState32);
+              if (rngDiff) {
+                firstRngDivergenceStep = static_cast<int>(stepIdx);
+                firstRngDivergencePath = pathIdx;
+                break;
+              }
+            }
           }
 
-          lastEliteFitness = currentFitness;
-          lastEliteHash = currentEliteHash;
+          if (firstRngDivergenceStep >= 0) {
+            *logger.warn() << "*** RNG DIVERGENCE DETECTED ***" << endl;
+            *logger.warn() << "First RNG divergence at Path " << firstRngDivergencePath
+                          << ", Step " << firstRngDivergenceStep
+                          << " (t=" << (firstRngDivergenceStep * 3) << "ms physics step)" << endl;
+            *logger.warn() << endl;
+
+            // Print context window: 3 steps before and 2 steps after the divergence
+            const auto& p1 = trace1.physicsTrace[firstRngDivergencePath];
+            const auto& p2 = trace2.physicsTrace[firstRngDivergencePath];
+            size_t stepCount = std::min(p1.size(), p2.size());
+
+            int contextBefore = 3;
+            int contextAfter = 2;
+            int startStep = std::max(0, firstRngDivergenceStep - contextBefore);
+            int endStep = std::min(static_cast<int>(stepCount) - 1, firstRngDivergenceStep + contextAfter);
+
+            *logger.warn() << "Context window (steps " << startStep << "-" << endStep << "):" << endl;
+            for (int stepIdx = startStep; stepIdx <= endStep; ++stepIdx) {
+              const auto& s1 = p1[stepIdx];
+              const auto& s2 = p2[stepIdx];
+              bool rngDiff = (s1.rngState16 != s2.rngState16) || (s1.rngState32 != s2.rngState32);
+
+              std::string marker = (stepIdx == firstRngDivergenceStep) ? " <<< FIRST DIVERGENCE" : "";
+              *logger.warn() << "  Step " << stepIdx << " (t=" << (stepIdx * 3) << "ms):" << marker << endl;
+              *logger.warn() << "    RNG state16: " << s1.rngState16 << " vs " << s2.rngState16;
+              if (rngDiff) *logger.warn() << " [DIFFER]";
+              *logger.warn() << endl;
+              *logger.warn() << "    RNG state32: " << s1.rngState32 << " vs " << s2.rngState32;
+              if (rngDiff) *logger.warn() << " [DIFFER]";
+              *logger.warn() << endl;
+
+              // Show gust values for context
+              *logger.warn() << "    Gust[xyz]: [" << s1.gustBody[0] << ", " << s1.gustBody[1] << ", " << s1.gustBody[2] << "]"
+                            << " vs [" << s2.gustBody[0] << ", " << s2.gustBody[1] << ", " << s2.gustBody[2] << "]" << endl;
+            }
+            *logger.warn() << endl;
+
+            // Now print full detail for the first divergence step only
+            const auto& s1 = p1[firstRngDivergenceStep];
+            const auto& s2 = p2[firstRngDivergenceStep];
+
+            *logger.warn() << "=== DETAILED DIVERGENCE REPORT (Step " << firstRngDivergenceStep << ") ===" << endl;
+          } else {
+            *logger.warn() << "No RNG divergence found in physics trace (all " << pathCount << " paths checked)" << endl;
+            *logger.warn() << endl;
+          }
+
+          // Detailed reporting for first divergence only
+          for (size_t pathIdx = 0; pathIdx < pathCount; ++pathIdx) {
+            const auto& p1 = trace1.physicsTrace[pathIdx];
+            const auto& p2 = trace2.physicsTrace[pathIdx];
+
+            if (p1.empty() || p2.empty()) continue;
+            size_t stepCount = std::min(p1.size(), p2.size());
+
+            for (size_t stepIdx = 0; stepIdx < stepCount; ++stepIdx) {
+              const auto& s1 = p1[stepIdx];
+              const auto& s2 = p2[stepIdx];
+
+              // Check for ANY divergence in key physics values
+              bool posDiff = (s1.pos[0] != s2.pos[0]) || (s1.pos[1] != s2.pos[1]) || (s1.pos[2] != s2.pos[2]);
+              bool velDiff = (s1.vel[0] != s2.vel[0]) || (s1.vel[1] != s2.vel[1]) || (s1.vel[2] != s2.vel[2]);
+              bool accDiff = (s1.acc[0] != s2.acc[0]) || (s1.acc[1] != s2.acc[1]) || (s1.acc[2] != s2.acc[2]);
+              bool quatDiff = (s1.quat[0] != s2.quat[0]) || (s1.quat[1] != s2.quat[1]) ||
+                             (s1.quat[2] != s2.quat[2]) || (s1.quat[3] != s2.quat[3]);
+              bool alphaDiff = (s1.alpha != s2.alpha);
+              bool betaDiff = (s1.beta != s2.beta);
+              bool CLDiff = (s1.CL != s2.CL);
+              bool CDDiff = (s1.CD != s2.CD);
+              bool cmdDiff = (s1.pitchCommand != s2.pitchCommand) ||
+                            (s1.rollCommand != s2.rollCommand) ||
+                            (s1.throttleCommand != s2.throttleCommand);
+              bool gustDiff = false;
+              for (int i = 0; i < 6; ++i) {
+                if (s1.gustBody[i] != s2.gustBody[i]) {
+                  gustDiff = true;
+                  break;
+                }
+              }
+              bool rngDiff = (s1.rngState16 != s2.rngState16) || (s1.rngState32 != s2.rngState32);
+
+              if (posDiff || velDiff || accDiff || quatDiff || alphaDiff || betaDiff ||
+                  CLDiff || CDDiff || cmdDiff || gustDiff || rngDiff) {
+
+                *logger.warn() << "*** PHYSICS TRACE DIVERGENCE ***" << endl;
+                *logger.warn() << "  Path " << pathIdx << ", Step " << stepIdx
+                              << " (step=" << s1.step << " vs " << s2.step << ")" << endl;
+                *logger.warn() << "  Time: " << s1.simTimeMsec << " vs " << s2.simTimeMsec << " ms" << endl;
+                *logger.warn() << "  Worker1: id=" << s1.workerId << " pid=" << s1.workerPid
+                              << " eval=" << s1.evalCounter << endl;
+                *logger.warn() << "  Worker2: id=" << s2.workerId << " pid=" << s2.workerPid
+                              << " eval=" << s2.evalCounter << endl;
+
+                // Compute ULP differences for all key values
+                int64_t posULP[3], velULP[3], accULP[3], quatULP[4];
+                ulpDouble3(s1.pos, s2.pos, posULP);
+                ulpDouble3(s1.vel, s2.vel, velULP);
+                ulpDouble3(s1.acc, s2.acc, accULP);
+                for (int i = 0; i < 4; ++i) quatULP[i] = computeULPDouble(s1.quat[i], s2.quat[i]);
+
+                int64_t alphaULP = computeULPDouble(s1.alpha, s2.alpha);
+                int64_t betaULP = computeULPDouble(s1.beta, s2.beta);
+                int64_t vRelWindULP = computeULPDouble(s1.vRelWind, s2.vRelWind);
+                int64_t CL_ULP = computeULPDouble(s1.CL, s2.CL);
+                int64_t CD_ULP = computeULPDouble(s1.CD, s2.CD);
+
+                *logger.warn() << "  Position: [" << s1.pos[0] << ", " << s1.pos[1] << ", " << s1.pos[2] << "]"
+                              << " vs [" << s2.pos[0] << ", " << s2.pos[1] << ", " << s2.pos[2] << "]" << endl;
+                *logger.warn() << "    ULP: [" << posULP[0] << ", " << posULP[1] << ", " << posULP[2] << "]" << endl;
+
+                *logger.warn() << "  Velocity: [" << s1.vel[0] << ", " << s1.vel[1] << ", " << s1.vel[2] << "]"
+                              << " vs [" << s2.vel[0] << ", " << s2.vel[1] << ", " << s2.vel[2] << "]" << endl;
+                *logger.warn() << "    ULP: [" << velULP[0] << ", " << velULP[1] << ", " << velULP[2] << "]" << endl;
+
+                *logger.warn() << "  Acceleration: [" << s1.acc[0] << ", " << s1.acc[1] << ", " << s1.acc[2] << "]"
+                              << " vs [" << s2.acc[0] << ", " << s2.acc[1] << ", " << s2.acc[2] << "]" << endl;
+                *logger.warn() << "    ULP: [" << accULP[0] << ", " << accULP[1] << ", " << accULP[2] << "]" << endl;
+
+                *logger.warn() << "  Quaternion: [" << s1.quat[0] << ", " << s1.quat[1] << ", "
+                              << s1.quat[2] << ", " << s1.quat[3] << "]" << endl;
+                *logger.warn() << "         vs: [" << s2.quat[0] << ", " << s2.quat[1] << ", "
+                              << s2.quat[2] << ", " << s2.quat[3] << "]" << endl;
+                *logger.warn() << "    ULP: [" << quatULP[0] << ", " << quatULP[1] << ", "
+                              << quatULP[2] << ", " << quatULP[3] << "]" << endl;
+
+                *logger.warn() << "  Alpha: " << s1.alpha << " vs " << s2.alpha
+                              << " (diff=" << std::scientific << (s1.alpha - s2.alpha)
+                              << std::defaultfloat << ", " << alphaULP << " ULPs)" << endl;
+                *logger.warn() << "  Beta: " << s1.beta << " vs " << s2.beta
+                              << " (diff=" << std::scientific << (s1.beta - s2.beta)
+                              << std::defaultfloat << ", " << betaULP << " ULPs)" << endl;
+                *logger.warn() << "  VrelWind: " << s1.vRelWind << " vs " << s2.vRelWind
+                              << " (diff=" << std::scientific << (s1.vRelWind - s2.vRelWind)
+                              << std::defaultfloat << ", " << vRelWindULP << " ULPs)" << endl;
+
+                *logger.warn() << "  CL: " << s1.CL << " vs " << s2.CL
+                              << " (diff=" << std::scientific << (s1.CL - s2.CL)
+                              << std::defaultfloat << ", " << CL_ULP << " ULPs)" << endl;
+                *logger.warn() << "  CD: " << s1.CD << " vs " << s2.CD
+                              << " (diff=" << std::scientific << (s1.CD - s2.CD)
+                              << std::defaultfloat << ", " << CD_ULP << " ULPs)" << endl;
+
+                *logger.warn() << "  CL_wing: " << s1.CL_wing << " (left=" << s1.CL_left
+                              << " cent=" << s1.CL_cent << " right=" << s1.CL_right << ")" << endl;
+                *logger.warn() << "      vs: " << s2.CL_wing << " (left=" << s2.CL_left
+                              << " cent=" << s2.CL_cent << " right=" << s2.CL_right << ")" << endl;
+
+                *logger.warn() << "  Moments (Cl,Cm,Cn): [" << s1.Cl << ", " << s1.Cm << ", " << s1.Cn << "]"
+                              << " vs [" << s2.Cl << ", " << s2.Cm << ", " << s2.Cn << "]" << endl;
+
+                *logger.warn() << "  QS (dynamic pressure × area): " << s1.QS << " vs " << s2.QS << endl;
+
+                *logger.warn() << "  Trig values: cos(α)=" << s1.cosAlpha << " vs " << s2.cosAlpha
+                              << ", sin(α)=" << s1.sinAlpha << " vs " << s2.sinAlpha
+                              << ", cos(β)=" << s1.cosBeta << " vs " << s2.cosBeta << endl;
+
+                *logger.warn() << "  Commands: pitch=" << s1.pitchCommand << " vs " << s2.pitchCommand
+                              << ", roll=" << s1.rollCommand << " vs " << s2.rollCommand
+                              << ", throttle=" << s1.throttleCommand << " vs " << s2.throttleCommand << endl;
+
+                *logger.warn() << "  Sim inputs: elev=" << s1.elevator << " vs " << s2.elevator
+                              << ", ail=" << s1.aileron << " vs " << s2.aileron
+                              << ", rud=" << s1.rudder << " vs " << s2.rudder << endl;
+
+                *logger.warn() << "  RNG: state16=" << s1.rngState16 << " vs " << s2.rngState16
+                              << ", state32=" << s1.rngState32 << " vs " << s2.rngState32 << endl;
+
+                // Gust data (6 elements: linear velocity [0-2] + rotational rates [3-5])
+                int64_t gustULP[6];
+                for (int i = 0; i < 6; ++i) {
+                  gustULP[i] = computeULPDouble(s1.gustBody[i], s2.gustBody[i]);
+                }
+                *logger.warn() << "  Gust Linear [xyz]: [" << s1.gustBody[0] << ", " << s1.gustBody[1] << ", " << s1.gustBody[2] << "]"
+                              << " vs [" << s2.gustBody[0] << ", " << s2.gustBody[1] << ", " << s2.gustBody[2] << "]" << endl;
+                *logger.warn() << "    ULP: [" << gustULP[0] << ", " << gustULP[1] << ", " << gustULP[2] << "]" << endl;
+                *logger.warn() << "  Gust Rotational [pqr]: [" << s1.gustBody[3] << ", " << s1.gustBody[4] << ", " << s1.gustBody[5] << "]"
+                              << " vs [" << s2.gustBody[3] << ", " << s2.gustBody[4] << ", " << s2.gustBody[5] << "]" << endl;
+                *logger.warn() << "    ULP: [" << gustULP[3] << ", " << gustULP[4] << ", " << gustULP[5] << "]" << endl;
+
+                *logger.warn() << endl;
+
+                // Report first divergence and stop
+                return;
+              }
+            }
+          }
+
+          *logger.warn() << "No physics trace divergence found - traces are bitwise identical!" << endl;
+          *logger.warn() << endl;
+
+          // MACRO TRAJECTORY COMPARISON (100ms GP evaluation steps)
+          *logger.warn() << "=== MACRO TRAJECTORY COMPARISON (100ms GP evaluation steps) ===" << endl;
+          size_t macroPathCount = std::min(trace1.aircraftStateList.size(), trace2.aircraftStateList.size());
+          for (size_t pathIdx = 0; pathIdx < macroPathCount; ++pathIdx) {
+            const auto& traj1 = trace1.aircraftStateList[pathIdx];
+            const auto& traj2 = trace2.aircraftStateList[pathIdx];
+            size_t stepCount = std::min(traj1.size(), traj2.size());
+
+            *logger.warn() << "Path " << pathIdx << ": " << stepCount << " macro steps (100ms intervals)" << endl;
+
+            for (size_t stepIdx = 0; stepIdx < stepCount; ++stepIdx) {
+              const auto& a1 = traj1[stepIdx];
+              const auto& a2 = traj2[stepIdx];
+
+              gp_vec3 pos1 = a1.getPosition();
+              gp_vec3 pos2 = a2.getPosition();
+              gp_vec3 vel1 = a1.getVelocity();
+              gp_vec3 vel2 = a2.getVelocity();
+              gp_quat q1 = a1.getOrientation();
+              gp_quat q2 = a2.getOrientation();
+
+              bool posDiff = (pos1.x() != pos2.x()) || (pos1.y() != pos2.y()) || (pos1.z() != pos2.z());
+              bool velDiff = (vel1.x() != vel2.x()) || (vel1.y() != vel2.y()) || (vel1.z() != vel2.z());
+              bool quatDiff = (q1.x() != q2.x()) || (q1.y() != q2.y()) || (q1.z() != q2.z()) || (q1.w() != q2.w());
+
+              if (posDiff || velDiff || quatDiff) {
+                *logger.warn() << "  DIVERGENCE at step " << stepIdx << " (t=" << (stepIdx * 100) << "ms):" << endl;
+                if (posDiff) {
+                  *logger.warn() << "    Position: [" << pos1.x() << "," << pos1.y() << "," << pos1.z() << "]"
+                                << " vs [" << pos2.x() << "," << pos2.y() << "," << pos2.z() << "]" << endl;
+                }
+                if (velDiff) {
+                  *logger.warn() << "    Velocity: [" << vel1.x() << "," << vel1.y() << "," << vel1.z() << "]"
+                                << " vs [" << vel2.x() << "," << vel2.y() << "," << vel2.z() << "]" << endl;
+                }
+                if (quatDiff) {
+                  *logger.warn() << "    Quat: [" << q1.w() << "," << q1.x() << "," << q1.y() << "," << q1.z() << "]"
+                                << " vs [" << q2.w() << "," << q2.x() << "," << q2.y() << "," << q2.z() << "]" << endl;
+                }
+                // Only show first divergence per path to avoid log spam
+                break;
+              }
+            }
+          }
+          *logger.warn() << endl;
+      };
+
+      MyGP* currentElite = pop->NthMyGP(pop->bestOfPopulation);
+      gp_scalar currentFitness = currentElite->getFitness();
+      int currentEliteLength = currentElite->length();
+      int currentEliteDepth = currentElite->depth();
+
+      // Compute hash of elite's tree structure to detect if it's truly the same individual
+      std::ostringstream eliteStream;
+      currentElite->save(eliteStream);
+      std::string currentEliteHash = eliteStream.str();
+
+      // Generate Lisp-form string of elite GP for exact comparison
+      std::ostringstream eliteGpStringStream;
+      currentElite->printOn(eliteGpStringStream);
+      std::string currentEliteGpString = eliteGpStringStream.str();
+
+      // Check if elite changed (structure changed, not just population index)
+      bool eliteStructureChanged = (currentEliteHash != gLastEliteHash);
+
+      // If we captured a re-eval of the prior elite during this generation, check for drift now.
+      if (gPriorEliteCaptured) {
+        std::lock_guard<std::mutex> lock(gPriorEliteMutex);
+        if (!bitwiseEqual(gPriorEliteFitness, gLastEliteFitness)) {
+          gEliteDivergenceCount++;
+          *logger.warn() << "ELITE_TRACE gen=" << gen << ": Prior elite drifted on re-eval before selection"
+                         << " prev=" << std::fixed << std::setprecision(6) << gLastEliteFitness
+                         << " current=" << gPriorEliteFitness
+                         << " delta=" << std::scientific << (gPriorEliteFitness - gLastEliteFitness)
+                         << " [" << gEliteDivergenceCount << ":" << gEliteCheckCount << " divergences]"
+                         << std::defaultfloat << endl;
+          compareTraces(gLastEliteTrace, gPriorEliteEval, gLastEliteKey, "<prior-elite-reeval>");
+        }
+        gPriorEliteCaptured = false;
+      } else if (gLastEliteGpHash != 0) {
+        *logger.warn() << "ELITE_TRACE gen=" << gen << ": Prior elite hash "
+                       << std::hex << "0x" << gLastEliteGpHash << std::dec
+                       << " not captured during re-eval (possible mismatch or missing gp payload)"
+                       << " [" << gEliteDivergenceCount << ":" << gEliteCheckCount << " divergences]" << endl;
+      }
+
+      // Compute elite GP hash from Lisp string (deterministic, same as evalTask)
+      uint64_t currentEliteGpHash = hashString(currentEliteGpString);
+
+      // Look up elite's eval results from current generation
+      EvalResults* eliteEvalResults = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(gCurrentGenEvalResultsMutex);
+        auto it = gCurrentGenEvalResults.find(currentEliteGpHash);
+        if (it != gCurrentGenEvalResults.end()) {
+          eliteEvalResults = &it->second;
+        }
+
+        // Free memory: clear all non-elite traces immediately after lookup
+        // Keep only the elite's trace to avoid memory leak from physicsTrace data
+        if (eliteEvalResults && gCurrentGenEvalResults.size() > 1) {
+          EvalResults eliteCopy = *eliteEvalResults;  // Copy before clearing map
+          gCurrentGenEvalResults.clear();
+          gCurrentGenEvalResults[currentEliteGpHash] = std::move(eliteCopy);
+          eliteEvalResults = &gCurrentGenEvalResults[currentEliteGpHash];  // Update pointer
         }
       }
 
-      // DETERMINISM TEST: Clone best to entire population and check for identical fitness
-      // Run at generation 20 for final verification
-      if (gen == 20) {
-        *logger.info() << "=== DETERMINISM TEST: Cloning best individual to entire population ===" << endl;
-        MyGP* bestGP = pop->NthMyGP(pop->bestOfPopulation);
-        gp_scalar bestFitness = bestGP->getFitness();
-        *logger.info() << "Best fitness before cloning: " << bestFitness << endl;
+      // Generate trace label for logging (no longer writing files)
+      std::string traceLabel;
+      if (eliteEvalResults) {
+        traceLabel = "gen" + std::to_string(gen)
+                   + "-worker" + std::to_string(eliteEvalResults->workerId)
+                   + "-pid" + std::to_string(eliteEvalResults->workerPid)
+                   + "-eval" + std::to_string(eliteEvalResults->workerEvalCounter);
+      } else {
+        traceLabel = "gen" + std::to_string(gen) + "-NOT-FOUND";
+        *logger.warn() << "ELITE_TRACE gen=" << gen << ": Elite gpHash 0x" << std::hex
+                       << currentEliteGpHash << std::dec << " not found in eval results map!" << endl;
+      }
 
-        // Clone best to everyone
-        for (int n = 0; n < pop->containerSize(); ++n) {
-          if (n != pop->bestOfPopulation) {
-            MyGP* clone = (MyGP*)&bestGP->duplicate();
-            pop->put(n, *clone);
-          }
-        }
-
-        // Enable deterministic logging for this evaluation
-        *logger.info() << "Enabling deterministic logging for cloned population evaluation..." << endl;
-        enableDeterministicTestLogging = true;
-
-        // Re-evaluate entire population
-        *logger.info() << "Re-evaluating cloned population..." << endl;
-        pop->evaluate();
-
-        // Disable deterministic logging after evaluation
-        enableDeterministicTestLogging = false;
-
-        // Check for fitness variance (use double precision for accurate variance calc)
-        gp_scalar minFit = std::numeric_limits<gp_scalar>::infinity();
-        gp_scalar maxFit = -std::numeric_limits<gp_scalar>::infinity();
-
-        // Collect all fitness values for detailed analysis
-        std::vector<std::pair<int, gp_scalar>> fitnessValues;
-        for (int n = 0; n < pop->containerSize(); ++n) {
-          gp_scalar fit = pop->NthMyGP(n)->getFitness();
-          fitnessValues.push_back(std::make_pair(n, fit));
-          minFit = std::min(minFit, fit);
-          maxFit = std::max(maxFit, fit);
-        }
-        // Use double precision for variance to avoid fp32 rounding issues
-        double variance = static_cast<double>(maxFit) - static_cast<double>(minFit);
-
-        // Group by exact bit-for-bit equality
-        std::map<gp_scalar, std::vector<int>> fitnessGroups;
-        for (const auto& pair : fitnessValues) {
-          fitnessGroups[pair.second].push_back(pair.first);
-        }
-
-        *logger.info() << "Determinism test results:" << endl;
-        *logger.info() << "  Population size: " << pop->containerSize() << endl;
-        *logger.info() << "  Num threads: " << ConfigManager::getExtraConfig().evalThreads << endl;
-        *logger.info() << "  Wind scenarios: " << ConfigManager::getExtraConfig().windScenarioCount << endl;
-        *logger.info() << "  Wind seed base: " << ConfigManager::getExtraConfig().windSeedBase << endl;
-        *logger.info() << "  Min fitness (fp32): " << std::fixed << std::setprecision(6) << minFit << endl;
-        *logger.info() << "  Max fitness (fp32): " << std::fixed << std::setprecision(6) << maxFit << endl;
-        *logger.info() << "  Variance (fp64): " << std::scientific << std::setprecision(12) << variance << endl;
-        *logger.info() << "  Unique fitness values: " << fitnessGroups.size() << endl;
-        *logger.info() << std::defaultfloat << endl;
-
-        // Print groups of identical fitness values
-        *logger.info() << "Fitness groups (bit-for-bit identical):" << endl;
-        int groupNum = 1;
-        for (const auto& group : fitnessGroups) {
-          gp_scalar fitness = group.first;
-          const std::vector<int>& indices = group.second;
-          std::ostringstream indexList;
-          for (size_t i = 0; i < indices.size(); ++i) {
-            if (i > 0) indexList << ", ";
-            indexList << indices[i];
-            // Limit output for large groups
-            if (i >= 19 && indices.size() > 20) {
-              indexList << ", ... (" << (indices.size() - 20) << " more)";
-              break;
-            }
-          }
-          *logger.info() << "Group " << groupNum << ": fitness = "
-                        << std::fixed << std::setprecision(6) << fitness
-                        << " (count=" << indices.size() << ") - indices: " << indexList.str() << endl;
-          groupNum++;
-        }
-        *logger.info() << std::defaultfloat << endl;
-
-        if (variance < 1e-6) {
-          *logger.info() << "SUCCESS: All individuals have identical fitness (deterministic)" << endl;
+      if (gen == 1) {
+        // First generation: establish baseline
+        std::lock_guard<std::mutex> lock(gEliteTrackingMutex);
+        gLastEliteFitness = currentFitness;
+        gLastEliteHash = currentEliteHash;
+        if (eliteEvalResults) {
+          gLastEliteTrace = *eliteEvalResults;
         } else {
-          *logger.warn() << "FAILURE: Fitness varies across identical individuals (non-deterministic!)" << endl;
-          *logger.warn() << "Possible causes: PRNG seeding, threading race conditions, uninitialized vars" << endl;
+          // Fallback to bestOfEvalResults (bakeoff) if not in map
+          gLastEliteTrace = bestOfEvalResults;
         }
+        gLastEliteKey = traceLabel;
+        gLastEliteGpHash = currentEliteGpHash;
+        gLastEliteGpString = currentEliteGpString;
+        if (eliteEvalResults) {
+          gLastEliteNumPaths = eliteEvalResults->pathList.size();
+          gLastEliteScenarioHash = computeScenarioHash(eliteEvalResults->scenarioList);
+        } else {
+          gLastEliteNumPaths = bestOfEvalResults.pathList.size();
+          gLastEliteScenarioHash = computeScenarioHash(bestOfEvalResults.scenarioList);
+        }
+        gLastEliteWasBakeoff = true;  // Gen 1 elite always evaluated in bakeoff
+        gLastEliteLength = currentEliteLength;
+        gLastEliteDepth = currentEliteDepth;
 
-        *logger.info() << "=== Exiting after determinism test ===" << endl;
-        break;  // Exit after test
+        *logger.info() << "ELITE_TRACE gen=" << gen << ": Baseline elite captured"
+                      << " fitness=" << std::fixed << std::setprecision(6) << currentFitness
+                      << " paths=" << gLastEliteNumPaths
+                      << " scenarioHash=0x" << std::hex << gLastEliteScenarioHash << std::dec
+                      << " trace=" << traceLabel
+                      << " [" << gEliteDivergenceCount << ":" << gEliteCheckCount << " divergences]" << endl;
+      } else {
+        // Subsequent generations: check for changes
+        gEliteCheckCount++;
+
+        auto logCounters = [&]() {
+          *logger.warn() << "  EliteChecks=" << gEliteCheckCount << " Divergences=" << gEliteDivergenceCount
+                        << " (" << std::fixed << std::setprecision(2)
+                        << (gEliteCheckCount > 0 ? (100.0 * gEliteDivergenceCount / gEliteCheckCount) : 0.0)
+                        << "%)" << endl;
+        };
+
+        bool fitnessImproved = currentFitness < gLastEliteFitness;
+        bool fitnessWorsened = currentFitness > gLastEliteFitness;
+        bool fitnessEqual = bitwiseEqual(currentFitness, gLastEliteFitness);
+
+        if (eliteStructureChanged && fitnessImproved) {
+          // New elite is better - update baseline
+          *logger.info() << "ELITE_TRACE gen=" << gen << ": Elite replaced (better)"
+                        << " old_fitness=" << std::fixed << std::setprecision(6) << gLastEliteFitness
+                        << " new_fitness=" << currentFitness
+                        << " improvement=" << std::scientific << (gLastEliteFitness - currentFitness)
+                        << " [" << gEliteDivergenceCount << ":" << gEliteCheckCount << " divergences]"
+                        << std::defaultfloat << endl;
+
+          {
+            std::lock_guard<std::mutex> lock(gEliteTrackingMutex);
+            gLastEliteFitness = currentFitness;
+            gLastEliteHash = currentEliteHash;
+            gLastEliteTrace = eliteEvalResults ? *eliteEvalResults : bestOfEvalResults;
+            gLastEliteKey = traceLabel;
+            gLastEliteGpHash = currentEliteGpHash;
+            gLastEliteGpString = currentEliteGpString;
+            gLastEliteNumPaths = bestOfEvalResults.pathList.size();
+            gLastEliteScenarioHash = computeScenarioHash(bestOfEvalResults.scenarioList);
+            gLastEliteWasBakeoff = true;  // Elite replacement always in bakeoff
+            gLastEliteLength = currentEliteLength;
+            gLastEliteDepth = currentEliteDepth;
+          }
+
+          *logger.info() << "ELITE_TRACE gen=" << gen << ": New baseline captured"
+                        << " trace=" << traceLabel
+                        << " [" << gEliteDivergenceCount << ":" << gEliteCheckCount << " divergences]" << endl;
+        } else if (!eliteStructureChanged && fitnessWorsened) {
+          // Same elite structure but worse fitness - ELITISM VIOLATION!
+          gEliteDivergenceCount++;
+          *logger.warn() << "ELITE_TRACE gen=" << gen << ": ELITISM VIOLATION DETECTED!" << endl;
+          *logger.warn() << "  Same elite individual re-evaluated with different fitness:" << endl;
+          *logger.warn() << "  Previous: fitness=" << std::fixed << std::setprecision(6) << gLastEliteFitness
+                        << " trace=" << gLastEliteKey << endl;
+          *logger.warn() << "  Current:  fitness=" << std::fixed << std::setprecision(6) << currentFitness
+                        << " trace=" << traceLabel << endl;
+          *logger.warn() << "  Delta: " << std::scientific << (currentFitness - gLastEliteFitness)
+                        << " (" << std::setprecision(2) << (100.0 * (currentFitness - gLastEliteFitness) / gLastEliteFitness)
+                        << "%)" << std::defaultfloat << endl;
+          *logger.warn() << "  Compare: " << gLastEliteKey << " vs " << traceLabel << endl;
+          logCounters();
+          *logger.warn() << endl;
+
+          // In-memory trace comparison
+          compareTraces(gLastEliteTrace, bestOfEvalResults, gLastEliteKey, traceLabel);
+
+          // Update baseline to current (violated) state
+          {
+            std::lock_guard<std::mutex> lock(gEliteTrackingMutex);
+            gLastEliteFitness = currentFitness;
+            gLastEliteHash = currentEliteHash;
+            gLastEliteTrace = eliteEvalResults ? *eliteEvalResults : bestOfEvalResults;
+            gLastEliteKey = traceLabel;
+            gLastEliteGpHash = currentEliteGpHash;
+            gLastEliteGpString = currentEliteGpString;
+            gLastEliteNumPaths = bestOfEvalResults.pathList.size();
+            gLastEliteScenarioHash = computeScenarioHash(bestOfEvalResults.scenarioList);
+            gLastEliteWasBakeoff = true;  // Violation detected in bakeoff
+            gLastEliteLength = currentEliteLength;
+            gLastEliteDepth = currentEliteDepth;
+          }
+        } else if (!eliteStructureChanged && fitnessImproved) {
+          // Same elite structure but better fitness - NON-DETERMINISTIC!
+          gEliteDivergenceCount++;
+          *logger.warn() << "ELITE_TRACE gen=" << gen << ": ELITISM VIOLATION (fitness paradox)!" << endl;
+          *logger.warn() << "  Same elite structure, but improved fitness (non-deterministic!)" << endl;
+          *logger.warn() << "  Previous: fitness=" << std::fixed << std::setprecision(6) << gLastEliteFitness
+                        << " trace=" << gLastEliteKey << endl;
+          *logger.warn() << "  Current:  fitness=" << std::fixed << std::setprecision(6) << currentFitness
+                        << " trace=" << traceLabel << endl;
+          *logger.warn() << "  Delta: " << std::scientific << (gLastEliteFitness - currentFitness)
+                        << " (" << std::setprecision(2) << (100.0 * (currentFitness - gLastEliteFitness) / gLastEliteFitness)
+                        << "%)" << std::defaultfloat << endl;
+          *logger.warn() << "  Compare: " << gLastEliteKey << " vs " << traceLabel << endl;
+          logCounters();
+          *logger.warn() << endl;
+
+          // In-memory trace comparison
+          compareTraces(gLastEliteTrace, bestOfEvalResults, gLastEliteKey, traceLabel);
+
+          // Update to current (improved) state
+          {
+            std::lock_guard<std::mutex> lock(gEliteTrackingMutex);
+            gLastEliteFitness = currentFitness;
+            gLastEliteHash = currentEliteHash;
+            gLastEliteTrace = eliteEvalResults ? *eliteEvalResults : bestOfEvalResults;
+            gLastEliteKey = traceLabel;
+            gLastEliteGpHash = currentEliteGpHash;
+            gLastEliteGpString = currentEliteGpString;
+            gLastEliteNumPaths = bestOfEvalResults.pathList.size();
+            gLastEliteScenarioHash = computeScenarioHash(bestOfEvalResults.scenarioList);
+            gLastEliteWasBakeoff = true;  // Paradox case in bakeoff
+            gLastEliteLength = currentEliteLength;
+            gLastEliteDepth = currentEliteDepth;
+          }
+        } else if (!eliteStructureChanged && !fitnessWorsened && !fitnessImproved) {
+          // Same elite, same fitness - NORMAL DETERMINISTIC CASE
+          // Silent update (no logging needed for normal case)
+          {
+            std::lock_guard<std::mutex> lock(gEliteTrackingMutex);
+            gLastEliteTrace = bestOfEvalResults;
+            gLastEliteKey = traceLabel;
+          }
+        } else if (eliteStructureChanged && fitnessEqual) {
+          bool shorter = currentEliteLength < gLastEliteLength;
+          bool sameLength = currentEliteLength == gLastEliteLength;
+          bool shallower = currentEliteDepth < gLastEliteDepth;
+
+          if (shorter || (sameLength && shallower)) {
+            *logger.info() << "ELITE_TRACE gen=" << gen << ": Elite replaced (tie-break)"
+                          << " fitness=" << std::fixed << std::setprecision(6) << currentFitness
+                          << " length " << gLastEliteLength << "->" << currentEliteLength
+                          << " depth " << gLastEliteDepth << "->" << currentEliteDepth
+                          << " [" << gEliteDivergenceCount << ":" << gEliteCheckCount << " divergences]" << endl;
+          } else {
+            *logger.warn() << "ELITE_TRACE gen=" << gen << ": Elite replaced with equal fitness but no tie-break win" << endl;
+            *logger.warn() << "  Previous: fitness=" << std::fixed << std::setprecision(6) << gLastEliteFitness
+                          << " length=" << gLastEliteLength << " depth=" << gLastEliteDepth << endl;
+            *logger.warn() << "  Current:  fitness=" << std::fixed << std::setprecision(6) << currentFitness
+                          << " length=" << currentEliteLength << " depth=" << currentEliteDepth << endl;
+            logCounters();
+          }
+
+          // Update baseline (structure changed due to tie or unexpected swap)
+          {
+            std::lock_guard<std::mutex> lock(gEliteTrackingMutex);
+            gLastEliteFitness = currentFitness;
+            gLastEliteHash = currentEliteHash;
+            gLastEliteTrace = eliteEvalResults ? *eliteEvalResults : bestOfEvalResults;
+            gLastEliteKey = traceLabel;
+            gLastEliteGpHash = currentEliteGpHash;
+            gLastEliteGpString = currentEliteGpString;
+            gLastEliteNumPaths = bestOfEvalResults.pathList.size();
+            gLastEliteScenarioHash = computeScenarioHash(bestOfEvalResults.scenarioList);
+            gLastEliteWasBakeoff = true;  // Elite swap in bakeoff
+            gLastEliteLength = currentEliteLength;
+            gLastEliteDepth = currentEliteDepth;
+          }
+        } else if (eliteStructureChanged && fitnessWorsened) {
+          // Different individual with worse fitness (not a determinism signal) — skip detailed dump
+          *logger.info() << "ELITE_TRACE gen=" << gen << ": Elite replaced with worse fitness (different structure)"
+                        << " old_fitness=" << std::fixed << std::setprecision(6) << gLastEliteFitness
+                        << " new_fitness=" << currentFitness
+                        << " length " << gLastEliteLength << "->" << currentEliteLength
+                        << " depth " << gLastEliteDepth << "->" << currentEliteDepth
+                        << " [" << gEliteDivergenceCount << ":" << gEliteCheckCount << " divergences]" << endl;
+
+          {
+            std::lock_guard<std::mutex> lock(gEliteTrackingMutex);
+            gLastEliteFitness = currentFitness;
+            gLastEliteHash = currentEliteHash;
+            gLastEliteTrace = eliteEvalResults ? *eliteEvalResults : bestOfEvalResults;
+            gLastEliteKey = traceLabel;
+            gLastEliteGpHash = currentEliteGpHash;
+            gLastEliteGpString = currentEliteGpString;
+            gLastEliteNumPaths = bestOfEvalResults.pathList.size();
+            gLastEliteScenarioHash = computeScenarioHash(bestOfEvalResults.scenarioList);
+            gLastEliteWasBakeoff = true;  // Elite replacement in bakeoff
+            if (gLastEliteGpHash == 0) {
+              *logger.warn() << "ELITE_TRACE: baseline GP hash is zero; drift detection will be disabled" << endl;
+            }
+            gLastEliteLength = currentEliteLength;
+            gLastEliteDepth = currentEliteDepth;
+          }
+        }
       }
     }
 
@@ -1749,6 +2500,15 @@ int main(int argc, char** argv)
     // pop->NthMyGP(pop->bestOfPopulation)->save(bestGP);
 
     *logger.info() << "GP complete!" << endl;
+
+    // Clean up final population to prevent memory leak
+    delete pop;
+    pop = nullptr;
+
+    // Clean up accumulated evaluation results to prevent memory leak
+    clearEvalResults(bestOfEvalResults);
+    clearEvalResults(aggregatedEvalResults);
+    gCurrentGenEvalResults.clear();
   }
 
   uint64_t totalRuns = globalSimRunCounter.load(std::memory_order_relaxed);

@@ -50,7 +50,7 @@ public:
   int windScenarioCount = 1;
   int windSeedBase = 1337;
   int windSeedStride = 1;
-  unsigned int randomPathSeedB = 67890;  // Seed for SeededRandomB path generation
+  int randomPathSeedB = 67890;  // Seed for SeededRandomB path generation (-1 = use time-based seed)
   int gpSeed = -1;  // Seed for GP initialization (-1 = use time-based seed)
 
   // // Custom implementation of the << operator for the extraCfg type

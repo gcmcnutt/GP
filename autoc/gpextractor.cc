@@ -15,7 +15,7 @@
 #include <aws/core/auth/AWSCredentialsProvider.h>
 #include <aws/core/client/ClientConfiguration.h>
 
-#include <boost/archive/text_iarchive.hpp>
+#include <boost/archive/binary_iarchive.hpp>
 #include <boost/serialization/vector.hpp>
 
 #include "../include/gp.h"
@@ -422,8 +422,8 @@ int main(int argc, char** argv) {
   std::string retrievedData = oss.str();
 
   try {
-    std::istringstream iss(retrievedData);
-    boost::archive::text_iarchive ia(iss);
+    std::istringstream iss(retrievedData, std::ios::binary);
+    boost::archive::binary_iarchive ia(iss);
     ia >> evalResults;
   }
   catch (const std::exception& e) {

@@ -34,6 +34,7 @@ private:
 
   void worker(int id, ExtraConfig& extraCfg) {
     auto& context = *worker_contexts[id];
+    context.workerId = id;
 
     // Launch subprocess with port as argument
     tcp::acceptor acceptor_(io_service, tcp::endpoint(tcp::v4(), extraCfg.minisimPortOverride));
