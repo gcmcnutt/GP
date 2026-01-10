@@ -129,6 +129,11 @@ static std::map<uint64_t, EvalResults> gCurrentGenEvalResults;
 static std::mutex gCurrentGenEvalResultsMutex;
 static std::mutex gEliteTrackingMutex;  // Protects all gLastElite* variables for reads/writes
 
+// Global elite tracking - persists across generations (population objects are recreated)
+// This is separate from library's bestOfPopulation which tracks single-scenario fitness
+static int gGlobalEliteIndex = -1;
+static gp_scalar gGlobalEliteFitness = std::numeric_limits<gp_scalar>::infinity();
+
 static bool bitwiseEqual(gp_scalar a, gp_scalar b) {
   return std::memcmp(&a, &b, sizeof(gp_scalar)) == 0;
 }
@@ -597,23 +602,54 @@ public:
 
         activeEvalCollector = previousCollector;
 
-        // Update the best individual's fitness with the aggregated result
-        // and update bestOfPopulation to point to the bakeoff winner
+        // Compare bakeoff winner against global elite
+        // Only update global elite if new winner has better aggregated fitness
         if (best) {
-          best->setFitness(bestAggregatedFitness);
           // Find the index of the best candidate in the population
+          int bestIndex = -1;
           for (int idx = 0; idx < containerSize(); ++idx) {
             if (NthMyGP(idx) == best) {
-              bestOfPopulation = idx;
+              bestIndex = idx;
               break;
             }
           }
 
-          // Propagate the bakeoff winner to all demes by replacing the worst
+          // Check if bakeoff winner beats the global elite
+          if (bestAggregatedFitness < gGlobalEliteFitness) {
+            gp_scalar improvement = gGlobalEliteFitness - bestAggregatedFitness;
+            *logger.info() << "GLOBAL_ELITE: New champion! fitness=" << std::fixed << std::setprecision(6) << bestAggregatedFitness
+                           << " (prev=" << gGlobalEliteFitness << " improvement=" << std::scientific << improvement << std::defaultfloat << ")"
+                           << " index=" << bestIndex << endl;
+            gGlobalEliteFitness = bestAggregatedFitness;
+            gGlobalEliteIndex = bestIndex;
+            bestOfPopulation = bestIndex;
+          } else if (bestIndex == gGlobalEliteIndex) {
+            // Elite was re-evaluated in bakeoff - check for determinism
+            if (!bitwiseEqual(bestAggregatedFitness, gGlobalEliteFitness)) {
+              gp_scalar delta = bestAggregatedFitness - gGlobalEliteFitness;
+              *logger.warn() << "GLOBAL_ELITE_DRIFT: Elite re-evaluated with different aggregated fitness!"
+                             << " prev=" << std::fixed << std::setprecision(6) << gGlobalEliteFitness
+                             << " current=" << bestAggregatedFitness
+                             << " delta=" << std::scientific << delta << std::defaultfloat << endl;
+            } else {
+              *logger.info() << "GLOBAL_ELITE: Elite re-evaluated, fitness unchanged at " << std::fixed << std::setprecision(6) << gGlobalEliteFitness << endl;
+            }
+            // Elite remains, keep bestOfPopulation pointing to it
+            bestOfPopulation = gGlobalEliteIndex;
+          } else {
+            // New bakeoff winner didn't beat global elite
+            *logger.info() << "GLOBAL_ELITE: Bakeoff winner (fitness=" << std::fixed << std::setprecision(6) << bestAggregatedFitness
+                           << ") did not beat global elite (fitness=" << gGlobalEliteFitness << ")" << endl;
+            // Keep bestOfPopulation pointing to global elite for migration purposes
+            bestOfPopulation = gGlobalEliteIndex;
+          }
+
+          // Propagate the global elite to all demes by replacing the worst
           // individual in each deme. This spreads the generalist's genes across
           // all path specializations for the next generation.
+          // Use gGlobalEliteFitness since that's what bestOfPopulation now points to.
           if (gpCfg.DemeticGrouping && gpCfg.DemeSize > 0 &&
-              std::isfinite(bestAggregatedFitness)) {
+              std::isfinite(gGlobalEliteFitness) && gGlobalEliteIndex >= 0) {
             int demeSize = gpCfg.DemeSize;
             int demesPropagated = 0;
             // Config is expressed as percent (0..100)
@@ -647,33 +683,38 @@ public:
                 }
               }
 
-              // Don't replace the bakeoff winner itself (elitism protection)
-              if (worstInDeme != bestOfPopulation) {
-                // Clone the winner and replace the worst
-                MyGP* clone = (MyGP*)&best->duplicate();
-                // The clone will have the same fitness as the winner, but it's
-                // not the elite - it will be re-evaluated next generation
-                put(worstInDeme, *clone);
-                demesPropagated++;
+              // Don't replace the global elite itself (elitism protection)
+              if (worstInDeme != gGlobalEliteIndex) {
+                // Clone the global elite and replace the worst
+                MyGP* globalElite = NthMyGP(gGlobalEliteIndex);
+                if (globalElite) {
+                  MyGP* clone = (MyGP*)&globalElite->duplicate();
+                  // The clone will have the same fitness as the elite, but it's
+                  // not THE elite - it will be re-evaluated next generation
+                  put(worstInDeme, *clone);
+                  demesPropagated++;
+                }
               }
             }
 
-            bout << "# Propagated bakeoff winner (fitness="
-                 << bestAggregatedFitness << ") to "
+            bout << "# Propagated global elite (fitness="
+                 << gGlobalEliteFitness << ") to "
                  << demesPropagated << " demes" << endl;
             bout.flush();
           }
         }
       }
 
-      if (!best) {
-        best = NthMyGP(bestOfPopulation);
+      // Use global elite for storage (not necessarily the bakeoff winner if it didn't beat prior elite)
+      MyGP* eliteForStorage = (gGlobalEliteIndex >= 0) ? NthMyGP(gGlobalEliteIndex) : best;
+      if (!eliteForStorage) {
+        eliteForStorage = NthMyGP(bestOfPopulation);
       }
 
-      // Re-serialize the best GP with updated fitness for storage
+      // Re-serialize the global elite for storage
       std::vector<char> updatedBuffer;
       boost::iostreams::stream<boost::iostreams::back_insert_device<std::vector<char>>> updatedOutStream(updatedBuffer);
-      best->save(updatedOutStream);
+      eliteForStorage->save(updatedOutStream);
       updatedOutStream.flush();
       bestOfEvalResults.gp = updatedBuffer;
       
@@ -920,8 +961,10 @@ void MyGP::evalTask(WorkerContext& context)
       isEliteReeval = true;
       evalData.isEliteReeval = true;  // Enable detailed logging in worker
     } else if (gpMatches && (!pathCountMatches || !scenarioMatches)) {
-      // Same GP but different path set - NOT a valid re-evaluation for comparison
-      *logger.warn() << "ELITE_REEVAL_MISMATCH: Same GP but different path set detected"
+      // Same GP but different path set - expected in demetic mode where elite is
+      // evaluated on single deme scenario (3 paths) but baseline is from bakeoff (9 paths)
+      // Only log at debug level since this is normal behavior
+      *logger.debug() << "ELITE_DEME_EVAL: Elite evaluated on deme scenario (not bakeoff)"
                      << " paths=" << currentNumPaths << " vs " << gLastEliteNumPaths
                      << " scenarioHash=0x" << std::hex << currentScenarioHash
                      << " vs 0x" << gLastEliteScenarioHash << std::dec << endl;
