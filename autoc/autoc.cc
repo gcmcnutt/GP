@@ -115,6 +115,9 @@ static int gLastEliteLength = std::numeric_limits<int>::max();
 static int gLastEliteDepth = std::numeric_limits<int>::max();
 static int gEliteDivergenceCount = 0;
 static int gEliteCheckCount = 0;
+static int gEliteNotCapturedCount = 0;  // Count of generations where elite wasn't re-evaluated
+static int gEliteReevalCount = 0;       // Count of successful elite re-evaluations
+static int gEliteWorseReplacementCount = 0;  // Count of elite replaced with worse fitness (different structure)
 static EvalResults gPriorEliteEval;
 static gp_scalar gPriorEliteFitness = std::numeric_limits<gp_scalar>::infinity();
 static bool gPriorEliteCaptured = false;
@@ -400,8 +403,10 @@ void clearEvalResults(EvalResults& result) {
   result.aircraftStateList.clear();
   result.scenario = ScenarioMetadata();
   result.scenarioList.clear();
+#ifdef PHYSICS_TRACE_ENABLED
   result.debugSamples.clear();
   result.physicsTrace.clear();
+#endif
   result.workerId = -1;
   result.workerPid = 0;
   result.workerEvalCounter = 0;
@@ -419,8 +424,10 @@ void appendEvalResults(EvalResults& dest, const EvalResults& src) {
   dest.pathList.insert(dest.pathList.end(), src.pathList.begin(), src.pathList.end());
   dest.aircraftStateList.insert(dest.aircraftStateList.end(), src.aircraftStateList.begin(), src.aircraftStateList.end());
   dest.scenarioList.insert(dest.scenarioList.end(), src.scenarioList.begin(), src.scenarioList.end());
+#ifdef PHYSICS_TRACE_ENABLED
   dest.debugSamples.insert(dest.debugSamples.end(), src.debugSamples.begin(), src.debugSamples.end());
   dest.physicsTrace.insert(dest.physicsTrace.end(), src.physicsTrace.begin(), src.physicsTrace.end());
+#endif
   dest.workerId = src.workerId;
   dest.workerPid = src.workerPid;
   dest.workerEvalCounter = src.workerEvalCounter;
@@ -1255,6 +1262,7 @@ void MyGP::evalTask(WorkerContext& context)
     gPriorEliteEval = context.evalResults;
     gPriorEliteFitness = stdFitness;
     gPriorEliteCaptured = true;
+    gEliteReevalCount++;
 
     *logger.info() << "ELITE_REEVAL: Detected re-evaluation of prior elite"
                    << " gpHash=0x" << std::hex << evalData.gpHash << std::dec
@@ -1939,6 +1947,11 @@ int main(int argc, char** argv)
       // In-memory trace comparison function
       auto compareTraces = [&](const EvalResults& trace1, const EvalResults& trace2,
                                const std::string& label1, const std::string& label2) {
+#ifndef PHYSICS_TRACE_ENABLED
+        // Physics trace disabled - skip detailed comparison
+        (void)trace1; (void)trace2; (void)label1; (void)label2;
+        return;
+#else
         *logger.warn() << "=== IN-MEMORY TRACE COMPARISON ===" << endl;
         *logger.warn() << "Trace 1: " << label1
                       << " workerId=" << trace1.workerId
@@ -2246,6 +2259,7 @@ int main(int argc, char** argv)
             }
           }
           *logger.warn() << endl;
+#endif  // PHYSICS_TRACE_ENABLED
       };
 
       MyGP* currentElite = pop->NthMyGP(pop->bestOfPopulation);
@@ -2281,6 +2295,7 @@ int main(int argc, char** argv)
         }
         gPriorEliteCaptured = false;
       } else if (gLastEliteGpHash != 0) {
+        gEliteNotCapturedCount++;
         *logger.warn() << "ELITE_TRACE gen=" << gen << ": Prior elite hash "
                        << std::hex << "0x" << gLastEliteGpHash << std::dec
                        << " not captured during re-eval (possible mismatch or missing gp payload)"
@@ -2507,13 +2522,16 @@ int main(int argc, char** argv)
             gLastEliteDepth = currentEliteDepth;
           }
         } else if (eliteStructureChanged && fitnessWorsened) {
-          // Different individual with worse fitness (not a determinism signal) — skip detailed dump
-          *logger.info() << "ELITE_TRACE gen=" << gen << ": Elite replaced with worse fitness (different structure)"
+          // Different individual with worse fitness - in demetic mode this indicates non-determinism
+          // because the bakeoff winner should always be at least as good as before
+          gEliteWorseReplacementCount++;
+          *logger.warn() << "ELITE_TRACE gen=" << gen << ": Elite replaced with worse fitness (different structure)"
                         << " old_fitness=" << std::fixed << std::setprecision(6) << gLastEliteFitness
                         << " new_fitness=" << currentFitness
+                        << " delta=" << std::scientific << (currentFitness - gLastEliteFitness)
                         << " length " << gLastEliteLength << "->" << currentEliteLength
                         << " depth " << gLastEliteDepth << "->" << currentEliteDepth
-                        << " [" << gEliteDivergenceCount << ":" << gEliteCheckCount << " divergences]" << endl;
+                        << std::defaultfloat << endl;
 
           {
             std::lock_guard<std::mutex> lock(gEliteTrackingMutex);
@@ -2534,6 +2552,14 @@ int main(int argc, char** argv)
           }
         }
       }
+
+      // Per-generation elite tracking summary (always output for visibility)
+      *logger.info() << "ELITE_STATUS gen=" << gen
+                     << " checks=" << gEliteCheckCount
+                     << " reevals=" << gEliteReevalCount
+                     << " notcaptured=" << gEliteNotCapturedCount
+                     << " divergences=" << gEliteDivergenceCount
+                     << " worse_replacements=" << gEliteWorseReplacementCount << endl;
     }
 
     // TODO send exit message to workers
@@ -2543,6 +2569,27 @@ int main(int argc, char** argv)
     // pop->NthMyGP(pop->bestOfPopulation)->save(bestGP);
 
     *logger.info() << "GP complete!" << endl;
+
+    // Print elite tracking summary
+    *logger.info() << "Elite tracking summary:" << endl;
+    *logger.info() << "  Generations checked: " << gEliteCheckCount << endl;
+    *logger.info() << "  Elite re-evals captured: " << gEliteReevalCount << endl;
+    *logger.info() << "  Elite not captured: " << gEliteNotCapturedCount << endl;
+    *logger.info() << "  Divergences detected: " << gEliteDivergenceCount << endl;
+    *logger.info() << "  Worse replacements: " << gEliteWorseReplacementCount << endl;
+
+    // Calculate total anomalies (any sign of non-determinism)
+    int totalAnomalies = gEliteDivergenceCount + gEliteWorseReplacementCount;
+    if (totalAnomalies > 0) {
+      *logger.warn() << "WARNING: " << totalAnomalies << " elite anomalies detected ("
+                     << gEliteDivergenceCount << " divergences, "
+                     << gEliteWorseReplacementCount << " worse replacements) - "
+                     << "check for non-determinism in simulation!" << endl;
+    }
+    if (gEliteReevalCount == 0 && gEliteCheckCount > 0 && gEliteWorseReplacementCount == 0) {
+      *logger.warn() << "WARNING: No elite re-evaluations captured in " << gEliteCheckCount
+                     << " generations - determinism verification was limited!" << endl;
+    }
 
     // Clean up final population to prevent memory leak
     delete pop;
