@@ -14,6 +14,7 @@ From skeleton/skeleton.cc
 #include <new>
 #include <fstream>
 #include <algorithm>
+#include <numeric>
 #include <sstream>
 #include <thread>
 #include <chrono>
@@ -105,40 +106,24 @@ std::atomic<uint64_t> bakeoffPathCounter{0};
 std::atomic<uint64_t> globalSimRunCounter{0};
 
 // Global elite tracking across generations (dispatcher-side)
-static gp_scalar gLastEliteFitness = std::numeric_limits<gp_scalar>::infinity();
-static std::string gLastEliteHash;
-static EvalResults gLastEliteTrace;
-static std::string gLastEliteKey;
+// Simplified for non-demetic mode: track elite by gpHash + fitness after bakeoff
+// Detect divergence when same gpHash + scenarios evaluates to different fitness
+static double gLastEliteFitness = std::numeric_limits<double>::infinity();
 static uint64_t gLastEliteGpHash = 0;
-static std::string gLastEliteGpString;  // Lisp form of elite GP for exact comparison
-static int gLastEliteLength = std::numeric_limits<int>::max();
-static int gLastEliteDepth = std::numeric_limits<int>::max();
-static int gEliteDivergenceCount = 0;
-static int gEliteCheckCount = 0;
-static int gEliteNotCapturedCount = 0;  // Count of generations where elite wasn't re-evaluated
-static int gEliteReevalCount = 0;       // Count of successful elite re-evaluations
-static int gEliteWorseReplacementCount = 0;  // Count of elite replaced with worse fitness (different structure)
-static EvalResults gPriorEliteEval;
-static gp_scalar gPriorEliteFitness = std::numeric_limits<gp_scalar>::infinity();
-static bool gPriorEliteCaptured = false;
+static int gLastEliteLength = 0;
+static int gLastEliteDepth = 0;
 static size_t gLastEliteNumPaths = 0;  // Number of paths in elite evaluation
 static uint64_t gLastEliteScenarioHash = 0;  // Hash of scenario metadata
-static bool gLastEliteWasBakeoff = false;  // Whether baseline elite was evaluated in bakeoff mode
-static std::mutex gPriorEliteMutex;
+static int gEliteDivergenceCount = 0;  // Count of reevals where fitness differed (non-determinism)
+static int gEliteReevalCount = 0;      // Count of times elite was re-evaluated (same gpHash across generations)
+// Note: No mutex needed - elite tracking only happens on main thread in endOfEvaluation()
 
-// Store ALL eval results during current generation, keyed by gpHash
-// This allows us to look up the elite's trace after selection completes
-static std::map<uint64_t, EvalResults> gCurrentGenEvalResults;
-static std::mutex gCurrentGenEvalResultsMutex;
-static std::mutex gEliteTrackingMutex;  // Protects all gLastElite* variables for reads/writes
+// NOTE: Removed gGlobalEliteIndex and gGlobalEliteFitness - simplified to use library's
+// bestOfPopulation directly. In non-demetic mode, the library tracks the elite correctly.
+// For demetic mode, see MAKE_DEME_WORK.md for the Island Model approach.
 
-// Global elite tracking - persists across generations (population objects are recreated)
-// This is separate from library's bestOfPopulation which tracks single-scenario fitness
-static int gGlobalEliteIndex = -1;
-static gp_scalar gGlobalEliteFitness = std::numeric_limits<gp_scalar>::infinity();
-
-static bool bitwiseEqual(gp_scalar a, gp_scalar b) {
-  return std::memcmp(&a, &b, sizeof(gp_scalar)) == 0;
+static bool bitwiseEqual(double a, double b) {
+  return std::memcmp(&a, &b, sizeof(double)) == 0;
 }
 
 static uint64_t computeGpHash(const EvalResults& res) {
@@ -524,6 +509,7 @@ public:
           candidateIndices.push_back(bestIndex);
         }
       } else {
+        // Non-demetic mode: just bakeoff the library's best individual
         candidateIndices.push_back(bestOfPopulation);
       }
 
@@ -575,17 +561,8 @@ public:
             ? cumulativeFitness / static_cast<gp_scalar>(scenariosEvaluated)
             : std::numeric_limits<gp_scalar>::infinity();
 
-          // If this candidate is the prior elite, detect drift even if it loses the top slot.
-          std::ostringstream candStream;
-          candidate->save(candStream);
-          std::string candHash = candStream.str();
-          if (!gLastEliteHash.empty() && candHash == gLastEliteHash && !bitwiseEqual(averageFitness, gLastEliteFitness)) {
-            gp_scalar delta = averageFitness - gLastEliteFitness;
-            *logger.warn() << "ELITE_TRACE: prior elite re-evaluated with different fitness before selection"
-                           << " prev=" << std::fixed << std::setprecision(6) << gLastEliteFitness
-                           << " current=" << averageFitness
-                           << " delta=" << std::scientific << delta << std::defaultfloat << endl;
-          }
+          // Note: Divergence detection is now done in endOfEvaluation() via ELITE_STORE logging.
+          // No need to detect here - we just run the eval and let the main thread do bookkeeping.
 
           // Restore previous logging state before moving on.
           enableDeterministicTestLogging.store(prevLogging, std::memory_order_relaxed);
@@ -595,22 +572,13 @@ public:
             bestOfEvalResults = aggregatedEvalResults;
             best = candidate;
 
-            // Store bakeoff winner's trace for determinism checking
-            // This is the only place where we capture elite's aggregated multi-scenario results
-            if (bestOfEvalResults.gpHash != 0) {
-              std::lock_guard<std::mutex> lock(gCurrentGenEvalResultsMutex);
-              gCurrentGenEvalResults[bestOfEvalResults.gpHash] = bestOfEvalResults;
-              *logger.info() << "ELITE_STORE: Stored bakeoff winner gpHash=0x" << std::hex << bestOfEvalResults.gpHash << std::dec
-                             << " paths=" << bestOfEvalResults.pathList.size()
-                             << " (map now has " << gCurrentGenEvalResults.size() << " entries)" << endl;
-            }
           }
         }
 
         activeEvalCollector = previousCollector;
 
-        // Compare bakeoff winner against global elite
-        // Only update global elite if new winner has better aggregated fitness
+        // Update the best individual's fitness with the aggregated result
+        // and update bestOfPopulation to point to the bakeoff winner
         if (best) {
           // Find the index of the best candidate in the population
           int bestIndex = -1;
@@ -621,45 +589,16 @@ public:
             }
           }
 
-          // Check if bakeoff winner beats the global elite
-          if (bestAggregatedFitness < gGlobalEliteFitness) {
-            gp_scalar improvement = gGlobalEliteFitness - bestAggregatedFitness;
-            *logger.info() << "GLOBAL_ELITE: New champion! fitness=" << std::fixed << std::setprecision(6) << bestAggregatedFitness
-                           << " (prev=" << gGlobalEliteFitness << " improvement=" << std::scientific << improvement << std::defaultfloat << ")"
-                           << " index=" << bestIndex << endl;
-            gGlobalEliteFitness = bestAggregatedFitness;
-            gGlobalEliteIndex = bestIndex;
-            bestOfPopulation = bestIndex;
-          } else if (bestIndex == gGlobalEliteIndex) {
-            // Elite was re-evaluated in bakeoff - check for determinism
-            if (!bitwiseEqual(bestAggregatedFitness, gGlobalEliteFitness)) {
-              gp_scalar delta = bestAggregatedFitness - gGlobalEliteFitness;
-              *logger.warn() << "GLOBAL_ELITE_DRIFT: Elite re-evaluated with different aggregated fitness!"
-                             << " prev=" << std::fixed << std::setprecision(6) << gGlobalEliteFitness
-                             << " current=" << bestAggregatedFitness
-                             << " delta=" << std::scientific << delta << std::defaultfloat << endl;
-            } else {
-              *logger.info() << "GLOBAL_ELITE: Elite re-evaluated, fitness unchanged at " << std::fixed << std::setprecision(6) << gGlobalEliteFitness << endl;
-            }
-            // Elite remains, keep bestOfPopulation pointing to it
-            bestOfPopulation = gGlobalEliteIndex;
-          } else {
-            // New bakeoff winner didn't beat global elite
-            *logger.info() << "GLOBAL_ELITE: Bakeoff winner (fitness=" << std::fixed << std::setprecision(6) << bestAggregatedFitness
-                           << ") did not beat global elite (fitness=" << gGlobalEliteFitness << ")" << endl;
-            // Keep bestOfPopulation pointing to global elite for migration purposes
-            bestOfPopulation = gGlobalEliteIndex;
-          }
+          // Set bakeoff winner's fitness to aggregated value
+          // This ensures calculateStatistics() keeps it as best
+          best->setFitness(bestAggregatedFitness);
+          bestOfPopulation = bestIndex;
 
-          // Propagate the global elite to all demes by replacing the worst
-          // individual in each deme. This spreads the generalist's genes across
-          // all path specializations for the next generation.
-          // Use gGlobalEliteFitness since that's what bestOfPopulation now points to.
+          // Demetic propagation (only in demetic mode)
           if (gpCfg.DemeticGrouping && gpCfg.DemeSize > 0 &&
-              std::isfinite(gGlobalEliteFitness) && gGlobalEliteIndex >= 0) {
+              std::isfinite(bestAggregatedFitness)) {
             int demeSize = gpCfg.DemeSize;
             int demesPropagated = 0;
-            // Config is expressed as percent (0..100)
             gp_scalar migProb = std::clamp(static_cast<gp_scalar>(gpCfg.DemeticMigProbability) / static_cast<gp_scalar>(100.0f),
                                            static_cast<gp_scalar>(0.0f),
                                            static_cast<gp_scalar>(1.0f));
@@ -667,22 +606,17 @@ public:
             static thread_local std::mt19937 rng(std::random_device{}());
 
             for (int demeStart = 0; demeStart < containerSize(); demeStart += demeSize) {
-              // Per-deme coin flip: only migrate if roll is below probability
               if (dist(rng) > migProb) {
                 continue;
               }
 
               int demeEnd = std::min(demeStart + demeSize, containerSize());
-
-              // Find worst individual in this deme (highest fitness = worst)
               int worstInDeme = demeStart;
               gp_scalar worstFitness = std::numeric_limits<gp_scalar>::lowest();
 
               for (int idx = demeStart; idx < demeEnd; ++idx) {
                 MyGP* candidate = NthMyGP(idx);
-                if (!candidate) {
-                  continue;
-                }
+                if (!candidate) continue;
                 gp_scalar fitness = static_cast<gp_scalar>(candidate->getFitness());
                 if (!std::isfinite(fitness) || fitness > worstFitness) {
                   worstFitness = fitness;
@@ -690,30 +624,23 @@ public:
                 }
               }
 
-              // Don't replace the global elite itself (elitism protection)
-              if (worstInDeme != gGlobalEliteIndex) {
-                // Clone the global elite and replace the worst
-                MyGP* globalElite = NthMyGP(gGlobalEliteIndex);
-                if (globalElite) {
-                  MyGP* clone = (MyGP*)&globalElite->duplicate();
-                  // The clone will have the same fitness as the elite, but it's
-                  // not THE elite - it will be re-evaluated next generation
-                  put(worstInDeme, *clone);
-                  demesPropagated++;
-                }
+              if (worstInDeme != bestOfPopulation) {
+                MyGP* clone = (MyGP*)&best->duplicate();
+                put(worstInDeme, *clone);
+                demesPropagated++;
               }
             }
 
-            bout << "# Propagated global elite (fitness="
-                 << gGlobalEliteFitness << ") to "
+            bout << "# Propagated bakeoff winner (fitness="
+                 << bestAggregatedFitness << ") to "
                  << demesPropagated << " demes" << endl;
             bout.flush();
           }
         }
       }
 
-      // Use global elite for storage (not necessarily the bakeoff winner if it didn't beat prior elite)
-      MyGP* eliteForStorage = (gGlobalEliteIndex >= 0) ? NthMyGP(gGlobalEliteIndex) : best;
+      // Use bakeoff winner for storage
+      MyGP* eliteForStorage = best;
       if (!eliteForStorage) {
         eliteForStorage = NthMyGP(bestOfPopulation);
       }
@@ -806,7 +733,7 @@ void MyGP::evalTask(WorkerContext& context)
   evalData.gp = buffer;
   // Hash the Lisp string (deterministic) instead of binary serialization
   evalData.gpHash = hashString(currentGpString);
-  evalData.isEliteReeval = false;  // Will be set to true below if this is an elite re-evaluation
+  evalData.isEliteReeval = false;  // Can be set by caller for crrcsim detailed logging
   evalData.pathList = scenario.pathList;
   evalData.scenario.scenarioSequence = scenarioSequence;
   evalData.scenario.bakeoffSequence = 0;
@@ -877,24 +804,8 @@ void MyGP::evalTask(WorkerContext& context)
 
   evalData.sanitizePaths();
 
-  // Check if this is an elite re-evaluation BEFORE sending to worker
-  // This allows crrcsim to enable detailed aero logging during the evaluation
-  // IMPORTANT: Must check BOTH GP hash AND scenario configuration (for deme mode)
-  {
-    std::lock_guard<std::mutex> lock(gEliteTrackingMutex);
-    size_t currentNumPaths = evalData.pathList.size();
-    uint64_t currentScenarioHash = computeScenarioHash(evalData.scenarioList);
-
-    bool gpHashMatches = (gLastEliteGpHash != 0) && (evalData.gpHash == gLastEliteGpHash);
-    bool pathCountMatches = (currentNumPaths == gLastEliteNumPaths);
-    bool scenarioMatches = (currentScenarioHash == gLastEliteScenarioHash);
-    bool bakeoffMatches = (isBakeoff == gLastEliteWasBakeoff);
-
-    // Only flag as elite re-eval if ALL conditions match AND both are bakeoff evaluations
-    if (gpHashMatches && pathCountMatches && scenarioMatches && bakeoffMatches && isBakeoff) {
-      evalData.isEliteReeval = true;
-    }
-  }
+  // Note: isEliteReeval flag is set by the caller (MyPopulation::evaluate) if needed
+  // for crrcsim detailed logging. We don't do elite tracking in worker tasks.
 
   sendRPC(*context.socket, evalData);
 
@@ -944,49 +855,8 @@ void MyGP::evalTask(WorkerContext& context)
     }
   }
 
-  // NOTE: We no longer store every evaluation in gCurrentGenEvalResults.
-  // This was causing massive memory usage (1.5GB peak from copying physicsTrace 758k times).
-  // Instead, we only store the elite's EvalResults during bakeoff (see line ~1855).
-  // The map is used solely for elite determinism checking, not for all individuals.
-
-  // Capture re-evaluation of prior generation elite (same GP structure AND same path set)
-  // CRITICAL: Must verify GP structure, scenario/path set, AND bakeoff mode match
-  // We only compare bakeoff-to-bakeoff evaluations (same fitness calculation code path)
-  bool isEliteReeval = false;
-  {
-    std::lock_guard<std::mutex> lock(gEliteTrackingMutex);
-    size_t currentNumPaths = context.evalResults.pathList.size();
-    uint64_t currentScenarioHash = computeScenarioHash(context.evalResults.scenarioList);
-
-    bool gpMatches = !gLastEliteGpString.empty() && (currentGpString == gLastEliteGpString);
-    bool pathCountMatches = (currentNumPaths == gLastEliteNumPaths);
-    bool scenarioMatches = (currentScenarioHash == gLastEliteScenarioHash);
-    bool bakeoffMatches = (isBakeoff == gLastEliteWasBakeoff);
-
-    // Only flag as elite re-eval if ALL conditions match AND both are bakeoff evaluations
-    if (gpMatches && pathCountMatches && scenarioMatches && bakeoffMatches && isBakeoff) {
-      isEliteReeval = true;
-      evalData.isEliteReeval = true;  // Enable detailed logging in worker
-    } else if (gpMatches && (!pathCountMatches || !scenarioMatches)) {
-      // Same GP but different path set - expected in demetic mode where elite is
-      // evaluated on single deme scenario (3 paths) but baseline is from bakeoff (9 paths)
-      // Only log at debug level since this is normal behavior
-      *logger.debug() << "ELITE_DEME_EVAL: Elite evaluated on deme scenario (not bakeoff)"
-                     << " paths=" << currentNumPaths << " vs " << gLastEliteNumPaths
-                     << " scenarioHash=0x" << std::hex << currentScenarioHash
-                     << " vs 0x" << gLastEliteScenarioHash << std::dec << endl;
-    } else if (gpMatches && pathCountMatches && scenarioMatches && !bakeoffMatches) {
-      // Same GP and path set, but different evaluation mode (tournament vs bakeoff)
-      *logger.debug() << "ELITE_REEVAL_SKIP: Same GP but different eval mode"
-                      << " current=" << (isBakeoff ? "bakeoff" : "tournament")
-                      << " baseline=" << (gLastEliteWasBakeoff ? "bakeoff" : "tournament") << endl;
-    }
-  }
-
-  // Note: Can't capture fitness here yet - it's computed later in the loop
-  // We'll capture it after stdFitness is finalized (after line 1141)
-
   // Compute the fitness results for each path
+  // (Results are already in order - worker processes paths sequentially)
   for (int i = 0; i < context.evalResults.pathList.size(); i++) {
     bool printHeader = true;
 
@@ -1256,31 +1126,8 @@ void MyGP::evalTask(WorkerContext& context)
   // Mark fitness as valid for the GP library
   fitnessValid = 1;
 
-  // NOW capture elite re-evaluation (after fitness is computed)
-  if (isEliteReeval) {
-    std::lock_guard<std::mutex> lock(gPriorEliteMutex);
-    gPriorEliteEval = context.evalResults;
-    gPriorEliteFitness = stdFitness;
-    gPriorEliteCaptured = true;
-    gEliteReevalCount++;
-
-    *logger.info() << "ELITE_REEVAL: Detected re-evaluation of prior elite"
-                   << " gpHash=0x" << std::hex << evalData.gpHash << std::dec
-                   << " fitness=" << std::fixed << std::setprecision(6) << stdFitness << endl;
-
-    // Check for divergence immediately (don't wait until next elite change)
-    {
-      std::lock_guard<std::mutex> eliteLock(gEliteTrackingMutex);
-      if (!bitwiseEqual(stdFitness, gLastEliteFitness)) {
-        gEliteDivergenceCount++;
-        *logger.warn() << "ELITE_REEVAL: DIVERGENCE DETECTED during re-evaluation!"
-                       << " baseline=" << std::fixed << std::setprecision(6) << gLastEliteFitness
-                       << " reeval=" << stdFitness
-                       << " delta=" << std::scientific << (stdFitness - gLastEliteFitness)
-                       << std::defaultfloat << endl;
-      }
-    }
-  }
+  // Note: Elite divergence detection is done in endOfEvaluation() on the main thread,
+  // not here in the worker task. Worker tasks just run simulations and return results.
 
 }
 
@@ -1873,12 +1720,6 @@ int main(int argc, char** argv)
 
     for (int gen = 1; gen <= ConfigManager::getGPConfig().NumberOfGenerations; gen++)
     {
-      // Clear eval results from previous generation
-      {
-        std::lock_guard<std::mutex> lock(gCurrentGenEvalResultsMutex);
-        gCurrentGenEvalResults.clear();
-      }
-
       // For this generation, build a smooth path goal
       // Handle -1 as time-based seed for path generation
       unsigned int genPathSeed;
@@ -2262,304 +2103,75 @@ int main(int argc, char** argv)
 #endif  // PHYSICS_TRACE_ENABLED
       };
 
+      // Elite tracking for non-demetic mode
+      // Single ELITE_STORE log per generation with outcome:
+      //   INITIAL - first generation
+      //   REPLACED - new elite (different gpHash)
+      //   SAME - same elite, same fitness (no-op)
+      //   DIVERGED - same elite, different fitness (non-determinism)
       MyGP* currentElite = pop->NthMyGP(pop->bestOfPopulation);
-      gp_scalar currentFitness = currentElite->getFitness();
-      int currentEliteLength = currentElite->length();
-      int currentEliteDepth = currentElite->depth();
+      double currentFitness = currentElite->getFitness();  // Use double to match library's stdFitness
+      int currentLength = currentElite->length();
+      int currentDepth = currentElite->depth();
 
-      // Compute hash of elite's tree structure to detect if it's truly the same individual
-      std::ostringstream eliteStream;
-      currentElite->save(eliteStream);
-      std::string currentEliteHash = eliteStream.str();
-
-      // Generate Lisp-form string of elite GP for exact comparison
+      // Generate Lisp-form string of elite GP for hash
       std::ostringstream eliteGpStringStream;
       currentElite->printOn(eliteGpStringStream);
       std::string currentEliteGpString = eliteGpStringStream.str();
-
-      // Check if elite changed (structure changed, not just population index)
-      bool eliteStructureChanged = (currentEliteHash != gLastEliteHash);
-
-      // If we captured a re-eval of the prior elite during this generation, check for drift now.
-      if (gPriorEliteCaptured) {
-        std::lock_guard<std::mutex> lock(gPriorEliteMutex);
-        if (!bitwiseEqual(gPriorEliteFitness, gLastEliteFitness)) {
-          gEliteDivergenceCount++;
-          *logger.warn() << "ELITE_TRACE gen=" << gen << ": Prior elite drifted on re-eval before selection"
-                         << " prev=" << std::fixed << std::setprecision(6) << gLastEliteFitness
-                         << " current=" << gPriorEliteFitness
-                         << " delta=" << std::scientific << (gPriorEliteFitness - gLastEliteFitness)
-                         << " [" << gEliteDivergenceCount << ":" << gEliteCheckCount << " divergences]"
-                         << std::defaultfloat << endl;
-          compareTraces(gLastEliteTrace, gPriorEliteEval, gLastEliteKey, "<prior-elite-reeval>");
-        }
-        gPriorEliteCaptured = false;
-      } else if (gLastEliteGpHash != 0) {
-        gEliteNotCapturedCount++;
-        *logger.warn() << "ELITE_TRACE gen=" << gen << ": Prior elite hash "
-                       << std::hex << "0x" << gLastEliteGpHash << std::dec
-                       << " not captured during re-eval (possible mismatch or missing gp payload)"
-                       << " [" << gEliteDivergenceCount << ":" << gEliteCheckCount << " divergences]" << endl;
-      }
-
-      // Compute elite GP hash from Lisp string (deterministic, same as evalTask)
       uint64_t currentEliteGpHash = hashString(currentEliteGpString);
 
-      // Look up elite's eval results from current generation
-      EvalResults* eliteEvalResults = nullptr;
-      {
-        std::lock_guard<std::mutex> lock(gCurrentGenEvalResultsMutex);
-        auto it = gCurrentGenEvalResults.find(currentEliteGpHash);
-        if (it != gCurrentGenEvalResults.end()) {
-          eliteEvalResults = &it->second;
-        }
+      // Determine outcome
+      bool isFirstGen = (gLastEliteGpHash == 0);
+      bool sameStructure = !isFirstGen && (currentEliteGpHash == gLastEliteGpHash);
+      const char* outcome;
 
-        // Free memory: clear all non-elite traces immediately after lookup
-        // Keep only the elite's trace to avoid memory leak from physicsTrace data
-        if (eliteEvalResults && gCurrentGenEvalResults.size() > 1) {
-          EvalResults eliteCopy = *eliteEvalResults;  // Copy before clearing map
-          gCurrentGenEvalResults.clear();
-          gCurrentGenEvalResults[currentEliteGpHash] = std::move(eliteCopy);
-          eliteEvalResults = &gCurrentGenEvalResults[currentEliteGpHash];  // Update pointer
-        }
-      }
-
-      // Generate trace label for logging (no longer writing files)
-      std::string traceLabel;
-      if (eliteEvalResults) {
-        traceLabel = "gen" + std::to_string(gen)
-                   + "-worker" + std::to_string(eliteEvalResults->workerId)
-                   + "-pid" + std::to_string(eliteEvalResults->workerPid)
-                   + "-eval" + std::to_string(eliteEvalResults->workerEvalCounter);
+      if (isFirstGen) {
+        outcome = "INITIAL";
+      } else if (!sameStructure) {
+        outcome = "REPLACED";
       } else {
-        traceLabel = "gen" + std::to_string(gen) + "-NOT-FOUND";
-        *logger.warn() << "ELITE_TRACE gen=" << gen << ": Elite gpHash 0x" << std::hex
-                       << currentEliteGpHash << std::dec << " not found in eval results map!" << endl;
+        // Same structure - check if fitness matches
+        gEliteReevalCount++;
+        if (!bitwiseEqual(currentFitness, gLastEliteFitness)) {
+          gEliteDivergenceCount++;
+          outcome = "DIVERGED";
+        } else {
+          outcome = "SAME";
+        }
       }
 
-      if (gen == 1) {
-        // First generation: establish baseline
-        std::lock_guard<std::mutex> lock(gEliteTrackingMutex);
-        gLastEliteFitness = currentFitness;
-        gLastEliteHash = currentEliteHash;
-        if (eliteEvalResults) {
-          gLastEliteTrace = *eliteEvalResults;
-        } else {
-          // Fallback to bestOfEvalResults (bakeoff) if not in map
-          gLastEliteTrace = bestOfEvalResults;
-        }
-        gLastEliteKey = traceLabel;
-        gLastEliteGpHash = currentEliteGpHash;
-        gLastEliteGpString = currentEliteGpString;
-        if (eliteEvalResults) {
-          gLastEliteNumPaths = eliteEvalResults->pathList.size();
-          gLastEliteScenarioHash = computeScenarioHash(eliteEvalResults->scenarioList);
-        } else {
-          gLastEliteNumPaths = bestOfEvalResults.pathList.size();
-          gLastEliteScenarioHash = computeScenarioHash(bestOfEvalResults.scenarioList);
-        }
-        gLastEliteWasBakeoff = true;  // Gen 1 elite always evaluated in bakeoff
-        gLastEliteLength = currentEliteLength;
-        gLastEliteDepth = currentEliteDepth;
-
-        *logger.info() << "ELITE_TRACE gen=" << gen << ": Baseline elite captured"
-                      << " fitness=" << std::fixed << std::setprecision(6) << currentFitness
-                      << " paths=" << gLastEliteNumPaths
-                      << " scenarioHash=0x" << std::hex << gLastEliteScenarioHash << std::dec
-                      << " trace=" << traceLabel
-                      << " [" << gEliteDivergenceCount << ":" << gEliteCheckCount << " divergences]" << endl;
+      // Single log line per generation (warn level for divergence, info otherwise)
+      // Compact format: gpHash=old->new fitness=old->new len=old->new depth=old->new
+      if (strcmp(outcome, "DIVERGED") == 0) {
+        double delta = currentFitness - gLastEliteFitness;
+        *logger.warn() << "ELITE_STORE: gen=" << gen
+                       << " gpHash=0x" << std::hex << gLastEliteGpHash << "->0x" << currentEliteGpHash << std::dec
+                       << " fitness=" << std::fixed << std::setprecision(6) << gLastEliteFitness << "->" << currentFitness
+                       << " len=" << gLastEliteLength << "->" << currentLength
+                       << " depth=" << gLastEliteDepth << "->" << currentDepth
+                       << " delta=" << std::scientific << delta << std::defaultfloat
+                       << " " << outcome << endl;
       } else {
-        // Subsequent generations: check for changes
-        gEliteCheckCount++;
-
-        auto logCounters = [&]() {
-          *logger.warn() << "  EliteChecks=" << gEliteCheckCount << " Divergences=" << gEliteDivergenceCount
-                        << " (" << std::fixed << std::setprecision(2)
-                        << (gEliteCheckCount > 0 ? (100.0 * gEliteDivergenceCount / gEliteCheckCount) : 0.0)
-                        << "%)" << endl;
-        };
-
-        bool fitnessImproved = currentFitness < gLastEliteFitness;
-        bool fitnessWorsened = currentFitness > gLastEliteFitness;
-        bool fitnessEqual = bitwiseEqual(currentFitness, gLastEliteFitness);
-
-        if (eliteStructureChanged && fitnessImproved) {
-          // New elite is better - update baseline
-          *logger.info() << "ELITE_TRACE gen=" << gen << ": Elite replaced (better)"
-                        << " old_fitness=" << std::fixed << std::setprecision(6) << gLastEliteFitness
-                        << " new_fitness=" << currentFitness
-                        << " improvement=" << std::scientific << (gLastEliteFitness - currentFitness)
-                        << " [" << gEliteDivergenceCount << ":" << gEliteCheckCount << " divergences]"
-                        << std::defaultfloat << endl;
-
-          {
-            std::lock_guard<std::mutex> lock(gEliteTrackingMutex);
-            gLastEliteFitness = currentFitness;
-            gLastEliteHash = currentEliteHash;
-            gLastEliteTrace = eliteEvalResults ? *eliteEvalResults : bestOfEvalResults;
-            gLastEliteKey = traceLabel;
-            gLastEliteGpHash = currentEliteGpHash;
-            gLastEliteGpString = currentEliteGpString;
-            gLastEliteNumPaths = bestOfEvalResults.pathList.size();
-            gLastEliteScenarioHash = computeScenarioHash(bestOfEvalResults.scenarioList);
-            gLastEliteWasBakeoff = true;  // Elite replacement always in bakeoff
-            gLastEliteLength = currentEliteLength;
-            gLastEliteDepth = currentEliteDepth;
-          }
-
-          *logger.info() << "ELITE_TRACE gen=" << gen << ": New baseline captured"
-                        << " trace=" << traceLabel
-                        << " [" << gEliteDivergenceCount << ":" << gEliteCheckCount << " divergences]" << endl;
-        } else if (!eliteStructureChanged && fitnessWorsened) {
-          // Same elite structure but worse fitness - ELITISM VIOLATION!
-          gEliteDivergenceCount++;
-          *logger.warn() << "ELITE_TRACE gen=" << gen << ": ELITISM VIOLATION DETECTED!" << endl;
-          *logger.warn() << "  Same elite individual re-evaluated with different fitness:" << endl;
-          *logger.warn() << "  Previous: fitness=" << std::fixed << std::setprecision(6) << gLastEliteFitness
-                        << " trace=" << gLastEliteKey << endl;
-          *logger.warn() << "  Current:  fitness=" << std::fixed << std::setprecision(6) << currentFitness
-                        << " trace=" << traceLabel << endl;
-          *logger.warn() << "  Delta: " << std::scientific << (currentFitness - gLastEliteFitness)
-                        << " (" << std::setprecision(2) << (100.0 * (currentFitness - gLastEliteFitness) / gLastEliteFitness)
-                        << "%)" << std::defaultfloat << endl;
-          *logger.warn() << "  Compare: " << gLastEliteKey << " vs " << traceLabel << endl;
-          logCounters();
-          *logger.warn() << endl;
-
-          // In-memory trace comparison
-          compareTraces(gLastEliteTrace, bestOfEvalResults, gLastEliteKey, traceLabel);
-
-          // Update baseline to current (violated) state
-          {
-            std::lock_guard<std::mutex> lock(gEliteTrackingMutex);
-            gLastEliteFitness = currentFitness;
-            gLastEliteHash = currentEliteHash;
-            gLastEliteTrace = eliteEvalResults ? *eliteEvalResults : bestOfEvalResults;
-            gLastEliteKey = traceLabel;
-            gLastEliteGpHash = currentEliteGpHash;
-            gLastEliteGpString = currentEliteGpString;
-            gLastEliteNumPaths = bestOfEvalResults.pathList.size();
-            gLastEliteScenarioHash = computeScenarioHash(bestOfEvalResults.scenarioList);
-            gLastEliteWasBakeoff = true;  // Violation detected in bakeoff
-            gLastEliteLength = currentEliteLength;
-            gLastEliteDepth = currentEliteDepth;
-          }
-        } else if (!eliteStructureChanged && fitnessImproved) {
-          // Same elite structure but better fitness - NON-DETERMINISTIC!
-          gEliteDivergenceCount++;
-          *logger.warn() << "ELITE_TRACE gen=" << gen << ": ELITISM VIOLATION (fitness paradox)!" << endl;
-          *logger.warn() << "  Same elite structure, but improved fitness (non-deterministic!)" << endl;
-          *logger.warn() << "  Previous: fitness=" << std::fixed << std::setprecision(6) << gLastEliteFitness
-                        << " trace=" << gLastEliteKey << endl;
-          *logger.warn() << "  Current:  fitness=" << std::fixed << std::setprecision(6) << currentFitness
-                        << " trace=" << traceLabel << endl;
-          *logger.warn() << "  Delta: " << std::scientific << (gLastEliteFitness - currentFitness)
-                        << " (" << std::setprecision(2) << (100.0 * (currentFitness - gLastEliteFitness) / gLastEliteFitness)
-                        << "%)" << std::defaultfloat << endl;
-          *logger.warn() << "  Compare: " << gLastEliteKey << " vs " << traceLabel << endl;
-          logCounters();
-          *logger.warn() << endl;
-
-          // In-memory trace comparison
-          compareTraces(gLastEliteTrace, bestOfEvalResults, gLastEliteKey, traceLabel);
-
-          // Update to current (improved) state
-          {
-            std::lock_guard<std::mutex> lock(gEliteTrackingMutex);
-            gLastEliteFitness = currentFitness;
-            gLastEliteHash = currentEliteHash;
-            gLastEliteTrace = eliteEvalResults ? *eliteEvalResults : bestOfEvalResults;
-            gLastEliteKey = traceLabel;
-            gLastEliteGpHash = currentEliteGpHash;
-            gLastEliteGpString = currentEliteGpString;
-            gLastEliteNumPaths = bestOfEvalResults.pathList.size();
-            gLastEliteScenarioHash = computeScenarioHash(bestOfEvalResults.scenarioList);
-            gLastEliteWasBakeoff = true;  // Paradox case in bakeoff
-            gLastEliteLength = currentEliteLength;
-            gLastEliteDepth = currentEliteDepth;
-          }
-        } else if (!eliteStructureChanged && !fitnessWorsened && !fitnessImproved) {
-          // Same elite, same fitness - NORMAL DETERMINISTIC CASE
-          // Silent update (no logging needed for normal case)
-          {
-            std::lock_guard<std::mutex> lock(gEliteTrackingMutex);
-            gLastEliteTrace = bestOfEvalResults;
-            gLastEliteKey = traceLabel;
-          }
-        } else if (eliteStructureChanged && fitnessEqual) {
-          bool shorter = currentEliteLength < gLastEliteLength;
-          bool sameLength = currentEliteLength == gLastEliteLength;
-          bool shallower = currentEliteDepth < gLastEliteDepth;
-
-          if (shorter || (sameLength && shallower)) {
-            *logger.info() << "ELITE_TRACE gen=" << gen << ": Elite replaced (tie-break)"
-                          << " fitness=" << std::fixed << std::setprecision(6) << currentFitness
-                          << " length " << gLastEliteLength << "->" << currentEliteLength
-                          << " depth " << gLastEliteDepth << "->" << currentEliteDepth
-                          << " [" << gEliteDivergenceCount << ":" << gEliteCheckCount << " divergences]" << endl;
-          } else {
-            *logger.warn() << "ELITE_TRACE gen=" << gen << ": Elite replaced with equal fitness but no tie-break win" << endl;
-            *logger.warn() << "  Previous: fitness=" << std::fixed << std::setprecision(6) << gLastEliteFitness
-                          << " length=" << gLastEliteLength << " depth=" << gLastEliteDepth << endl;
-            *logger.warn() << "  Current:  fitness=" << std::fixed << std::setprecision(6) << currentFitness
-                          << " length=" << currentEliteLength << " depth=" << currentEliteDepth << endl;
-            logCounters();
-          }
-
-          // Update baseline (structure changed due to tie or unexpected swap)
-          {
-            std::lock_guard<std::mutex> lock(gEliteTrackingMutex);
-            gLastEliteFitness = currentFitness;
-            gLastEliteHash = currentEliteHash;
-            gLastEliteTrace = eliteEvalResults ? *eliteEvalResults : bestOfEvalResults;
-            gLastEliteKey = traceLabel;
-            gLastEliteGpHash = currentEliteGpHash;
-            gLastEliteGpString = currentEliteGpString;
-            gLastEliteNumPaths = bestOfEvalResults.pathList.size();
-            gLastEliteScenarioHash = computeScenarioHash(bestOfEvalResults.scenarioList);
-            gLastEliteWasBakeoff = true;  // Elite swap in bakeoff
-            gLastEliteLength = currentEliteLength;
-            gLastEliteDepth = currentEliteDepth;
-          }
-        } else if (eliteStructureChanged && fitnessWorsened) {
-          // Different individual with worse fitness - in demetic mode this indicates non-determinism
-          // because the bakeoff winner should always be at least as good as before
-          gEliteWorseReplacementCount++;
-          *logger.warn() << "ELITE_TRACE gen=" << gen << ": Elite replaced with worse fitness (different structure)"
-                        << " old_fitness=" << std::fixed << std::setprecision(6) << gLastEliteFitness
-                        << " new_fitness=" << currentFitness
-                        << " delta=" << std::scientific << (currentFitness - gLastEliteFitness)
-                        << " length " << gLastEliteLength << "->" << currentEliteLength
-                        << " depth " << gLastEliteDepth << "->" << currentEliteDepth
-                        << std::defaultfloat << endl;
-
-          {
-            std::lock_guard<std::mutex> lock(gEliteTrackingMutex);
-            gLastEliteFitness = currentFitness;
-            gLastEliteHash = currentEliteHash;
-            gLastEliteTrace = eliteEvalResults ? *eliteEvalResults : bestOfEvalResults;
-            gLastEliteKey = traceLabel;
-            gLastEliteGpHash = currentEliteGpHash;
-            gLastEliteGpString = currentEliteGpString;
-            gLastEliteNumPaths = bestOfEvalResults.pathList.size();
-            gLastEliteScenarioHash = computeScenarioHash(bestOfEvalResults.scenarioList);
-            gLastEliteWasBakeoff = true;  // Elite replacement in bakeoff
-            if (gLastEliteGpHash == 0) {
-              *logger.warn() << "ELITE_TRACE: baseline GP hash is zero; drift detection will be disabled" << endl;
-            }
-            gLastEliteLength = currentEliteLength;
-            gLastEliteDepth = currentEliteDepth;
-          }
-        }
+        *logger.info() << "ELITE_STORE: gen=" << gen
+                       << " gpHash=0x" << std::hex << gLastEliteGpHash << "->0x" << currentEliteGpHash << std::dec
+                       << " fitness=" << std::fixed << std::setprecision(6) << gLastEliteFitness << "->" << currentFitness
+                       << " len=" << gLastEliteLength << "->" << currentLength
+                       << " depth=" << gLastEliteDepth << "->" << currentDepth
+                       << " " << outcome << endl;
       }
 
-      // Per-generation elite tracking summary (always output for visibility)
-      *logger.info() << "ELITE_STATUS gen=" << gen
-                     << " checks=" << gEliteCheckCount
+      // Update baseline
+      gLastEliteFitness = currentFitness;
+      gLastEliteGpHash = currentEliteGpHash;
+      gLastEliteLength = currentLength;
+      gLastEliteDepth = currentDepth;
+      gLastEliteNumPaths = bestOfEvalResults.pathList.size();
+      gLastEliteScenarioHash = computeScenarioHash(bestOfEvalResults.scenarioList);
+
+      // Per-generation counter summary (useful if run is interrupted)
+      *logger.info() << "ELITE_STATUS: gen=" << gen
                      << " reevals=" << gEliteReevalCount
-                     << " notcaptured=" << gEliteNotCapturedCount
-                     << " divergences=" << gEliteDivergenceCount
-                     << " worse_replacements=" << gEliteWorseReplacementCount << endl;
+                     << " divergences=" << gEliteDivergenceCount << endl;
     }
 
     // TODO send exit message to workers
@@ -2572,23 +2184,12 @@ int main(int argc, char** argv)
 
     // Print elite tracking summary
     *logger.info() << "Elite tracking summary:" << endl;
-    *logger.info() << "  Generations checked: " << gEliteCheckCount << endl;
-    *logger.info() << "  Elite re-evals captured: " << gEliteReevalCount << endl;
-    *logger.info() << "  Elite not captured: " << gEliteNotCapturedCount << endl;
-    *logger.info() << "  Divergences detected: " << gEliteDivergenceCount << endl;
-    *logger.info() << "  Worse replacements: " << gEliteWorseReplacementCount << endl;
+    *logger.info() << "  Elite re-evals: " << gEliteReevalCount << endl;
+    *logger.info() << "  Divergences: " << gEliteDivergenceCount << endl;
 
-    // Calculate total anomalies (any sign of non-determinism)
-    int totalAnomalies = gEliteDivergenceCount + gEliteWorseReplacementCount;
-    if (totalAnomalies > 0) {
-      *logger.warn() << "WARNING: " << totalAnomalies << " elite anomalies detected ("
-                     << gEliteDivergenceCount << " divergences, "
-                     << gEliteWorseReplacementCount << " worse replacements) - "
-                     << "check for non-determinism in simulation!" << endl;
-    }
-    if (gEliteReevalCount == 0 && gEliteCheckCount > 0 && gEliteWorseReplacementCount == 0) {
-      *logger.warn() << "WARNING: No elite re-evaluations captured in " << gEliteCheckCount
-                     << " generations - determinism verification was limited!" << endl;
+    if (gEliteDivergenceCount > 0) {
+      *logger.warn() << "WARNING: " << gEliteDivergenceCount << " divergences detected - "
+                     << "non-determinism in simulation!" << endl;
     }
 
     // Clean up final population to prevent memory leak
@@ -2598,7 +2199,6 @@ int main(int argc, char** argv)
     // Clean up accumulated evaluation results to prevent memory leak
     clearEvalResults(bestOfEvalResults);
     clearEvalResults(aggregatedEvalResults);
-    gCurrentGenEvalResults.clear();
   }
 
   uint64_t totalRuns = globalSimRunCounter.load(std::memory_order_relaxed);
