@@ -225,14 +225,17 @@ void rebuildGenerationScenarios(const std::vector<std::vector<Path>>& basePaths)
     ScenarioDescriptor scenario;
     scenario.pathVariantIndex = -1;  // Multiple paths, no single variant
 
-    // Add all combinations of paths × winds
+    // Build wind scenarios list first
     for (int windIdx = 0; windIdx < windScenarioCount; ++windIdx) {
       WindScenarioConfig windScenario;
       windScenario.windSeed = seedBase + seedStride * static_cast<unsigned int>(windIdx);
       windScenario.windVariantIndex = windIdx;
       scenario.windScenarios.push_back(windScenario);
+    }
 
-      for (size_t pathIdx = 0; pathIdx < basePaths.size(); ++pathIdx) {
+    // Add path×wind combinations in PATH-MAJOR order: [p0w0, p0w1, ..., p0w5, p1w0, ...]
+    for (size_t pathIdx = 0; pathIdx < basePaths.size(); ++pathIdx) {
+      for (int windIdx = 0; windIdx < windScenarioCount; ++windIdx) {
         scenario.pathList.push_back(basePaths[pathIdx]);
       }
     }
@@ -775,12 +778,12 @@ void MyGP::evalTask(WorkerContext& context)
       }
     } else {
       // Non-demetic mode: scenario has all paths × all winds
-      // pathList is organized as [wind0:path0, wind0:path1, ..., wind1:path0, wind1:path1, ...]
+      // pathList is organized in PATH-MAJOR order: [p0w0, p0w1, ..., p0w5, p1w0, p1w1, ...]
       size_t numWindScenarios = scenario.windScenarios.size();
       if (numWindScenarios > 0 && scenario.pathList.size() > 0) {
         size_t numBasePaths = scenario.pathList.size() / numWindScenarios;
-        size_t windIdx = idx / numBasePaths;
-        size_t pathIdx = idx % numBasePaths;
+        size_t pathIdx = idx / numWindScenarios;
+        size_t windIdx = idx % numWindScenarios;
 
         meta.pathVariantIndex = static_cast<int>(pathIdx);
         if (windIdx < scenario.windScenarios.size()) {
@@ -1351,21 +1354,50 @@ int main(int argc, char** argv)
         evalData.scenarioList.clear();
         evalData.scenarioList.reserve(scenario.pathList.size());
         bool isBakeoff = isBakeoffMode();
+        const GPVariables& gpCfg = ConfigManager::getGPConfig();
+
         for (size_t idx = 0; idx < scenario.pathList.size(); ++idx) {
           ScenarioMetadata meta;
-          meta.pathVariantIndex = scenario.pathVariantIndex;
           meta.scenarioSequence = scenarioSequence;
           if (isBakeoff) {
             meta.bakeoffSequence = bakeoffPathCounter.fetch_add(1, std::memory_order_relaxed) + 1;
           } else {
             meta.bakeoffSequence = 0;
           }
-          if (idx < scenario.windScenarios.size()) {
-            meta.windVariantIndex = scenario.windScenarios[idx].windVariantIndex;
-            meta.windSeed = scenario.windScenarios[idx].windSeed;
+
+          if (gpCfg.DemeticGrouping && gpCfg.DemeSize > 0) {
+            // Demetic mode: scenario has one path variant across multiple winds
+            meta.pathVariantIndex = scenario.pathVariantIndex;
+            if (idx < scenario.windScenarios.size()) {
+              meta.windVariantIndex = scenario.windScenarios[idx].windVariantIndex;
+              meta.windSeed = scenario.windScenarios[idx].windSeed;
+            } else {
+              meta.windVariantIndex = scenario.windVariantIndex;
+              meta.windSeed = scenario.windSeed;
+            }
           } else {
-            meta.windVariantIndex = scenario.windVariantIndex;
-            meta.windSeed = scenario.windSeed;
+            // Non-demetic mode: scenario has all paths × all winds
+            // pathList is organized in PATH-MAJOR order: [p0w0, p0w1, ..., p0w5, p1w0, p1w1, ...]
+            size_t numWindScenarios = scenario.windScenarios.size();
+            if (numWindScenarios > 0 && scenario.pathList.size() > 0) {
+              size_t numBasePaths = scenario.pathList.size() / numWindScenarios;
+              size_t pathIdx = idx / numWindScenarios;
+              size_t windIdx = idx % numWindScenarios;
+
+              meta.pathVariantIndex = static_cast<int>(pathIdx);
+              if (windIdx < scenario.windScenarios.size()) {
+                meta.windVariantIndex = scenario.windScenarios[windIdx].windVariantIndex;
+                meta.windSeed = scenario.windScenarios[windIdx].windSeed;
+              } else {
+                meta.windVariantIndex = scenario.windVariantIndex;
+                meta.windSeed = scenario.windSeed;
+              }
+            } else {
+              // Fallback if structure is unexpected
+              meta.pathVariantIndex = static_cast<int>(idx);
+              meta.windVariantIndex = scenario.windVariantIndex;
+              meta.windSeed = scenario.windSeed;
+            }
           }
           evalData.scenarioList.push_back(meta);
         }
@@ -1698,7 +1730,16 @@ int main(int argc, char** argv)
     *logger.info() << "Aggregated results: paths=" << aggregatedEvalResults.pathList.size()
                    << " states=" << aggregatedEvalResults.aircraftStateList.size() << endl;
     bestOfEvalResults = aggregatedEvalResults;
-    
+
+    // Serialize a GP object with the computed fitness for renderer display
+    MyGP fitnessHolder(1);
+    fitnessHolder.setFitness(averageFitness);
+    std::vector<char> gpBuffer;
+    boost::iostreams::stream<boost::iostreams::back_insert_device<std::vector<char>>> gpOutStream(gpBuffer);
+    fitnessHolder.save(gpOutStream);
+    gpOutStream.flush();
+    bestOfEvalResults.gp = gpBuffer;
+
     *logger.info() << "Bytecode evaluation complete!" << endl;
     *logger.info() << "Computed fitness: " << averageFitness << endl;
     *logger.info() << "Original GP fitness: " << interpreter.getFitness() << endl;
