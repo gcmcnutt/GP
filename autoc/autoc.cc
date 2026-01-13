@@ -1216,6 +1216,7 @@ int main(int argc, char** argv)
   long gpSeed;
   if (ConfigManager::getExtraConfig().gpSeed == -1) {
     gpSeed = static_cast<long>(time(NULL));
+    *logger.info() << "GPSeed: -1 (auto) -> " << gpSeed << endl;
   } else {
     gpSeed = static_cast<long>(ConfigManager::getExtraConfig().gpSeed);
   }
@@ -1286,6 +1287,7 @@ int main(int argc, char** argv)
   unsigned int pathSeed;
   if (ConfigManager::getExtraConfig().randomPathSeedB == -1) {
     pathSeed = static_cast<unsigned int>(time(NULL));
+    *logger.info() << "RandomPathSeedB: -1 (auto) -> " << pathSeed << endl;
   } else {
     pathSeed = static_cast<unsigned int>(ConfigManager::getExtraConfig().randomPathSeedB);
   }
@@ -1790,6 +1792,9 @@ int main(int argc, char** argv)
       unsigned int genPathSeed;
       if (ConfigManager::getExtraConfig().randomPathSeedB == -1) {
         genPathSeed = static_cast<unsigned int>(time(NULL));
+        if (gen == 1) {
+          *logger.info() << "RandomPathSeedB: -1 (auto) -> " << genPathSeed << " (gen 1)" << endl;
+        }
       } else {
         genPathSeed = static_cast<unsigned int>(ConfigManager::getExtraConfig().randomPathSeedB);
       }
