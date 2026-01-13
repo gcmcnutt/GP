@@ -116,6 +116,16 @@ static size_t gLastEliteNumPaths = 0;  // Number of paths in elite evaluation
 static uint64_t gLastEliteScenarioHash = 0;  // Hash of scenario metadata
 static int gEliteDivergenceCount = 0;  // Count of reevals where fitness differed (non-determinism)
 static int gEliteReevalCount = 0;      // Count of times elite was re-evaluated (same gpHash across generations)
+static EvalResults gLastEliteEvalResults;  // Full results including physics trace for divergence analysis
+static EvalResults gPendingEliteEvalResults;  // Current gen's elite trace (moved to gLastEliteEvalResults at end of gen)
+
+// Runtime flag to enable physics trace collection for elite reeval divergence analysis.
+// When true, crrcsim will return detailed physics traces for elite reevals only.
+// TODO: Consider adding to config system later.
+static bool gEliteTraceEnabled = true;
+// Flag to ensure we only flag ONE individual as elite reeval per generation
+// (multiple individuals may have same hash due to cloning/crossover)
+static bool gEliteReevalFlaggedThisGen = false;
 // Note: No mutex needed - elite tracking only happens on main thread in endOfEvaluation()
 
 // NOTE: Removed gGlobalEliteIndex and gGlobalEliteFitness - simplified to use library's
@@ -388,10 +398,8 @@ void clearEvalResults(EvalResults& result) {
   result.aircraftStateList.clear();
   result.scenario = ScenarioMetadata();
   result.scenarioList.clear();
-#ifdef PHYSICS_TRACE_ENABLED
   result.debugSamples.clear();
   result.physicsTrace.clear();
-#endif
   result.workerId = -1;
   result.workerPid = 0;
   result.workerEvalCounter = 0;
@@ -409,10 +417,6 @@ void appendEvalResults(EvalResults& dest, const EvalResults& src) {
   dest.pathList.insert(dest.pathList.end(), src.pathList.begin(), src.pathList.end());
   dest.aircraftStateList.insert(dest.aircraftStateList.end(), src.aircraftStateList.begin(), src.aircraftStateList.end());
   dest.scenarioList.insert(dest.scenarioList.end(), src.scenarioList.begin(), src.scenarioList.end());
-#ifdef PHYSICS_TRACE_ENABLED
-  dest.debugSamples.insert(dest.debugSamples.end(), src.debugSamples.begin(), src.debugSamples.end());
-  dest.physicsTrace.insert(dest.physicsTrace.end(), src.physicsTrace.begin(), src.physicsTrace.end());
-#endif
   dest.workerId = src.workerId;
   dest.workerPid = src.workerPid;
   dest.workerEvalCounter = src.workerEvalCounter;
@@ -687,6 +691,9 @@ void MyPopulation::evaluate() {
   const GPVariables& gpCfg = ConfigManager::getGPConfig();
   int scenarioCount = std::max<int>(generationScenarios.size(), 1);
 
+  // Reset elite reeval flag for this generation (only flag first matching individual)
+  gEliteReevalFlaggedThisGen = false;
+
   // Assign scenario index to each individual based on demetic grouping
   for (int n = 0; n < containerSize(); ++n) {
     MyGP* current = NthMyGP(n);
@@ -804,8 +811,11 @@ void MyGP::evalTask(WorkerContext& context)
 
   evalData.sanitizePaths();
 
-  // Note: isEliteReeval flag is set by the caller (MyPopulation::evaluate) if needed
-  // for crrcsim detailed logging. We don't do elite tracking in worker tasks.
+  // Check if this is a re-evaluation of the elite from previous generation
+  // If so, flag it for detailed physics trace collection
+  if (gEliteTraceEnabled && evalData.gpHash != 0 && evalData.gpHash == gLastEliteGpHash) {
+    evalData.isEliteReeval = true;
+  }
 
   sendRPC(*context.socket, evalData);
 
@@ -853,6 +863,20 @@ void MyGP::evalTask(WorkerContext& context)
     } else {
       bestOfEvalResults = context.evalResults;
     }
+  }
+
+  // If this was an elite reeval with trace, store for comparison at generation end
+  // (Don't try to preserve in bestOfEvalResults - it gets overwritten by subsequent evals)
+  if (evalData.isEliteReeval && !context.evalResults.physicsTrace.empty()) {
+    boost::unique_lock<boost::mutex> lock(evalCollectorMutex);
+
+    // Store in pending - survives subsequent bestOfEvalResults overwrites
+    // Gets moved to gLastEliteEvalResults at end of generation
+    gPendingEliteEvalResults.physicsTrace = std::move(context.evalResults.physicsTrace);
+    gPendingEliteEvalResults.debugSamples = std::move(context.evalResults.debugSamples);
+    gPendingEliteEvalResults.workerId = context.evalResults.workerId;
+    gPendingEliteEvalResults.workerPid = context.evalResults.workerPid;
+    gPendingEliteEvalResults.workerEvalCounter = context.evalResults.workerEvalCounter;
   }
 
   // Compute the fitness results for each path
@@ -1785,14 +1809,9 @@ int main(int argc, char** argv)
         return std::abs(static_cast<int64_t>(signed_a) - static_cast<int64_t>(signed_b));
       };
 
-      // In-memory trace comparison function
+      // In-memory trace comparison function (only called when gEliteTraceEnabled)
       auto compareTraces = [&](const EvalResults& trace1, const EvalResults& trace2,
                                const std::string& label1, const std::string& label2) {
-#ifndef PHYSICS_TRACE_ENABLED
-        // Physics trace disabled - skip detailed comparison
-        (void)trace1; (void)trace2; (void)label1; (void)label2;
-        return;
-#else
         *logger.warn() << "=== IN-MEMORY TRACE COMPARISON ===" << endl;
         *logger.warn() << "Trace 1: " << label1
                       << " workerId=" << trace1.workerId
@@ -2100,7 +2119,6 @@ int main(int argc, char** argv)
             }
           }
           *logger.warn() << endl;
-#endif  // PHYSICS_TRACE_ENABLED
       };
 
       // Elite tracking for non-demetic mode
@@ -2151,6 +2169,12 @@ int main(int argc, char** argv)
                        << " depth=" << gLastEliteDepth << "->" << currentDepth
                        << " delta=" << std::scientific << delta << std::defaultfloat
                        << " " << outcome << endl;
+        if (gEliteTraceEnabled) {
+          // Compare physics traces to find divergence point
+          compareTraces(gLastEliteEvalResults, gPendingEliteEvalResults,
+                       "gen" + std::to_string(gen-1) + " elite",
+                       "gen" + std::to_string(gen) + " reeval");
+        }
       } else {
         *logger.info() << "ELITE_STORE: gen=" << gen
                        << " gpHash=0x" << std::hex << gLastEliteGpHash << "->0x" << currentEliteGpHash << std::dec
@@ -2167,6 +2191,17 @@ int main(int argc, char** argv)
       gLastEliteDepth = currentDepth;
       gLastEliteNumPaths = bestOfEvalResults.pathList.size();
       gLastEliteScenarioHash = computeScenarioHash(bestOfEvalResults.scenarioList);
+      if (gEliteTraceEnabled) {
+        // Move pending elite trace to gLastEliteEvalResults for next gen comparison
+        // (gPendingEliteEvalResults is populated by elite reeval callbacks during the gen)
+        if (gPendingEliteEvalResults.physicsTrace.empty()) {
+          *logger.warn() << "Elite reeval returned no physics trace - divergence analysis unavailable" << endl;
+          *logger.warn() << "  (crrcsim may need rebuild, or isEliteReeval flag not set properly)" << endl;
+        }
+        gLastEliteEvalResults = std::move(gPendingEliteEvalResults);
+        // Clear pending for next generation
+        gPendingEliteEvalResults = EvalResults();
+      }
 
       // Per-generation counter summary (useful if run is interrupted)
       *logger.info() << "ELITE_STATUS: gen=" << gen

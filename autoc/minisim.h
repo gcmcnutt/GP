@@ -2,10 +2,6 @@
 #ifndef MINISIM_H
 #define MINISIM_H
 
-// Define to enable physics trace transport between crrcsim and autoc
-// This adds significant overhead - disable for production
-// #define PHYSICS_TRACE_ENABLED
-
 #include <vector>
 #include <iostream>
 #include <cstdint>
@@ -320,10 +316,8 @@ struct EvalResults {
   std::vector<std::vector<AircraftState>> aircraftStateList;
   ScenarioMetadata scenario;
   std::vector<ScenarioMetadata> scenarioList;
-#ifdef PHYSICS_TRACE_ENABLED
-  std::vector<std::vector<DebugSample>> debugSamples;  // Debug snapshots per path
-  std::vector<std::vector<PhysicsTraceEntry>> physicsTrace;  // Full physics state trace per path
-#endif
+  std::vector<std::vector<DebugSample>> debugSamples;  // Debug snapshots per path (only populated for elite reeval)
+  std::vector<std::vector<PhysicsTraceEntry>> physicsTrace;  // Full physics state trace per path (only populated for elite reeval)
   int workerId = -1;
   int workerPid = 0;
   int workerEvalCounter = 0;  // Incremented per evaluation on the worker
@@ -346,12 +340,10 @@ struct EvalResults {
       if (version > 2) {
         ar& scenarioList;
         if (version > 3) {
-#ifdef PHYSICS_TRACE_ENABLED
           ar& debugSamples;
           if (version > 8) {
             ar& physicsTrace;
           }
-#endif
           ar& workerId;
           ar& workerPid;
           ar& workerEvalCounter;
@@ -368,9 +360,8 @@ struct EvalResults {
       for (size_t idx = 0; idx < scenarioList.size(); ++idx) {
         scenarioList[idx].pathVariantIndex = static_cast<int>(idx);
       }
-#ifdef PHYSICS_TRACE_ENABLED
       debugSamples.clear();
-#endif
+      physicsTrace.clear();
       workerId = -1;
       workerPid = 0;
       workerEvalCounter = 0;
