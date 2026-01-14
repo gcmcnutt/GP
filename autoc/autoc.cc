@@ -525,7 +525,7 @@ public:
       }
 
       MyGP* best = nullptr;
-      gp_scalar bestAggregatedFitness = std::numeric_limits<gp_scalar>::infinity();
+      gp_fitness bestAggregatedFitness = std::numeric_limits<gp_fitness>::infinity();
 
       if (!generationScenarios.empty()) {
         EvalResults* previousCollector = activeEvalCollector;
@@ -548,7 +548,7 @@ public:
           aggregatedEvalResults.scenario.windSeed = 0;
           activeEvalCollector = &aggregatedEvalResults;
 
-          gp_scalar cumulativeFitness = 0.0f;
+          gp_fitness cumulativeFitness = 0.0;
           size_t scenariosEvaluated = 0;
 
           for (size_t scenarioIdx = 0; scenarioIdx < generationScenarios.size(); ++scenarioIdx) {
@@ -557,16 +557,16 @@ public:
               candidate->evalTask(context);
             });
             threadPool->wait_for_tasks();
-            cumulativeFitness += static_cast<gp_scalar>(candidate->getFitness());
+            cumulativeFitness += candidate->getFitness();
             ++scenariosEvaluated;
           }
 
           candidate->setScenarioIndex(originalScenarioIndex);
           candidate->setBakeoffMode(false);
 
-          gp_scalar averageFitness = scenariosEvaluated > 0
-            ? cumulativeFitness / static_cast<gp_scalar>(scenariosEvaluated)
-            : std::numeric_limits<gp_scalar>::infinity();
+          gp_fitness averageFitness = scenariosEvaluated > 0
+            ? cumulativeFitness / static_cast<gp_fitness>(scenariosEvaluated)
+            : std::numeric_limits<gp_fitness>::infinity();
 
           // Note: Divergence detection is now done in endOfEvaluation() via ELITE_STORE logging.
           // No need to detect here - we just run the eval and let the main thread do bookkeeping.
@@ -884,6 +884,9 @@ void MyGP::evalTask(WorkerContext& context)
 
   // Compute the fitness results for each path
   // (Results are already in order - worker processes paths sequentially)
+  // Time-weighted aggregation: longer paths contribute more to final fitness
+  gp_fitness totalPathDurationMsec = 0.0;
+
   for (int i = 0; i < context.evalResults.pathList.size(); i++) {
     bool printHeader = true;
 
@@ -918,15 +921,15 @@ void MyGP::evalTask(WorkerContext& context)
       }
     }
 
-    // compute this path fitness
-    gp_scalar localFitness = 0.0f;
+    // compute this path fitness (use gp_fitness/double for accumulation precision)
+    gp_fitness localFitness = 0.0;
     int stepIndex = 0; // where are we on the flight path?
 
-    // SIMPLIFIED error accumulators
-    gp_scalar waypoint_distance_sum = 0.0f;        // Distance from current waypoint
-    gp_scalar cross_track_error_sum = 0.0f;        // Lateral deviation from path
-    gp_scalar movement_direction_error_sum = 0.0f; // Move along path tangent
-    gp_scalar throttle_energy_sum = 0.0f;          // Minimize throttle usage
+    // SIMPLIFIED error accumulators (gp_fitness for precision during summation)
+    gp_fitness waypoint_distance_sum = 0.0;        // Distance from current waypoint
+    gp_fitness cross_track_error_sum = 0.0;        // Lateral deviation from path
+    gp_fitness movement_direction_error_sum = 0.0; // Move along path tangent
+    gp_fitness throttle_energy_sum = 0.0;          // Minimize throttle usage
     int simulation_steps = 0;
 
     // now walk next steps of actual path
@@ -1111,20 +1114,20 @@ void MyGP::evalTask(WorkerContext& context)
     }
 
     // ========================================================================
-    // SIMPLIFIED FITNESS COMPUTATION
+    // SIMPLIFIED FITNESS COMPUTATION (gp_fitness/double for precision)
     // ========================================================================
     // Get total path distance (odometer) for normalization
-    gp_scalar total_path_distance = path.back().distanceFromStart;
+    gp_fitness total_path_distance = path.back().distanceFromStart;
 
     // Normalize all metrics by total path distance (odometer reading)
     // This ensures paths of different lengths/granularity are compared fairly
     // Guard against near-zero to prevent divide-by-near-zero overflow
-    gp_scalar normalization_factor = (total_path_distance > 0.1f) ? total_path_distance : 1.0f;
+    gp_fitness normalization_factor = (total_path_distance > 0.1) ? total_path_distance : 1.0;
 
-    gp_scalar normalized_waypoint_distance = (waypoint_distance_sum / normalization_factor);
-    gp_scalar normalized_cross_track = (cross_track_error_sum / normalization_factor);
-    gp_scalar normalized_movement_direction = (movement_direction_error_sum / normalization_factor);
-    gp_scalar normalized_throttle_energy = (throttle_energy_sum / normalization_factor);
+    gp_fitness normalized_waypoint_distance = (waypoint_distance_sum / normalization_factor);
+    gp_fitness normalized_cross_track = (cross_track_error_sum / normalization_factor);
+    gp_fitness normalized_movement_direction = (movement_direction_error_sum / normalization_factor);
+    gp_fitness normalized_throttle_energy = (throttle_energy_sum / normalization_factor);
 
     // Sum all components (lower is better)
     localFitness = normalized_waypoint_distance +     // Reach waypoints on time
@@ -1138,17 +1141,24 @@ void MyGP::evalTask(WorkerContext& context)
 
     // Crash penalty: add large penalty scaled by how much path remains
     if (crashReason != CrashReason::None) {
-      gp_scalar fractional_distance_remaining = static_cast<gp_scalar>(1.0f) -
-        path.at(aircraftState.back().getThisPathIndex()).distanceFromStart / path.back().distanceFromStart;
+      gp_fitness fractional_distance_remaining = 1.0 -
+        static_cast<gp_fitness>(path.at(aircraftState.back().getThisPathIndex()).distanceFromStart) / total_path_distance;
       localFitness += SIM_CRASH_PENALTY * fractional_distance_remaining;
     }
 
-    // accumulate the local fitness
-    stdFitness += localFitness;
+    // Get path duration for time-weighted aggregation
+    gp_fitness pathDurationMsec = path.back().simTimeMsec;
+
+    // accumulate the local fitness weighted by path duration
+    stdFitness += localFitness * pathDurationMsec;
+    totalPathDurationMsec += pathDurationMsec;
   }
 
-  // normalize
-  stdFitness /= context.evalResults.pathList.size();
+  // normalize by total duration (time-weighted average)
+  // Longer paths contribute more to final fitness
+  if (totalPathDurationMsec > 0.0) {
+    stdFitness /= totalPathDurationMsec;
+  }
 
   // Mark fitness as valid for the GP library
   fitnessValid = 1;
@@ -1451,6 +1461,9 @@ int main(int argc, char** argv)
         }
         
         // Use same fitness computation as normal GP evaluation
+        // Time-weighted aggregation: longer paths contribute more to final fitness
+        gp_fitness totalPathDurationMsec = 0.0;
+
         for (int i = 0; i < context.evalResults.pathList.size(); i++) {
           auto& path = context.evalResults.pathList.at(i);
           auto& aircraftState = context.evalResults.aircraftStateList.at(i);
@@ -1470,14 +1483,14 @@ int main(int argc, char** argv)
             windSeed = context.evalResults.scenarioList.at(i).windSeed;
           }
 
-          gp_scalar localFitness = 0;
+          gp_fitness localFitness = 0.0;
           int stepIndex = 0;
 
-          // SIMPLIFIED error accumulators
-          gp_scalar waypoint_distance_sum = 0.0f;
-          gp_scalar cross_track_error_sum = 0.0f;
-          gp_scalar movement_direction_error_sum = 0.0f;
-          gp_scalar throttle_energy_sum = 0.0f;
+          // SIMPLIFIED error accumulators (gp_fitness for precision during summation)
+          gp_fitness waypoint_distance_sum = 0.0;
+          gp_fitness cross_track_error_sum = 0.0;
+          gp_fitness movement_direction_error_sum = 0.0;
+          gp_fitness throttle_energy_sum = 0.0;
           int simulation_steps = 0;
           
           while (++stepIndex < aircraftState.size()) {
@@ -1637,18 +1650,18 @@ int main(int argc, char** argv)
           }
           
           // SIMPLIFIED FITNESS COMPUTATION
-          // Get total path distance (odometer) for normalization
-          gp_scalar total_path_distance = path.back().distanceFromStart;
+          // Get total path distance (odometer) for normalization (gp_fitness/double for precision)
+          gp_fitness total_path_distance = path.back().distanceFromStart;
 
           // Normalize all metrics by total path distance (odometer reading)
           // This ensures paths of different lengths/granularity are compared fairly
           // Guard against near-zero to prevent divide-by-near-zero overflow
-          gp_scalar normalization_factor = (total_path_distance > 0.1f) ? total_path_distance : 1.0f;
+          gp_fitness normalization_factor = (total_path_distance > 0.1) ? total_path_distance : 1.0;
 
-          gp_scalar normalized_waypoint_distance = (waypoint_distance_sum / normalization_factor);
-          gp_scalar normalized_cross_track = (cross_track_error_sum / normalization_factor);
-          gp_scalar normalized_movement_direction = (movement_direction_error_sum / normalization_factor);
-          gp_scalar normalized_throttle_energy = (throttle_energy_sum / normalization_factor);
+          gp_fitness normalized_waypoint_distance = (waypoint_distance_sum / normalization_factor);
+          gp_fitness normalized_cross_track = (cross_track_error_sum / normalization_factor);
+          gp_fitness normalized_movement_direction = (movement_direction_error_sum / normalization_factor);
+          gp_fitness normalized_throttle_energy = (throttle_energy_sum / normalization_factor);
 
           localFitness = normalized_waypoint_distance +
                          normalized_cross_track +
@@ -1660,21 +1673,29 @@ int main(int argc, char** argv)
           }
 
           if (crashReason != CrashReason::None) {
-            gp_scalar fractional_distance_remaining = static_cast<gp_scalar>(1.0f) -
-              path.at(aircraftState.back().getThisPathIndex()).distanceFromStart / path.back().distanceFromStart;
+            gp_fitness fractional_distance_remaining = 1.0 -
+              static_cast<gp_fitness>(path.at(aircraftState.back().getThisPathIndex()).distanceFromStart) / total_path_distance;
             localFitness += SIM_CRASH_PENALTY * fractional_distance_remaining;
           }
-          
-          stdFitness += localFitness;
+
+          // Get path duration for time-weighted aggregation
+          gp_fitness pathDurationMsec = path.back().simTimeMsec;
+
+          // accumulate the local fitness weighted by path duration
+          stdFitness += localFitness * pathDurationMsec;
+          totalPathDurationMsec += pathDurationMsec;
         }
-        
-        stdFitness /= context.evalResults.pathList.size();
+
+        // normalize by total duration (time-weighted average)
+        if (totalPathDurationMsec > 0.0) {
+          stdFitness /= totalPathDurationMsec;
+        }
         
         // Mark fitness as valid for the GP library
         fitnessValid = 1;
       }
       
-      gp_scalar getFinalFitness() const { return static_cast<gp_scalar>(stdFitness); }
+      gp_fitness getFinalFitness() const { return stdFitness; }
     };
     
     // Serialize the bytecode interpreter for transport to simulators
@@ -1702,33 +1723,33 @@ int main(int argc, char** argv)
     activeEvalCollector = &aggregatedEvalResults;
     
     evaluationProgress.store(0);
-    gp_scalar cumulativeFitness = 0.0f;
+    gp_fitness cumulativeFitness = 0.0;
     size_t scenariosEvaluated = 0;
-    
+
     for (size_t scenarioIdx = 0; scenarioIdx < generationScenarios.size(); ++scenarioIdx) {
       const auto& scenario = scenarioForIndex(static_cast<int>(scenarioIdx));
       *logger.debug() << "Evaluating scenario " << scenarioIdx
                       << " paths=" << scenario.pathList.size() << endl;
       evalGP.setScenarioIndex(static_cast<int>(scenarioIdx));
       evalGP.evaluate();
-      
+
       for (auto& task : tasks) {
         threadPool->enqueue([task](WorkerContext& context) {
           task->evalTask(context);
           });
       }
-      
+
       threadPool->wait_for_tasks();
       tasks.clear();
-      
+
       cumulativeFitness += evalGP.getFinalFitness();
       scenariosEvaluated++;
     }
-    
+
     activeEvalCollector = previousCollector;
     printEval = false;
-    
-    gp_scalar averageFitness = scenariosEvaluated > 0 ? cumulativeFitness / static_cast<gp_scalar>(scenariosEvaluated) : static_cast<gp_scalar>(0.0f);
+
+    gp_fitness averageFitness = scenariosEvaluated > 0 ? cumulativeFitness / static_cast<gp_fitness>(scenariosEvaluated) : 0.0;
     *logger.info() << "Aggregated results: paths=" << aggregatedEvalResults.pathList.size()
                    << " states=" << aggregatedEvalResults.aircraftStateList.size() << endl;
     bestOfEvalResults = aggregatedEvalResults;

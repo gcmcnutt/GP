@@ -19,6 +19,7 @@
 #include "gp_types.h"
 
 #define NUM_SEGMENTS_PER_PATH 16
+#define AERO_STANDARD_RANDOM_PATH_SECONDS 15
 
 gp_vec3 randomPointInCylinder(gp_scalar radius, gp_scalar height, gp_scalar base = SIM_INITIAL_ALTITUDE);
 gp_vec3 cubicInterpolate(const gp_vec3& p0, const gp_vec3& p1, const gp_vec3& p2, const gp_vec3& p3, gp_scalar t);
@@ -525,6 +526,7 @@ public:
 
       case AeroStandardPathType::SeededRandomB: {
         // Generate seeded random path using local mt19937 PRNG (does not affect global rand state)
+        // Limited to AERO_STANDARD_RANDOM_PATH_SECONDS to match duration of other aeroStandard paths
         std::mt19937 rng(seed);
 
         std::vector<gp_vec3> controlPoints;
@@ -558,6 +560,11 @@ public:
               odometer += newDistance;
               turnmeter += dAngle;
               lastDirection = newDirection;
+
+              // Stop at AERO_STANDARD_RANDOM_PATH_SECONDS of path data (use time, not distance)
+              if (simTimeMsec > AERO_STANDARD_RANDOM_PATH_SECONDS * 1000.0f) {
+                goto exitSeededRandomB;
+              }
             } else {
               first = false;
               lastDirection = (interpolatedPoint - entryPoint).normalized();
@@ -565,6 +572,7 @@ public:
             lastPoint = interpolatedPoint;
           }
         }
+        exitSeededRandomB:
         break;
       }
 

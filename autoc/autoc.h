@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "gp.h"
+#include "gp_types.h"
 
 // Forward declarations
 struct WorkerContext;
@@ -158,7 +159,7 @@ public:
   int getScenarioIndex() const { return scenarioIndex; }
   void setBakeoffMode(bool mode) { bakeoffMode = mode; }
   bool isBakeoffMode() const { return bakeoffMode; }
-  void setFitness(gp_scalar fitness) { stdFitness = fitness; fitnessValid = 1; }
+  void setFitness(gp_fitness fitness) { stdFitness = fitness; fitnessValid = 1; }
 
   // async evaluator
   virtual void evalTask(WorkerContext& context);
