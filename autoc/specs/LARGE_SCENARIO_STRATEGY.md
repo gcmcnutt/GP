@@ -1,31 +1,220 @@
-# Making Demetic Mode Work Correctly
+# Large Scenario Space Strategy
 
-> **STATUS: DEPRIORITIZED (Jan 2026)**
+> **STATUS: ACTIVE PLANNING (Jan 2026)**
 >
-> After analysis, the demetic approach with specialized demes (one path per deme) may not
-> be the best path forward. The core issue is that specialists don't transfer well between
-> demes, so migration adds noise rather than spreading useful genes.
->
-> **Alternative approaches to explore instead:**
->
-> 1. **Progressive Fitness Checks** - Start with simple scenarios, add complexity over time
->    as the population improves. Early generations use fewer/simpler paths, later generations
->    add harder scenarios. This naturally focuses compute on promising individuals.
->
-> 2. **Sparse Sampling** - Rather than full Cartesian product (paths × winds × craft × ...),
->    randomly sample combinations each generation. Over time, good generalists emerge
->    because they're tested on varied (but not exhaustive) scenarios.
->
-> 3. **Adaptive Scenario Selection** - Focus evaluation on scenarios where the population
->    is weakest. If most individuals handle path-1 well but fail on path-3, spend more
->    compute on path-3 variants.
->
-> These approaches keep the single-population model (no deme complexity) while improving
-> efficiency. See future specs for implementation details.
+> As we expand the scenario space (paths × winds × craft × entry points × rabbit speeds),
+> full Cartesian evaluation becomes intractable. This spec explores strategies for
+> efficient search while maintaining robust generalist discovery.
 
 ---
 
-## Current State (as of Jan 2026)
+## The Problem: Scenario Space Explosion
+
+### Current State (leak176)
+- 6 paths × 6 winds = **36 scenarios** per individual
+- Population: 5000
+- Result: 180,000 simulations per generation
+- Observed: Early fitness plateau, slow but steady improvement
+
+### Planned Expansion
+| Dimension | Current | Planned | Notes |
+|-----------|---------|---------|-------|
+| Paths | 6 | 6-10 | aeroStandard method |
+| Wind scenarios | 6 | 6-10 | Varying turbulence/direction |
+| Craft variations | 1 | 3-5 | Weight, CG, control authority |
+| Entry points | 1 | 3-4 | Different approach angles |
+| Rabbit speeds | 1 | 2-3 | Slow/medium/fast path following |
+
+**Full Cartesian**: 10 × 10 × 5 × 4 × 3 = **6,000 scenarios per individual**
+**At 5000 population**: 30 million simulations per generation (intractable)
+
+---
+
+## Strategy Options
+
+### Option 1: Sparse Sampling with Comprehensive Elite Evaluation
+
+**Core idea**: Population members see random scenario subsets; elite gets full evaluation.
+
+| Component | Approach |
+|-----------|----------|
+| Population eval | Random 8-12 scenarios per individual per generation |
+| Elite eval | Full scenario set (or large representative sample) |
+| Best tracking | Based on comprehensive elite evaluation only |
+
+**Advantages**:
+- Fast population evaluation (40-60K sims vs 30M)
+- Random sampling naturally favors generalists (can't overfit to specific scenarios)
+- Elite always has apples-to-apples comparison
+
+**Disadvantages**:
+- Slower convergence (already seeing this at 36 scenarios)
+- Variance in individual fitness estimates
+
+**Implementation sketch**:
+```ini
+# New config options
+PopulationSampleSize = 12        # Scenarios per individual
+EliteEvalFull = 1                # Elite gets comprehensive eval
+EliteEvalScenarios = 100         # Or fixed large sample
+```
+
+### Option 2: Difficulty-Tiered Demes
+
+**Core idea**: Demes specialize by scenario difficulty, not scenario identity.
+
+| Deme Tier | Focus | Example Scenarios |
+|-----------|-------|-------------------|
+| Easy (40%) | Forgiving conditions | Calm wind, standard craft, simple paths |
+| Medium (40%) | Mixed conditions | Moderate turbulence, varied paths |
+| Hard (20%) | Edge cases | High turbulence, heavy craft, aggressive paths |
+
+**Why this helps over path-per-deme**:
+- "Medium difficulty specialist" transfers better between demes than "path-1 specialist"
+- Migration makes sense: good-at-medium can survive in another medium deme
+- Sparse sampling within tiers keeps evaluation tractable
+
+**Disadvantages**:
+- Need to classify scenarios by difficulty (manual or learned)
+- More complex configuration
+
+### Option 3: Progressive Complexity (Curriculum Learning)
+
+**Core idea**: Start simple, add difficulty as population improves.
+
+| Phase | Generations | Scenarios |
+|-------|-------------|-----------|
+| 1 | 0-30 | 6 easy scenarios (calm, standard) |
+| 2 | 30-60 | 12 scenarios (add moderate difficulty) |
+| 3 | 60-100 | 24 scenarios (add challenging) |
+| 4 | 100+ | Full set or large sample |
+
+**Advantages**:
+- Fast early convergence on fundamentals
+- Gradually introduces complexity
+- Natural scaffolding
+
+**Disadvantages**:
+- Risk of overfitting to early scenarios
+- Phase transitions may cause fitness jumps
+- Need to define progression schedule
+
+### Option 4: Adaptive Scenario Selection
+
+**Core idea**: Focus compute on scenarios where population is weakest.
+
+Each generation:
+1. Sample scenarios proportional to population failure rate
+2. Scenarios where many individuals fail get more evaluation budget
+3. Easy scenarios (most succeed) get less budget
+
+**Advantages**:
+- Efficient use of compute
+- Naturally addresses weaknesses
+
+**Disadvantages**:
+- Complex tracking and sampling logic
+- May over-focus on pathological edge cases
+
+---
+
+## Recommended Approach: Sparse Sampling + Comprehensive Elite
+
+Given current observations (slow plateau at 36 scenarios, but producing flyable controllers),
+the recommended first step is:
+
+### Phase 1: Implement Sparse Sampling
+
+1. **Population evaluation**: Each individual evaluated on K random scenarios (K=8-12)
+   - Scenarios drawn fresh each generation (not fixed per individual)
+   - Use consistent random seed for reproducibility within generation
+
+2. **Elite evaluation**: Current elite re-evaluated on comprehensive set every generation
+   - Either full Cartesian or large fixed representative sample (100-200 scenarios)
+   - This is the "ground truth" fitness for tracking progress
+
+3. **Best tracking**: Only compare elites using comprehensive fitness
+   - Historical best based on comprehensive evaluation
+   - S3 storage uses comprehensively-evaluated fitness
+
+### Phase 2: Add Difficulty Weighting (Optional Enhancement)
+
+If sparse random sampling proves too slow:
+
+1. Classify scenarios into difficulty tiers
+2. Sample proportionally: more hard scenarios, fewer easy ones
+3. Ensures population sees challenging cases regularly
+
+### Configuration Changes
+
+```ini
+# Sparse sampling configuration
+EvalMode = sparse                    # "full" | "sparse" | "progressive"
+SparseSampleSize = 12                # Scenarios per individual
+EliteComprehensiveEval = 1           # Re-eval elite on full set
+ComprehensiveScenarioCount = 200     # For elite eval (0 = all)
+
+# Scenario dimensions (future)
+CraftVariations = 3
+EntryPointVariations = 4
+RabbitSpeedVariations = 3
+```
+
+---
+
+## The "Best" Extraction Problem
+
+When individuals are evaluated on different scenario subsamples, how do we identify the true best?
+
+### Approaches Considered
+
+| Approach | Description | Tradeoff |
+|----------|-------------|----------|
+| **Periodic Tournament** | Every N gens, top K individuals get full eval | Expensive but definitive |
+| **Rolling Window** | Track fitness across last M generations' samples | Complex bookkeeping |
+| **Rank Aggregation** | Borda count across varied samples | Loses magnitude info |
+| **Comprehensive Elite Only** | Only elite gets full eval each gen | Simple, recommended |
+
+### Recommended: Comprehensive Elite Evaluation
+
+**Each generation**:
+1. Population evaluated on sparse random sample → rough fitness estimates
+2. Selection/crossover based on these estimates (noisy but unbiased)
+3. New elite candidate identified (best of sparse evaluations)
+4. Elite candidate gets comprehensive evaluation
+5. Compare to previous elite's comprehensive fitness
+6. Update historical best if improved
+
+**Key insight**: We only need precise fitness for the elite. Population members just need
+relative ordering good enough for selection pressure. Random sampling provides unbiased
+(if noisy) estimates that work for tournament selection.
+
+---
+
+## Relationship to Demetic Mode
+
+The original demetic approach (one path per deme) is **not recommended** because:
+
+1. Specialists don't transfer well between demes
+2. Migration adds noise rather than spreading useful genes
+3. Cross-deme fitness comparison is meaningless (apples to oranges)
+
+However, **difficulty-tiered demes** (Option 2 above) may be worth exploring later if
+sparse sampling proves insufficient. The key difference:
+
+| Path-per-deme (bad) | Difficulty-tiered (potentially useful) |
+|---------------------|----------------------------------------|
+| Deme 1 = path-1 only | Deme 1 = easy scenarios (any path) |
+| Migration: path-1 specialist → path-2 deme (fails) | Migration: easy-specialist → another easy deme (survives) |
+| No meaningful cross-deme comparison | Within-tier comparison meaningful |
+
+---
+
+## Appendix A: Legacy Demetic Mode Analysis
+
+> The following sections document the original demetic mode investigation.
+> This approach was **deprioritized** in favor of sparse sampling, but the analysis
+> is preserved for reference.
 
 ### What Gets Emitted Currently
 
@@ -60,7 +249,7 @@ ELITE_STATUS: gen=1 reevals=0 divergences=0
 - Path list and scenario list
 - Aircraft state trajectories
 
-### The Problem (Unchanged)
+### The Demetic Mode Problem
 
 In demetic mode, the GP library's `calculateStatistics()` overwrites `bestOfPopulation`
 based on single-scenario `stdFitness` values, which are not comparable across demes.
@@ -68,9 +257,9 @@ based on single-scenario `stdFitness` values, which are not comparable across de
 Each deme evaluates on a **different scenario** (1 path × N winds = N sims).
 The library then compares these incomparable fitness values when picking `bestOfPopulation`.
 
----
+### Proposed Solution: True Island Mode with Best-of-Best Tracking
 
-## Proposed Solution: True Island Mode with Best-of-Best Tracking
+> Note: This solution was designed for the demetic approach which is now deprioritized.
 
 ### Core Design
 
@@ -156,7 +345,7 @@ This is the production candidate for flight code.
 
 ---
 
-## Implementation Changes
+### Implementation Changes (Demetic Mode)
 
 ### 1. Remove Elite Propagation in Demetic Mode
 
@@ -367,7 +556,7 @@ This gives us:
 
 ---
 
-## Expected Behavior
+### Expected Behavior (Demetic Mode)
 
 ### Deme-Local (ELITE_STORE line)
 
@@ -432,7 +621,7 @@ This gives us:
 
 ---
 
-## Summary of Changes
+### Summary of Changes (Demetic Mode)
 
 | File | Change |
 |------|--------|
@@ -448,7 +637,7 @@ This gives us:
 
 ---
 
-## Verification Checklist
+### Verification Checklist (Demetic Mode)
 
 After implementation:
 
@@ -463,7 +652,7 @@ After implementation:
 
 ---
 
-## Appendix: Library Migration vs Our Model
+## Appendix B: Library Migration vs Our Model
 
 ### What the GP Library Implements
 
