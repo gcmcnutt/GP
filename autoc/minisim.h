@@ -113,8 +113,8 @@ BOOST_SERIALIZATION_SPLIT_FREE(gp_quat)
  * here we send our requested paths to the sims
  */
 struct ScenarioMetadata {
-  int pathVariantIndex = 0;
-  int windVariantIndex = 0;
+  int pathVariantIndex = -1;   // -1 = unset/aggregated
+  int windVariantIndex = -1;   // -1 = unset/aggregated
   unsigned int windSeed = 0;
   uint64_t scenarioSequence = 0;
   uint64_t bakeoffSequence = 0;
@@ -366,6 +366,21 @@ struct EvalResults {
       workerPid = 0;
       workerEvalCounter = 0;
     }
+  }
+
+  void clear() {
+    gp.clear();
+    gpHash = 0;
+    crashReasonList.clear();
+    pathList.clear();
+    aircraftStateList.clear();
+    scenario = ScenarioMetadata();
+    scenarioList.clear();
+    debugSamples.clear();
+    physicsTrace.clear();
+    workerId = -1;
+    workerPid = 0;
+    workerEvalCounter = 0;
   }
 
   void dump(std::ostream& os) {

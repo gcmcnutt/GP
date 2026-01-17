@@ -40,9 +40,9 @@
 #define SIM_INITIAL_THROTTLE static_cast<gp_scalar>(0.0f)
 #define SIM_INITIAL_LOCATION_DITHER static_cast<gp_scalar>(30.0f)
 #define SIM_PATH_BOUNDS static_cast<gp_scalar>(40.0f)
-#define SIM_PATH_RADIUS_LIMIT static_cast<gp_scalar>(60.0f)
+#define SIM_PATH_RADIUS_LIMIT static_cast<gp_scalar>(70.0f)
 #define SIM_MIN_ELEVATION static_cast<gp_scalar>(-7.0f)
-#define SIM_MAX_ELEVATION static_cast<gp_scalar>(-110.0f)
+#define SIM_MAX_ELEVATION static_cast<gp_scalar>(-120.0f)
 
 #define SIM_TOTAL_TIME_MSEC (100 * 1000)
 #define SIM_TIME_STEP_MSEC (100)

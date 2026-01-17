@@ -47,9 +47,21 @@ Xvfb :99 -screen 0 1024x768x24 &
 export DISPLAY=:99
 ```
 
+**Build Scripts (in `autoc/`):**
+```bash
+# Clean debug build - full rebuild with cmake reconfigure (for testing/debugging)
+cd ~/GP/autoc && bash rebuild.sh
+
+# Clean optimized build - full rebuild with -O3 (for performance runs)
+cd ~/GP/autoc && bash rebuild-perf.sh
+
+# Incremental build - just recompile changed files (fastest)
+cd ~/GP && make
+```
+
 **Key Build Commands:**
 ```bash
-# Full rebuild cycle
+# Full rebuild cycle (equivalent to rebuild.sh)
 make clean && rm -rf build && mkdir build && cd build && cmake -DCMAKE_BUILD_TYPE=Debug ../autoc && cd .. && make
 
 # Run evolution

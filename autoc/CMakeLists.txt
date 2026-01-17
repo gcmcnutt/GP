@@ -56,19 +56,43 @@ link_directories(../lib)
 add_compile_options(-Wno-write-strings)
 add_definitions(-DGP_BUILD)
 
-add_executable(autoc autoc.cc autoc.h autoc-eval.cc minisim.h aircraft_state.h pathgen.cc pathgen.h threadpool.h logger.cc logger.h gp_bytecode.cc gp_bytecode.h gp_evaluator_portable.cc gp_evaluator_portable.h gp_evaluator_desktop.cc gp_evaluator_desktop.h config_manager.cc config_manager.h)
-add_executable(minisim minisim.cc minisim.h aircraft_state.h autoc.h autoc-eval.cc gp_bytecode.cc gp_bytecode.h gp_evaluator_portable.cc gp_evaluator_portable.h gp_evaluator_desktop.cc gp_evaluator_desktop.h)
-add_executable(renderer renderer.cc renderer.h minisim.h aircraft_state.h autoc.h config_manager.cc config_manager.h pathgen.cc pathgen.h gp_types.h)
-add_executable(gpextractor gpextractor.cc minisim.h aircraft_state.h config_manager.cc config_manager.h autoc-eval.cc gp_evaluator_portable.cc gp_evaluator_portable.h gp_evaluator_desktop.cc gp_evaluator_desktop.h gp_bytecode.cc gp_bytecode.h autoc.h threadpool.h logger.cc logger.h pathgen.cc pathgen.h gp_types.h)
-add_executable(bytecode2cpp bytecode2cpp.cc gp_bytecode.cc gp_bytecode.h gp_evaluator_portable.cc gp_evaluator_portable.h gp_evaluator_desktop.cc gp_evaluator_desktop.h config_manager.cc config_manager.h)
+# Shared library for common sources (compiled once, linked by all executables)
+add_library(autoc_common STATIC
+    gp_bytecode.cc
+    gp_bytecode.h
+    gp_evaluator_portable.cc
+    gp_evaluator_portable.h
+    gp_evaluator_desktop.cc
+    gp_evaluator_desktop.h
+    config_manager.cc
+    config_manager.h
+    logger.cc
+    logger.h
+    pathgen.cc
+    pathgen.h
+    autoc-eval.cc
+    autoc.h
+    minisim.h
+    aircraft_state.h
+    threadpool.h
+    gp_types.h
+)
+target_link_libraries(autoc_common gp ${Boost_LIBRARIES} Eigen3::Eigen)
 
-target_link_libraries(autoc gp ${Boost_LIBRARIES} Eigen3::Eigen ${AWSSDK_LIBRARIES})
-target_link_libraries(minisim gp ${Boost_LIBRARIES} Eigen3::Eigen)
-target_link_libraries(renderer gp ${VTK_LIBRARIES} ${Boost_LIBRARIES} Eigen3::Eigen ${AWSSDK_LIBRARIES})
-target_link_libraries(gpextractor gp ${Boost_LIBRARIES} Eigen3::Eigen ${AWSSDK_LIBRARIES})
-target_link_libraries(bytecode2cpp gp ${Boost_LIBRARIES} Eigen3::Eigen ${AWSSDK_LIBRARIES})
+add_executable(autoc autoc.cc)
+add_executable(minisim minisim.cc)
+add_executable(renderer renderer.cc)
+add_executable(gpextractor gpextractor.cc)
+add_executable(bytecode2cpp bytecode2cpp.cc)
+
+target_link_libraries(autoc autoc_common ${AWSSDK_LIBRARIES})
+target_link_libraries(minisim autoc_common)
+target_link_libraries(renderer autoc_common ${VTK_LIBRARIES} ${AWSSDK_LIBRARIES})
+target_link_libraries(gpextractor autoc_common ${AWSSDK_LIBRARIES})
+target_link_libraries(bytecode2cpp autoc_common ${AWSSDK_LIBRARIES})
 
 if(ENABLE_AUTOC_TESTS)
+  # Tests need separate compilation with GP_TEST define, can't use autoc_common
   add_executable(autoc_tests tests/gp_evaluator_tests.cc gp_evaluator_portable.cc)
   target_compile_definitions(autoc_tests PRIVATE GP_BUILD GP_TEST)
   target_link_libraries(autoc_tests GTest::gtest GTest::gtest_main Eigen3::Eigen)

@@ -85,8 +85,6 @@ static uint64_t hashAircraftStateVector(const std::vector<AircraftState>& vec) {
 std::vector<MyGP*> tasks = std::vector<MyGP*>();
 
 // Forward declarations for global variables
-extern std::vector<std::vector<Path>> generationPaths;
-extern EvalResults bestOfEvalResults;
 extern std::ofstream fout;
 extern std::ofstream bout;
 extern std::atomic_ulong nanDetector;
@@ -106,7 +104,6 @@ std::atomic<uint64_t> bakeoffPathCounter{0};
 std::atomic<uint64_t> globalSimRunCounter{0};
 
 // Global elite tracking across generations (dispatcher-side)
-// Simplified for non-demetic mode: track elite by gpHash + fitness after bakeoff
 // Detect divergence when same gpHash + scenarios evaluates to different fitness
 static double gLastEliteFitness = std::numeric_limits<double>::infinity();
 static uint64_t gLastEliteGpHash = 0;
@@ -126,11 +123,6 @@ static bool gEliteTraceEnabled = true;
 // Flag to ensure we only flag ONE individual as elite reeval per generation
 // (multiple individuals may have same hash due to cloning/crossover)
 static bool gEliteReevalFlaggedThisGen = false;
-// Note: No mutex needed - elite tracking only happens on main thread in endOfEvaluation()
-
-// NOTE: Removed gGlobalEliteIndex and gGlobalEliteFitness - simplified to use library's
-// bestOfPopulation directly. In non-demetic mode, the library tracks the elite correctly.
-// For demetic mode, see MAKE_DEME_WORK.md for the Island Model approach.
 
 static bool bitwiseEqual(double a, double b) {
   return std::memcmp(&a, &b, sizeof(double)) == 0;
@@ -163,7 +155,6 @@ static uint64_t computeScenarioHash(const std::vector<ScenarioMetadata>& scenari
 }
 
 
-
 ThreadPool* threadPool;
 std::string computedKeyName;
 
@@ -185,7 +176,6 @@ void rebuildGenerationScenarios(const std::vector<std::vector<Path>>& basePaths)
   if (basePaths.empty()) {
     ScenarioDescriptor scenario;
     scenario.pathList = basePaths;
-    scenario.pathVariantIndex = -1;
     scenario.windVariantIndex = 0;
     scenario.windSeed = seedBase;
     scenario.windScenarios.push_back({seedBase, 0});
@@ -223,7 +213,6 @@ void rebuildGenerationScenarios(const std::vector<std::vector<Path>>& basePaths)
     // NON-DEMETIC MODE: Create ONE scenario containing ALL path variants × ALL winds.
     // Each individual evaluates on the same complete test suite for fair comparison.
     ScenarioDescriptor scenario;
-    scenario.pathVariantIndex = -1;  // Multiple paths, no single variant
 
     // Build wind scenarios list first
     for (int windIdx = 0; windIdx < windScenarioCount; ++windIdx) {
@@ -252,7 +241,6 @@ void rebuildGenerationScenarios(const std::vector<std::vector<Path>>& basePaths)
 
   if (generationScenarios.empty()) {
     ScenarioDescriptor scenario;
-    scenario.pathVariantIndex = -1;
     scenario.windVariantIndex = 0;
     scenario.windSeed = seedBase;
     scenario.pathList = basePaths;
@@ -393,21 +381,6 @@ void warnIfScenarioMismatch() {
   }
 }
 
-void clearEvalResults(EvalResults& result) {
-  result.gp.clear();
-  result.gpHash = 0;
-  result.crashReasonList.clear();
-  result.pathList.clear();
-  result.aircraftStateList.clear();
-  result.scenario = ScenarioMetadata();
-  result.scenarioList.clear();
-  result.debugSamples.clear();
-  result.physicsTrace.clear();
-  result.workerId = -1;
-  result.workerPid = 0;
-  result.workerEvalCounter = 0;
-}
-
 void appendEvalResults(EvalResults& dest, const EvalResults& src) {
   if (dest.gp.empty()) {
     dest.gp = src.gp;
@@ -520,9 +493,7 @@ public:
         candidateIndices.push_back(bestOfPopulation);
       }
 
-      if (candidateIndices.empty()) {
-        candidateIndices.push_back(bestOfPopulation);
-      }
+      assert(!candidateIndices.empty() && "candidateIndices should never be empty after population scan");
 
       MyGP* best = nullptr;
       gp_fitness bestAggregatedFitness = std::numeric_limits<gp_fitness>::infinity();
@@ -542,10 +513,7 @@ public:
 
           int originalScenarioIndex = candidate->getScenarioIndex();
           candidate->setBakeoffMode(true);
-          clearEvalResults(aggregatedEvalResults);
-          aggregatedEvalResults.scenario.pathVariantIndex = -1;
-          aggregatedEvalResults.scenario.windVariantIndex = -1;
-          aggregatedEvalResults.scenario.windSeed = 0;
+          aggregatedEvalResults.clear();
           activeEvalCollector = &aggregatedEvalResults;
 
           gp_fitness cumulativeFitness = 0.0;
@@ -567,9 +535,6 @@ public:
           gp_fitness averageFitness = scenariosEvaluated > 0
             ? cumulativeFitness / static_cast<gp_fitness>(scenariosEvaluated)
             : std::numeric_limits<gp_fitness>::infinity();
-
-          // Note: Divergence detection is now done in endOfEvaluation() via ELITE_STORE logging.
-          // No need to detect here - we just run the eval and let the main thread do bookkeeping.
 
           // Restore previous logging state before moving on.
           enableDeterministicTestLogging.store(prevLogging, std::memory_order_relaxed);
@@ -882,10 +847,8 @@ void MyGP::evalTask(WorkerContext& context)
     gPendingEliteEvalResults.workerEvalCounter = context.evalResults.workerEvalCounter;
   }
 
-  // Compute the fitness results for each path
-  // (Results are already in order - worker processes paths sequentially)
-  // Time-weighted aggregation: longer paths contribute more to final fitness
-  gp_fitness totalPathDurationMsec = 0.0;
+  // Compute fitness for each path and sum
+  // Each path is normalized by its own odometer, crash penalty applied per-path
 
   for (int i = 0; i < context.evalResults.pathList.size(); i++) {
     bool printHeader = true;
@@ -1012,8 +975,6 @@ void MyGP::evalTask(WorkerContext& context)
       angle_rad = angle_rad * static_cast<gp_scalar>(100.0f) / static_cast<gp_scalar>(M_PI);
 
       gp_scalar crossTrackPercentForLog = crossTrackPercent;
-      gp_scalar oscillationPercentForLog = 0.0f;  // No longer used
-      gp_scalar orientationPenaltyForLog = 0.0f;  // No longer used
       gp_scalar movement_efficiency = movementDirectionError;
 
       simulation_steps++;
@@ -1022,7 +983,7 @@ void MyGP::evalTask(WorkerContext& context)
       if (printEval) {
 
         if (printHeader) {
-          fout << "Scn    Bake   Pth/Wnd:Step:   Time Idx  totDist   pathX    pathY    pathZ        X        Y        Z       dr       dp       dy   relVel     roll    pitch    power    distP   angleP  movEffP      qw      qx      qy      qz   vxBody   vyBody   vzBody    alpha     beta   dtheta    dphi   dhome   xtrkP   xOscP orientP\n";
+          fout << "Scn    Bake   Pth/Wnd:Step:   Time Idx  totDist   pathX    pathY    pathZ        X        Y        Z       dr       dp       dy   relVel     roll    pitch    power    distP   angleP  movEffP      qw      qx      qy      qz   vxBody   vyBody   vzBody    alpha     beta   dtheta    dphi   dhome   xtrkP\n";
           printHeader = false;
         }
 
@@ -1077,7 +1038,7 @@ void MyGP::evalTask(WorkerContext& context)
         gp_quat q = craftOrientation;
 
         char outbuf[1600]; // XXX use c++20
-        sprintf(outbuf, "%06llu %06llu %03d/%02d:%04d: %06ld %3d % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.4f % 7.4f % 7.4f % 7.4f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.2f % 7.2f % 7.2f\n",
+        sprintf(outbuf, "%06llu %06llu %03d/%02d:%04d: %06ld %3d % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.4f % 7.4f % 7.4f % 7.4f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.2f\n",
           static_cast<unsigned long long>(scenarioSequence),
           static_cast<unsigned long long>(bakeoffSequence),
           pathVariantIndex, windVariantIndex, simulation_steps,
@@ -1099,15 +1060,12 @@ void MyGP::evalTask(WorkerContext& context)
           distanceFromGoal,
           angle_rad,
           movement_efficiency,
-          // NEW FIELDS:
           q.w(), q.x(), q.y(), q.z(),                       // Quaternion
           velocity_body.x(), velocity_body.y(), velocity_body.z(),  // Body velocity
           alpha_deg, beta_deg,                              // GETALPHA, GETBETA
           dtheta_deg, dphi_deg,                             // GETDTHETA, GETDPHI
           dhome,                                            // GETDHOME
-          crossTrackPercentForLog,
-          oscillationPercentForLog,
-          orientationPenaltyForLog
+          crossTrackPercentForLog
         );
         fout << outbuf;
       }
@@ -1139,33 +1097,29 @@ void MyGP::evalTask(WorkerContext& context)
       nanDetector++;
     }
 
-    // Crash penalty: add large penalty scaled by how much path remains
+    // Crash penalty: scale fitness by 1/fraction_completed, then apply power function
+    // This inflates fitness for early crashes (making them worse, since lower is better)
+    // Then the power function provides additional shaping:
+    //   - Early crashes: exponent > 1 -> further increases penalty
+    //   - Late crashes: exponent < 1 -> reduces the penalty scaling
     if (crashReason != CrashReason::None) {
-      gp_fitness fractional_distance_remaining = 1.0 -
+      gp_fitness fraction_completed =
         static_cast<gp_fitness>(path.at(aircraftState.back().getThisPathIndex()).distanceFromStart) / total_path_distance;
-      localFitness += SIM_CRASH_PENALTY * fractional_distance_remaining;
+      // Clamp to avoid division by zero or extreme values
+      fraction_completed = std::max(fraction_completed, static_cast<gp_fitness>(0.001));
+      // Scale fitness inversely by completion (4% complete -> multiply by 25)
+      localFitness = localFitness / fraction_completed;
+      // Then apply power function for additional shaping
+      gp_fitness exponent = CRASH_POW_AT_0PCT + (CRASH_POW_AT_100PCT - CRASH_POW_AT_0PCT) * fraction_completed;
+      localFitness = std::pow(localFitness, exponent);
     }
 
-    // Get path duration for time-weighted aggregation
-    gp_fitness pathDurationMsec = path.back().simTimeMsec;
-
-    // accumulate the local fitness weighted by path duration
-    stdFitness += localFitness * pathDurationMsec;
-    totalPathDurationMsec += pathDurationMsec;
-  }
-
-  // normalize by total duration (time-weighted average)
-  // Longer paths contribute more to final fitness
-  if (totalPathDurationMsec > 0.0) {
-    stdFitness /= totalPathDurationMsec;
+    // Sum path fitness (each path already normalized by its own odometer)
+    stdFitness += localFitness;
   }
 
   // Mark fitness as valid for the GP library
   fitnessValid = 1;
-
-  // Note: Elite divergence detection is done in endOfEvaluation() on the main thread,
-  // not here in the worker task. Worker tasks just run simulations and return results.
-
 }
 
 void newHandler()
@@ -1460,10 +1414,8 @@ int main(int argc, char** argv)
           }
         }
         
-        // Use same fitness computation as normal GP evaluation
-        // Time-weighted aggregation: longer paths contribute more to final fitness
-        gp_fitness totalPathDurationMsec = 0.0;
-
+        // Compute fitness for each path and sum
+        // Each path is normalized by its own odometer, crash penalty applied per-path
         for (int i = 0; i < context.evalResults.pathList.size(); i++) {
           auto& path = context.evalResults.pathList.at(i);
           auto& aircraftState = context.evalResults.aircraftStateList.at(i);
@@ -1562,8 +1514,6 @@ int main(int argc, char** argv)
             angle_rad = angle_rad * static_cast<gp_scalar>(100.0f) / static_cast<gp_scalar>(M_PI);
 
             gp_scalar crossTrackPercentForLog = crossTrackPercent;
-            gp_scalar oscillationPercentForLog = 0.0f;
-            gp_scalar orientationPenaltyForLog = 0.0f;
             gp_scalar movement_efficiency = movementDirectionError;
 
             simulation_steps++;
@@ -1572,7 +1522,7 @@ int main(int argc, char** argv)
               bestOfEvalResults = context.evalResults;
               
               if (stepIndex == 1) {
-                fout << "Pth:Step:   Time Idx  totDist   pathX    pathY    pathZ        X        Y        Z       dr       dp       dy   relVel     roll    pitch    power    distP   angleP  movEffP      qw      qx      qy      qz   vxBody   vyBody   vzBody    alpha     beta   dtheta    dphi   dhome   xtrkP   xOscP orientP\n";
+                fout << "Pth:Step:   Time Idx  totDist   pathX    pathY    pathZ        X        Y        Z       dr       dp       dy   relVel     roll    pitch    power    distP   angleP  movEffP      qw      qx      qy      qz   vxBody   vyBody   vzBody    alpha     beta   dtheta    dphi   dhome   xtrkP\n";
               }
               
               Eigen::Matrix3f rotMatrix = craftOrientation.toRotationMatrix();
@@ -1615,7 +1565,7 @@ int main(int argc, char** argv)
               gp_quat q = craftOrientation;
 
               char outbuf[1500];
-              sprintf(outbuf, "%03d:%04d: %06ld %3d % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.4f % 7.4f % 7.4f % 7.4f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.2f % 7.2f % 7.2f\n",
+              sprintf(outbuf, "%03d:%04d: %06ld %3d % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.4f % 7.4f % 7.4f % 7.4f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.2f\n",
                 pathVariantIndex, simulation_steps,
                 stepAircraftState.getSimTimeMsec(), pathIndex,
                 path.at(pathIndex).distanceFromStart,
@@ -1635,15 +1585,12 @@ int main(int argc, char** argv)
                 distanceFromGoal,
                 angle_rad,
                 movement_efficiency,
-                // NEW FIELDS:
                 q.w(), q.x(), q.y(), q.z(),                       // Quaternion
                 velocity_body.x(), velocity_body.y(), velocity_body.z(),  // Body velocity
                 alpha_deg, beta_deg,                              // GETALPHA, GETBETA
                 dtheta_deg, dphi_deg,                             // GETDTHETA, GETDPHI
                 dhome,                                            // GETDHOME
-                crossTrackPercentForLog,
-                oscillationPercentForLog,
-                orientationPenaltyForLog
+                crossTrackPercentForLog
               );
               fout << outbuf;
             }
@@ -1672,23 +1619,18 @@ int main(int argc, char** argv)
             nanDetector++;
           }
 
+          // Crash penalty: scale fitness by 1/fraction_completed, then apply power function
           if (crashReason != CrashReason::None) {
-            gp_fitness fractional_distance_remaining = 1.0 -
+            gp_fitness fraction_completed =
               static_cast<gp_fitness>(path.at(aircraftState.back().getThisPathIndex()).distanceFromStart) / total_path_distance;
-            localFitness += SIM_CRASH_PENALTY * fractional_distance_remaining;
+            fraction_completed = std::max(fraction_completed, static_cast<gp_fitness>(0.01));
+            localFitness = localFitness / fraction_completed;
+            gp_fitness exponent = CRASH_POW_AT_0PCT + (CRASH_POW_AT_100PCT - CRASH_POW_AT_0PCT) * fraction_completed;
+            localFitness = std::pow(localFitness, exponent);
           }
 
-          // Get path duration for time-weighted aggregation
-          gp_fitness pathDurationMsec = path.back().simTimeMsec;
-
-          // accumulate the local fitness weighted by path duration
-          stdFitness += localFitness * pathDurationMsec;
-          totalPathDurationMsec += pathDurationMsec;
-        }
-
-        // normalize by total duration (time-weighted average)
-        if (totalPathDurationMsec > 0.0) {
-          stdFitness /= totalPathDurationMsec;
+          // Sum path fitness (each path already normalized by its own odometer)
+          stdFitness += localFitness;
         }
         
         // Mark fitness as valid for the GP library
@@ -1715,10 +1657,7 @@ int main(int argc, char** argv)
     // Create bytecode evaluation GP
     BytecodeEvaluationGP evalGP(bytecodeBuffer);
     
-    clearEvalResults(aggregatedEvalResults);
-    aggregatedEvalResults.scenario.pathVariantIndex = -1;
-    aggregatedEvalResults.scenario.windVariantIndex = -1;
-    aggregatedEvalResults.scenario.windSeed = 0;
+    aggregatedEvalResults.clear();
     EvalResults* previousCollector = activeEvalCollector;
     activeEvalCollector = &aggregatedEvalResults;
     
@@ -2299,8 +2238,8 @@ int main(int argc, char** argv)
     pop = nullptr;
 
     // Clean up accumulated evaluation results to prevent memory leak
-    clearEvalResults(bestOfEvalResults);
-    clearEvalResults(aggregatedEvalResults);
+    bestOfEvalResults.clear();
+    aggregatedEvalResults.clear();
   }
 
   uint64_t totalRuns = globalSimRunCounter.load(std::memory_order_relaxed);

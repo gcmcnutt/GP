@@ -739,6 +739,245 @@ private:
   }
 };
 
+// Progressive Distance Path - single long path with increasing difficulty
+// Sequence: Racetrack -> Figure-8 -> 45° Loop -> Spiral Climb -> Split-S
+// All segments return to origin, no lead-ins needed after first segment
+class GenerateProgressiveDistance : public GeneratorMethod {
+public:
+  std::vector<Path> method(int pathIndex, gp_scalar radius, gp_scalar height, gp_scalar base, unsigned int seed) override {
+    std::vector<Path> path;
+    gp_scalar totalDistance = 0.0f;
+
+    // Phase 1: Racetrack (StraightAndLevel) - EASY
+    // Centered at origin: south 20m, 180° turn, north 40m, 180° turn, south 20m
+    // No lead-in needed - controls settle during first straight
+    gp_vec3 raceStart(0.0f, 0.0f, 0.0f);
+    addStraightSegment(path, raceStart, gp_vec3(-1.0f, 0.0f, 0.0f), 20.0f, totalDistance);
+    addHorizontalTurn(path, path.back().start, 20.0f, M_PI, true, totalDistance);
+    addStraightSegment(path, path.back().start, gp_vec3(1.0f, 0.0f, 0.0f), 40.0f, totalDistance);
+    addHorizontalTurn(path, path.back().start, 20.0f, M_PI, true, totalDistance);
+    addStraightSegment(path, path.back().start, gp_vec3(-1.0f, 0.0f, 0.0f), 20.0f, totalDistance);
+    // Now back at origin, heading south
+
+    // Phase 3: Horizontal Figure-8 - MEDIUM
+    gp_scalar loopRadius = 20.0f;
+    gp_vec3 loopOrigin = path.back().start;
+    addHorizontalLoop(path, loopOrigin, loopRadius, false, totalDistance);  // Left loop
+    addHorizontalLoop(path, loopOrigin, loopRadius, true, totalDistance);   // Right loop
+    // Back at loopOrigin, heading south
+
+    // Phase 4: 45° Angled Loop - MEDIUM-HARD (3D maneuvering)
+    // Cubic transition from current position to loop entry
+    gp_vec3 phase4Start = path.back().start;
+    const gp_scalar cos45 = std::sqrt(2.0f) / 2.0f;
+    const gp_scalar sin45 = cos45;
+    gp_scalar angledLoopRadius = 15.0f;
+    gp_scalar centerAlt = -angledLoopRadius * cos45;
+    gp_scalar yOffset = angledLoopRadius * sin45;
+
+    for (gp_scalar turn = 0; turn < static_cast<gp_scalar>(M_PI * 2.0); turn += 0.05f) {
+      gp_scalar angle = turn - static_cast<gp_scalar>(M_PI / 2.0);
+      gp_scalar x_plane = -angledLoopRadius * std::cos(angle);
+      gp_scalar z_plane = angledLoopRadius * std::sin(angle);
+
+      // Offset from phase4Start instead of origin
+      gp_vec3 loopPoint(
+        phase4Start[0] + x_plane,
+        phase4Start[1] + z_plane * sin45 + yOffset,
+        phase4Start[2] + centerAlt - z_plane * cos45
+      );
+
+      if (!path.empty()) {
+        gp_scalar distance = (loopPoint - path.back().start).norm();
+        totalDistance += distance;
+      }
+      gp_scalar simTimeMsec = (totalDistance / SIM_RABBIT_VELOCITY) * 1000.0f;
+      path.push_back(Path(loopPoint, gp_vec3::UnitX(), totalDistance, 0.0f, simTimeMsec));
+    }
+
+    // Phase 5: Spiral Climb - HARD (climbing turn)
+    // 45° loop ends near origin - connect directly (no cubic needed)
+    gp_vec3 spiralStart = path.back().start;
+    gp_scalar climbAmount = -30.0f;  // Climb 30m (z becomes more negative in NED)
+    addSpiralTurn(path, spiralStart, 20.0f, 540.0f * M_PI / 180.0f, true, climbAmount, totalDistance);
+    // Now at altitude z≈-30, spiraled 1.5 turns clockwise
+
+    // Phase 6: Split-S back to origin - VERY HARD
+    // From spiral exit, position for Split-S that descends back to z=0
+    gp_vec3 spiralEnd = path.back().start;
+
+    // Fly straight to set up for Split-S
+    addStraightSegment(path, spiralEnd, gp_vec3(1.0f, 0.0f, 0.0f), 20.0f, totalDistance);
+
+    // Turn to head back toward origin (180° turn)
+    addHorizontalTurn(path, path.back().start, 15.0f, M_PI, true, totalDistance);
+
+    // Fly until positioned for Split-S that ends near origin
+    // Split-S with radius 15m drops 30m (diameter) - at z≈-30, will end at z≈0
+    gp_vec3 preSplit = path.back().start;
+    gp_scalar distToSplitEntry = std::abs(preSplit[0]) - 15.0f;
+    if (distToSplitEntry > 0) {
+      addStraightSegment(path, preSplit, gp_vec3(-1.0f, 0.0f, 0.0f), distToSplitEntry, totalDistance);
+    }
+
+    // Split-S maneuver (180° pitch-down loop) - exits heading north at z≈0
+    addPitchDownLoop(path, path.back().start, gp_vec3(-1.0f, 0.0f, 0.0f), 15.0f, totalDistance);
+
+    // Final straight run to origin (no cubic needed - just connect the dots)
+    gp_vec3 splitSEnd = path.back().start;
+    gp_scalar distToOrigin = std::sqrt(splitSEnd[0]*splitSEnd[0] + splitSEnd[1]*splitSEnd[1]);
+    if (distToOrigin > 1.0f) {
+      gp_vec3 toOrigin = -splitSEnd;
+      toOrigin[2] = 0.0f;  // Stay level
+      addStraightSegment(path, splitSEnd, toOrigin.normalized(), distToOrigin, totalDistance);
+    }
+
+    return path;
+  }
+
+private:
+  void addStraightSegment(std::vector<Path>& path, const gp_vec3& start, const gp_vec3& direction,
+                          gp_scalar distance, gp_scalar& totalDistance) {
+    const gp_scalar step = 1.0f;
+    gp_vec3 dir = direction.normalized();
+    gp_scalar startD = path.empty() ? 0.0f : step;
+
+    for (gp_scalar d = startD; d <= distance; d += step) {
+      gp_vec3 point = start + dir * d;
+      if (!path.empty()) {
+        gp_scalar segmentDist = (point - path.back().start).norm();
+        totalDistance += segmentDist;
+      }
+      gp_scalar simTimeMsec = (totalDistance / SIM_RABBIT_VELOCITY) * 1000.0f;
+      path.push_back(Path(point, gp_vec3::UnitX(), totalDistance, 0.0f, simTimeMsec));
+    }
+  }
+
+  void addHorizontalTurn(std::vector<Path>& path, const gp_vec3& start, gp_scalar radius,
+                         gp_scalar angleRadians, bool clockwise, gp_scalar& totalDistance) {
+    const gp_scalar step = 0.05f;
+
+    gp_vec3 heading(-1.0f, 0.0f, 0.0f);
+    if (path.size() >= 2) {
+      heading = (path.back().start - path[path.size()-2].start).normalized();
+    }
+
+    gp_vec3 headingXY(heading[0], heading[1], 0.0f);
+    headingXY = headingXY.normalized();
+    gp_vec3 rightPerpendicular(-headingXY[1], headingXY[0], 0.0f);
+    gp_vec3 center = start + rightPerpendicular * (clockwise ? 1.0f : -1.0f) * radius;
+    gp_scalar startAngle = std::atan2(start[1] - center[1], start[0] - center[0]);
+    gp_scalar angleSign = clockwise ? 1.0f : -1.0f;
+
+    for (gp_scalar angle = step; angle <= angleRadians; angle += step) {
+      gp_scalar totalAngle = startAngle + angleSign * angle;
+      gp_vec3 point(center[0] + radius * std::cos(totalAngle), center[1] + radius * std::sin(totalAngle), start[2]);
+
+      gp_scalar segmentDist = (point - path.back().start).norm();
+      totalDistance += segmentDist;
+
+      gp_scalar simTimeMsec = (totalDistance / SIM_RABBIT_VELOCITY) * 1000.0f;
+      path.push_back(Path(point, gp_vec3::UnitX(), totalDistance, 0.0f, simTimeMsec));
+    }
+  }
+
+  void addSpiralTurn(std::vector<Path>& path, const gp_vec3& start, gp_scalar radius,
+                     gp_scalar angleRadians, bool clockwise, gp_scalar totalClimb, gp_scalar& totalDistance) {
+    const gp_scalar step = 0.05f;
+
+    gp_vec3 heading(-1.0f, 0.0f, 0.0f);
+    if (path.size() >= 2) {
+      heading = (path.back().start - path[path.size()-2].start).normalized();
+    }
+
+    gp_vec3 headingXY(heading[0], heading[1], 0.0f);
+    headingXY = headingXY.normalized();
+    gp_vec3 rightPerpendicular(-headingXY[1], headingXY[0], 0.0f);
+    gp_vec3 center = start + rightPerpendicular * (clockwise ? 1.0f : -1.0f) * radius;
+    gp_scalar startAngle = std::atan2(start[1] - center[1], start[0] - center[0]);
+    gp_scalar angleSign = clockwise ? 1.0f : -1.0f;
+
+    for (gp_scalar angle = step; angle <= angleRadians; angle += step) {
+      gp_scalar totalAngle = startAngle + angleSign * angle;
+      gp_scalar zOffset = (angle / angleRadians) * totalClimb;
+      gp_vec3 point(center[0] + radius * std::cos(totalAngle), center[1] + radius * std::sin(totalAngle), start[2] + zOffset);
+
+      gp_scalar segmentDist = (point - path.back().start).norm();
+      totalDistance += segmentDist;
+
+      gp_scalar simTimeMsec = (totalDistance / SIM_RABBIT_VELOCITY) * 1000.0f;
+      path.push_back(Path(point, gp_vec3::UnitX(), totalDistance, 0.0f, simTimeMsec));
+    }
+  }
+
+  void addHorizontalLoop(std::vector<Path>& path, const gp_vec3& loopOrigin, gp_scalar loopRadius,
+                         bool clockwise, gp_scalar& totalDistance) {
+    const gp_scalar step = 0.05f;
+    gp_scalar sign = clockwise ? -1.0f : 1.0f;
+
+    for (gp_scalar turn = 0; turn < static_cast<gp_scalar>(M_PI * 2.0); turn += step) {
+      gp_vec3 circleCenter = loopOrigin + gp_vec3(0.0f, sign * loopRadius, 0.0f);
+      gp_vec3 point = circleCenter + gp_vec3(-loopRadius * std::sin(turn), -sign * loopRadius * std::cos(turn), 0.0f);
+
+      if (!path.empty()) {
+        gp_scalar distance = (point - path.back().start).norm();
+        totalDistance += distance;
+      }
+      gp_scalar simTimeMsec = (totalDistance / SIM_RABBIT_VELOCITY) * 1000.0f;
+      path.push_back(Path(point, gp_vec3::UnitX(), totalDistance, 0.0f, simTimeMsec));
+    }
+  }
+
+  void addPitchDownLoop(std::vector<Path>& path, const gp_vec3& start, const gp_vec3& heading,
+                        gp_scalar loopRadius, gp_scalar& totalDistance) {
+    const gp_scalar step = 0.05f;
+    gp_vec3 headingNorm = heading.normalized();
+    gp_vec3 center = start + gp_vec3(0.0f, 0.0f, loopRadius);
+
+    for (gp_scalar angle = step; angle <= static_cast<gp_scalar>(M_PI); angle += step) {
+      gp_scalar horizontalOffset = loopRadius * std::sin(angle);
+      gp_scalar verticalOffset = -loopRadius * std::cos(angle);
+
+      gp_vec3 point = center + headingNorm * horizontalOffset + gp_vec3(0.0f, 0.0f, verticalOffset);
+
+      gp_scalar segmentDist = (point - path.back().start).norm();
+      totalDistance += segmentDist;
+
+      gp_scalar simTimeMsec = (totalDistance / SIM_RABBIT_VELOCITY) * 1000.0f;
+      path.push_back(Path(point, gp_vec3::UnitX(), totalDistance, 0.0f, simTimeMsec));
+    }
+  }
+
+  void addCubicTransition(std::vector<Path>& path, const gp_vec3& from, const gp_vec3& to,
+                          const gp_vec3& endHeading, gp_scalar& totalDistance) {
+    // Create smooth cubic transition between two points
+    // Use 4 control points: from, from+tangent, to-tangent, to
+    gp_scalar transitionDist = (to - from).norm();
+    gp_scalar tangentScale = transitionDist * 0.4f;
+
+    gp_vec3 fromTangent = (path.size() >= 2) ?
+      (path.back().start - path[path.size()-2].start).normalized() * tangentScale :
+      gp_vec3(-1.0f, 0.0f, 0.0f) * tangentScale;
+
+    gp_vec3 p0 = from - fromTangent;  // Control point before start
+    gp_vec3 p1 = from;
+    gp_vec3 p2 = to;
+    gp_vec3 p3 = to + endHeading.normalized() * tangentScale;  // Control point after end
+
+    const gp_scalar step = 0.05f;
+    for (gp_scalar t = step; t <= 1.0f; t += step) {
+      gp_vec3 point = cubicInterpolate(p0, p1, p2, p3, t);
+
+      if (!path.empty()) {
+        gp_scalar segmentDist = (point - path.back().start).norm();
+        totalDistance += segmentDist;
+      }
+      gp_scalar simTimeMsec = (totalDistance / SIM_RABBIT_VELOCITY) * 1000.0f;
+      path.push_back(Path(point, gp_vec3::UnitX(), totalDistance, 0.0f, simTimeMsec));
+    }
+  }
+};
+
 class GenerateLongSequential : public GeneratorMethod {
 public:
   std::vector<Path> method(int pathIndex, gp_scalar radius, gp_scalar height, gp_scalar base, unsigned int seed) override {

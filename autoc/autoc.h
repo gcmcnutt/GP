@@ -24,6 +24,13 @@ struct WorkerContext;
 // Tertiary objective: Minimize energy consumption
 #define THROTTLE_EFFICIENCY_WEIGHT 1.0f      // Penalize excessive throttle usage
 
+// Crash penalty: power-based multiplier on fitness
+// Early crashes (0% complete) get larger exponent -> much worse fitness
+// Late crashes (100% complete) get smaller exponent -> less penalty
+// Formula: pow(fitness, lerp(CRASH_POW_AT_0PCT, CRASH_POW_AT_100PCT, fraction_completed))
+#define CRASH_POW_AT_0PCT 1.5f               // Exponent when crashing at start (harsh penalty)
+#define CRASH_POW_AT_100PCT 0.9f             // Exponent when crashing near end (mild penalty)
+
 struct WindScenarioConfig {
   unsigned int windSeed = 0;
   int windVariantIndex = 0;
@@ -33,8 +40,8 @@ struct ScenarioDescriptor {
   std::vector<std::vector<Path>> pathList;
   std::vector<WindScenarioConfig> windScenarios;
   unsigned int windSeed = 0;
-  int pathVariantIndex = 0;
-  int windVariantIndex = 0;
+  int pathVariantIndex = -1;   // -1 = unset/aggregated
+  int windVariantIndex = -1;   // -1 = unset/aggregated
 };
 
 class ExtraConfig {
