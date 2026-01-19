@@ -888,11 +888,8 @@ void MyGP::evalTask(WorkerContext& context)
     gp_fitness localFitness = 0.0;
     int stepIndex = 0; // where are we on the flight path?
 
-    // SIMPLIFIED error accumulators (gp_fitness for precision during summation)
-    gp_fitness waypoint_distance_sum = 0.0;        // Distance from current waypoint
-    gp_fitness cross_track_error_sum = 0.0;        // Lateral deviation from path
-    gp_fitness movement_direction_error_sum = 0.0; // Move along path tangent
-    gp_fitness throttle_energy_sum = 0.0;          // Minimize throttle usage
+    // Per-step fitness accumulator (weights applied per sample, then summed)
+    gp_fitness step_fitness_sum = 0.0;
     int simulation_steps = 0;
 
     // now walk next steps of actual path
@@ -914,7 +911,6 @@ void MyGP::evalTask(WorkerContext& context)
       gp_scalar waypointDistance = (currentPathPoint.start - aircraftPosition).norm();
       gp_scalar waypointDistancePercent = (waypointDistance * static_cast<gp_scalar>(100.0f)) /
                                            (static_cast<gp_scalar>(2.0f) * SIM_PATH_RADIUS_LIMIT);
-      waypoint_distance_sum += pow(waypointDistancePercent, WAYPOINT_DISTANCE_WEIGHT);
 
       // ====================================================================
       // METRIC 2: Cross-track error (stay near path centerline)
@@ -925,11 +921,10 @@ void MyGP::evalTask(WorkerContext& context)
       gp_scalar crossTrackPercent = 0.0f;
       if (SIM_PATH_RADIUS_LIMIT > 0.0f) {
         crossTrackPercent = (crossTrackMagnitude * static_cast<gp_scalar>(100.0f)) / SIM_PATH_RADIUS_LIMIT;
-        cross_track_error_sum += pow(crossTrackPercent, CROSS_TRACK_WEIGHT);
       }
 
       // ====================================================================
-      // METRIC 2: Movement direction alignment (move along path efficiently)
+      // METRIC 3: Movement direction alignment (move along path efficiently)
       // ====================================================================
       gp_scalar movementDirectionError = 0.0f;
       if (stepIndex > 1) {
@@ -943,18 +938,41 @@ void MyGP::evalTask(WorkerContext& context)
           direction_alignment = std::clamp(direction_alignment, static_cast<gp_scalar>(-1.0f), static_cast<gp_scalar>(1.0f));
           // Convert to 0-100 scale: perfect=0, opposite=100
           movementDirectionError = (static_cast<gp_scalar>(1.0f) - direction_alignment) * static_cast<gp_scalar>(50.0f);
-          movement_direction_error_sum += pow(movementDirectionError, MOVEMENT_DIRECTION_WEIGHT);
         }
       }
 
       // ====================================================================
-      // METRIC 3: Throttle efficiency (minimize energy consumption)
+      // METRIC 4: Energy deviation (match rabbit's energy state)
       // ====================================================================
-      gp_scalar current_throttle = stepAircraftState.getThrottleCommand();
-      // Throttle is -1 to 1 range, map to 0-1 range for energy (motor off at -1, full power at +1)
-      gp_scalar throttleNormalized = (current_throttle + 1.0f) * 0.5f;  // Maps [-1,1] -> [0,1]
-      gp_scalar throttlePercent = throttleNormalized * static_cast<gp_scalar>(100.0f);
-      throttle_energy_sum += pow(throttlePercent, THROTTLE_EFFICIENCY_WEIGHT);
+      // E = 0.5*v^2 + g*h  (specific energy, mass cancels)
+      // In NED: h = -z (altitude increases as z decreases)
+      gp_scalar craft_speed = stepAircraftState.getVelocity().norm();
+      gp_scalar craft_altitude = -aircraftPosition.z();  // NED: -z = altitude
+
+      constexpr gp_scalar g = static_cast<gp_scalar>(9.81f);
+      gp_scalar craft_energy = static_cast<gp_scalar>(0.5f) * craft_speed * craft_speed + g * craft_altitude;
+
+      gp_scalar rabbit_speed = SIM_RABBIT_VELOCITY;
+      gp_scalar rabbit_altitude = -currentPathPoint.start.z();
+      gp_scalar rabbit_energy = static_cast<gp_scalar>(0.5f) * rabbit_speed * rabbit_speed + g * rabbit_altitude;
+
+      // Symmetric deviation: penalize being above OR below rabbit energy
+      gp_scalar energy_deviation = std::abs(craft_energy - rabbit_energy);
+      gp_scalar energyDeviationPercent = (rabbit_energy > static_cast<gp_scalar>(1.0f))
+          ? (energy_deviation * static_cast<gp_scalar>(100.0f)) / rabbit_energy
+          : energy_deviation;
+
+      // ====================================================================
+      // PER-STEP FITNESS: Apply weights and combine per sample
+      // ====================================================================
+      // This allows tradeoffs in exponential space per timestep rather than
+      // averaging across the flight then weighting. Bad steps can't hide.
+      gp_fitness step_fitness = pow(waypointDistancePercent, WAYPOINT_DISTANCE_WEIGHT) +
+                                pow(crossTrackPercent, CROSS_TRACK_WEIGHT) +
+                                pow(movementDirectionError, MOVEMENT_DIRECTION_WEIGHT) +
+                                pow(energyDeviationPercent, ENERGY_DEVIATION_WEIGHT);
+
+      step_fitness_sum += step_fitness;
 
       // ====================================================================
       // Logging variables for compatibility (not used in fitness)
@@ -1072,26 +1090,14 @@ void MyGP::evalTask(WorkerContext& context)
     }
 
     // ========================================================================
-    // SIMPLIFIED FITNESS COMPUTATION (gp_fitness/double for precision)
+    // PER-STEP FITNESS NORMALIZATION
     // ========================================================================
-    // Get total path distance (odometer) for normalization
+    // Normalize accumulated per-step fitness by path distance
+    // This ensures paths of different lengths are compared fairly
     gp_fitness total_path_distance = path.back().distanceFromStart;
-
-    // Normalize all metrics by total path distance (odometer reading)
-    // This ensures paths of different lengths/granularity are compared fairly
-    // Guard against near-zero to prevent divide-by-near-zero overflow
     gp_fitness normalization_factor = (total_path_distance > 0.1) ? total_path_distance : 1.0;
 
-    gp_fitness normalized_waypoint_distance = (waypoint_distance_sum / normalization_factor);
-    gp_fitness normalized_cross_track = (cross_track_error_sum / normalization_factor);
-    gp_fitness normalized_movement_direction = (movement_direction_error_sum / normalization_factor);
-    gp_fitness normalized_throttle_energy = (throttle_energy_sum / normalization_factor);
-
-    // Sum all components (lower is better)
-    localFitness = normalized_waypoint_distance +     // Reach waypoints on time
-                   normalized_cross_track +           // Stay near path centerline
-                   normalized_movement_direction +    // Move along path tangent
-                   normalized_throttle_energy;        // Minimize throttle usage
+    localFitness = step_fitness_sum / normalization_factor;
 
     if (isnan(localFitness)) {
       nanDetector++;
@@ -1438,13 +1444,10 @@ int main(int argc, char** argv)
           gp_fitness localFitness = 0.0;
           int stepIndex = 0;
 
-          // SIMPLIFIED error accumulators (gp_fitness for precision during summation)
-          gp_fitness waypoint_distance_sum = 0.0;
-          gp_fitness cross_track_error_sum = 0.0;
-          gp_fitness movement_direction_error_sum = 0.0;
-          gp_fitness throttle_energy_sum = 0.0;
+          // Per-step fitness accumulator (weights applied per sample, then summed)
+          gp_fitness step_fitness_sum = 0.0;
           int simulation_steps = 0;
-          
+
           while (++stepIndex < aircraftState.size()) {
             auto& stepAircraftState = aircraftState.at(stepIndex);
             int rawPathIndex = stepAircraftState.getThisPathIndex();
@@ -1452,7 +1455,7 @@ int main(int argc, char** argv)
             const Path& currentPathPoint = path.at(pathIndex);
             PathFrame frame = computePathFrame(path, pathIndex);
             int nextIndex = std::min(pathIndex + 1, static_cast<int>(path.size()) - 1);
-            
+
             gp_vec3 aircraftPosition = stepAircraftState.getPosition();
             gp_quat craftOrientation = stepAircraftState.getOrientation();
             gp_vec3 aircraftUp = craftOrientation * gp_vec3::UnitZ();
@@ -1461,7 +1464,6 @@ int main(int argc, char** argv)
             gp_scalar waypointDistance = (currentPathPoint.start - aircraftPosition).norm();
             gp_scalar waypointDistancePercent = (waypointDistance * static_cast<gp_scalar>(100.0f)) /
                                                  (static_cast<gp_scalar>(2.0f) * SIM_PATH_RADIUS_LIMIT);
-            waypoint_distance_sum += pow(waypointDistancePercent, WAYPOINT_DISTANCE_WEIGHT);
 
             // Cross-track error
             gp_vec3 craftOffset = aircraftPosition - currentPathPoint.start;
@@ -1470,7 +1472,6 @@ int main(int argc, char** argv)
             gp_scalar crossTrackPercent = 0.0f;
             if (SIM_PATH_RADIUS_LIMIT > static_cast<gp_scalar>(0.0f)) {
               crossTrackPercent = (crossTrackMagnitude * static_cast<gp_scalar>(100.0f)) / SIM_PATH_RADIUS_LIMIT;
-              cross_track_error_sum += pow(crossTrackPercent, CROSS_TRACK_WEIGHT);
             }
 
             // Movement direction alignment
@@ -1483,16 +1484,33 @@ int main(int argc, char** argv)
                 // Clamp to valid range to handle floating-point precision errors at boundaries
                 direction_alignment = std::clamp(direction_alignment, static_cast<gp_scalar>(-1.0f), static_cast<gp_scalar>(1.0f));
                 movementDirectionError = (static_cast<gp_scalar>(1.0f) - direction_alignment) * static_cast<gp_scalar>(50.0f);
-                movement_direction_error_sum += pow(movementDirectionError, MOVEMENT_DIRECTION_WEIGHT);
               }
             }
 
-            // Throttle efficiency
-            gp_scalar current_throttle = stepAircraftState.getThrottleCommand();
-            // Throttle is -1 to 1 range, map to 0-1 range for energy (motor off at -1, full power at +1)
-            gp_scalar throttleNormalized = (current_throttle + 1.0f) * 0.5f;  // Maps [-1,1] -> [0,1]
-            gp_scalar throttlePercent = throttleNormalized * static_cast<gp_scalar>(100.0f);
-            throttle_energy_sum += pow(throttlePercent, THROTTLE_EFFICIENCY_WEIGHT);
+            // Energy deviation (match rabbit's energy state)
+            gp_scalar craft_speed = stepAircraftState.getVelocity().norm();
+            gp_scalar craft_altitude = -aircraftPosition.z();  // NED: -z = altitude
+
+            constexpr gp_scalar g = static_cast<gp_scalar>(9.81f);
+            gp_scalar craft_energy = static_cast<gp_scalar>(0.5f) * craft_speed * craft_speed + g * craft_altitude;
+
+            gp_scalar rabbit_speed = SIM_RABBIT_VELOCITY;
+            gp_scalar rabbit_altitude = -currentPathPoint.start.z();
+            gp_scalar rabbit_energy = static_cast<gp_scalar>(0.5f) * rabbit_speed * rabbit_speed + g * rabbit_altitude;
+
+            // Symmetric deviation: penalize being above OR below rabbit energy
+            gp_scalar energy_deviation = std::abs(craft_energy - rabbit_energy);
+            gp_scalar energyDeviationPercent = (rabbit_energy > static_cast<gp_scalar>(1.0f))
+                ? (energy_deviation * static_cast<gp_scalar>(100.0f)) / rabbit_energy
+                : energy_deviation;
+
+            // Per-step fitness: apply weights and combine per sample
+            gp_fitness step_fitness = pow(waypointDistancePercent, WAYPOINT_DISTANCE_WEIGHT) +
+                                      pow(crossTrackPercent, CROSS_TRACK_WEIGHT) +
+                                      pow(movementDirectionError, MOVEMENT_DIRECTION_WEIGHT) +
+                                      pow(energyDeviationPercent, ENERGY_DEVIATION_WEIGHT);
+
+            step_fitness_sum += step_fitness;
 
             // Logging variables for compatibility (not used in fitness)
             gp_scalar distanceFromGoal = (currentPathPoint.start - aircraftPosition).norm();
@@ -1596,24 +1614,12 @@ int main(int argc, char** argv)
             }
           }
           
-          // SIMPLIFIED FITNESS COMPUTATION
-          // Get total path distance (odometer) for normalization (gp_fitness/double for precision)
+          // PER-STEP FITNESS NORMALIZATION
+          // Normalize accumulated per-step fitness by path distance
           gp_fitness total_path_distance = path.back().distanceFromStart;
-
-          // Normalize all metrics by total path distance (odometer reading)
-          // This ensures paths of different lengths/granularity are compared fairly
-          // Guard against near-zero to prevent divide-by-near-zero overflow
           gp_fitness normalization_factor = (total_path_distance > 0.1) ? total_path_distance : 1.0;
 
-          gp_fitness normalized_waypoint_distance = (waypoint_distance_sum / normalization_factor);
-          gp_fitness normalized_cross_track = (cross_track_error_sum / normalization_factor);
-          gp_fitness normalized_movement_direction = (movement_direction_error_sum / normalization_factor);
-          gp_fitness normalized_throttle_energy = (throttle_energy_sum / normalization_factor);
-
-          localFitness = normalized_waypoint_distance +
-                         normalized_cross_track +
-                         normalized_movement_direction +
-                         normalized_throttle_energy;
+          localFitness = step_fitness_sum / normalization_factor;
 
           if (isnan(localFitness)) {
             nanDetector++;

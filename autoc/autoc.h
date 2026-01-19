@@ -21,8 +21,8 @@ struct WorkerContext;
 // Secondary objective: Move efficiently along path
 #define MOVEMENT_DIRECTION_WEIGHT 1.3f       // Direction alignment with path
 
-// Tertiary objective: Minimize energy consumption
-#define THROTTLE_EFFICIENCY_WEIGHT 1.0f      // Penalize excessive throttle usage
+// Tertiary objective: Match rabbit's energy state (kinetic + potential)
+#define ENERGY_DEVIATION_WEIGHT 1.0f         // Penalize deviation from rabbit's energy
 
 // Crash penalty: power-based multiplier on fitness
 // Early crashes (0% complete) get larger exponent -> much worse fitness
