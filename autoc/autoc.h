@@ -22,14 +22,14 @@ struct WorkerContext;
 #define MOVEMENT_DIRECTION_WEIGHT 1.3f       // Direction alignment with path
 
 // Tertiary objective: Match rabbit's energy state (kinetic + potential)
-#define ENERGY_DEVIATION_WEIGHT 1.0f         // Penalize deviation from rabbit's energy
+// Asymmetric: being below target altitude is harder to recover than being above
+#define ENERGY_DEVIATION_WEIGHT 1.0f         // Base power for energy deviation
+#define ALTITUDE_LOW_POWER 1.5f              // Extra power when below target (harder to recover)
+#define ALTITUDE_HIGH_POWER 1.0f             // Power when above target (easy to correct)
 
-// Crash penalty: power-based multiplier on fitness
-// Early crashes (0% complete) get larger exponent -> much worse fitness
-// Late crashes (100% complete) get smaller exponent -> less penalty
-// Formula: pow(fitness, lerp(CRASH_POW_AT_0PCT, CRASH_POW_AT_100PCT, fraction_completed))
-#define CRASH_POW_AT_0PCT 1.5f               // Exponent when crashing at start (harsh penalty)
-#define CRASH_POW_AT_100PCT 0.9f             // Exponent when crashing near end (mild penalty)
+// Crash penalty: soft lexicographic multiplier
+// Completion dominates (1e6 scale), quality provides gradient within similar completion levels
+#define CRASH_COMPLETION_WEIGHT 1e6          // Multiplier for (1 - fraction_completed)
 
 struct WindScenarioConfig {
   unsigned int windSeed = 0;

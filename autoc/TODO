@@ -24,16 +24,33 @@ DEMETIC MODE ELITE PRESERVATION (broken fitness tracking)
 - variations project - to get closer to zero-shot
   - power, drag, service response times
   - get random start/orientation working in crrcsim, consider fitness function for distance, alignment is ramped sensitivity for first couple of seconds (to allow capture from random start)
-  - wind speed, direction, turbulence multipler need to vary
+  - wind speed, direction, turbulence multiplier need to vary
     * CURRENT: WindScenarios only varies turbulence/gust patterns via PRNG seed
-    * Wind direction fixed at 270° (from scenery/config)
-    * Base wind velocity fixed at 7 ft/s (from scenery/config)
-    * Turbulence intensity fixed at 1.0 (relative multiplier from scenery/config)
-    * TO ADD VARIATION: Modify config loading to randomize direction/velocity based on wind seed
-      - See config.cpp:173-249 (T_Wind::setDefaults and read methods)
-      - Wind seed controls: Dryden turbulence model gaussian noise (eta1-4 in windfield.h:131)
-      - Wind seed controls: Thermal updraft positions
+    * Wind direction fixed at 330° (from scenery/config davis-orig.xml)
+    * Base wind velocity fixed at 12 ft/s (~8 mph) from scenery/config
+    * Turbulence intensity fixed at 1.0 (relative Dryden model multiplier)
+    * TO ADD VARIATION:
+      - Wind direction: Should vary across 360° (or at least 0°, 90°, 180°, 270°)
+      - Wind velocity: Should vary 5-25 ft/s (3-17 mph) typical soaring range
+      - Turbulence intensity: Should vary 0.5-2.0 to test calm vs rough air
+      - Implementation: Modify config loading to randomize based on wind seed
+        * See config.cpp:173-249 (T_Wind::setDefaults and read methods)
+        * Wind seed controls: Dryden turbulence model gaussian noise (eta1-4 in windfield.h:131)
+        * Wind seed controls: Thermal updraft positions
+    * EXPECTED VELOCITY RANGES (from crrcsim source):
+      - Steady wind: 0-80 ft/s (GUI max), typical 10-30 ft/s for gliders
+      - Horizontal gusts (3σ): ±2-3 mph from Dryden turbulence model
+      - Vertical gusts (3σ): ±3-5 ft/s
+      - Thermal updrafts: 0-8 ft/s (strength_mean=5, sigma=1)
+      - Thermal inflow (near ground): ±1.4 mph horizontal
+      - Worst-case combined: ~24-27 mph horizontal, ±8-13 ft/s vertical
   - also varying speed rabbit
+  - craft variations (for robustness to airframe differences)
+    * CG position variation
+    * Wing loading variation
+    * Control surface response times/rates
+    * Drag coefficient variation
+    * Power/thrust variation
 - GP to autoc in inav via controls
   - selector
   - activate

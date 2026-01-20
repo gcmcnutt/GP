@@ -848,7 +848,7 @@ void MyGP::evalTask(WorkerContext& context)
   }
 
   // Compute fitness for each path and sum
-  // Each path is normalized by its own odometer, crash penalty applied per-path
+  // Crash penalty (soft lexicographic) applied per-path
 
   for (int i = 0; i < context.evalResults.pathList.size(); i++) {
     bool printHeader = true;
@@ -956,11 +956,18 @@ void MyGP::evalTask(WorkerContext& context)
       gp_scalar rabbit_altitude = -currentPathPoint.start.z();
       gp_scalar rabbit_energy = static_cast<gp_scalar>(0.5f) * rabbit_speed * rabbit_speed + g * rabbit_altitude;
 
-      // Symmetric deviation: penalize being above OR below rabbit energy
+      // Asymmetric energy deviation: penalize being below target more than above
+      // Being low is harder to recover (must climb, costs energy)
+      // Being high is easily corrected (just descend)
       gp_scalar energy_deviation = std::abs(craft_energy - rabbit_energy);
       gp_scalar energyDeviationPercent = (rabbit_energy > static_cast<gp_scalar>(1.0f))
           ? (energy_deviation * static_cast<gp_scalar>(100.0f)) / rabbit_energy
           : energy_deviation;
+
+      // Apply asymmetric power based on altitude
+      gp_scalar altitude_power = (craft_altitude < rabbit_altitude)
+          ? ALTITUDE_LOW_POWER    // Below target: harsher penalty
+          : ALTITUDE_HIGH_POWER;  // Above target: lighter penalty
 
       // ====================================================================
       // PER-STEP FITNESS: Apply weights and combine per sample
@@ -970,7 +977,7 @@ void MyGP::evalTask(WorkerContext& context)
       gp_fitness step_fitness = pow(waypointDistancePercent, WAYPOINT_DISTANCE_WEIGHT) +
                                 pow(crossTrackPercent, CROSS_TRACK_WEIGHT) +
                                 pow(movementDirectionError, MOVEMENT_DIRECTION_WEIGHT) +
-                                pow(energyDeviationPercent, ENERGY_DEVIATION_WEIGHT);
+                                pow(energyDeviationPercent, ENERGY_DEVIATION_WEIGHT * altitude_power);
 
       step_fitness_sum += step_fitness;
 
@@ -1089,38 +1096,25 @@ void MyGP::evalTask(WorkerContext& context)
       }
     }
 
-    // ========================================================================
-    // PER-STEP FITNESS NORMALIZATION
-    // ========================================================================
-    // Normalize accumulated per-step fitness by path distance
-    // This ensures paths of different lengths are compared fairly
-    gp_fitness total_path_distance = path.back().distanceFromStart;
-    gp_fitness normalization_factor = (total_path_distance > 0.1) ? total_path_distance : 1.0;
-
-    localFitness = step_fitness_sum / normalization_factor;
+    localFitness = step_fitness_sum;
 
     if (isnan(localFitness)) {
       nanDetector++;
     }
 
-    // Crash penalty: scale fitness by 1/fraction_completed, then apply power function
-    // This inflates fitness for early crashes (making them worse, since lower is better)
-    // Then the power function provides additional shaping:
-    //   - Early crashes: exponent > 1 -> further increases penalty
-    //   - Late crashes: exponent < 1 -> reduces the penalty scaling
+    // Crash penalty: soft lexicographic - completion dominates, quality provides gradient
+    // This ensures "how far you got" is the primary selection criterion (safety first),
+    // while flight quality (position, alignment, energy) differentiates within similar completion levels.
     if (crashReason != CrashReason::None) {
+      gp_fitness total_path_distance = path.back().distanceFromStart;
       gp_fitness fraction_completed =
         static_cast<gp_fitness>(path.at(aircraftState.back().getThisPathIndex()).distanceFromStart) / total_path_distance;
-      // Clamp to avoid division by zero or extreme values
       fraction_completed = std::max(fraction_completed, static_cast<gp_fitness>(0.001));
-      // Scale fitness inversely by completion (4% complete -> multiply by 25)
-      localFitness = localFitness / fraction_completed;
-      // Then apply power function for additional shaping
-      gp_fitness exponent = CRASH_POW_AT_0PCT + (CRASH_POW_AT_100PCT - CRASH_POW_AT_0PCT) * fraction_completed;
-      localFitness = std::pow(localFitness, exponent);
+      gp_fitness completion_penalty = (1.0 - fraction_completed) * CRASH_COMPLETION_WEIGHT;
+      localFitness = completion_penalty + localFitness;
     }
 
-    // Sum path fitness (each path already normalized by its own odometer)
+    // Sum path fitness
     stdFitness += localFitness;
   }
 
@@ -1421,7 +1415,7 @@ int main(int argc, char** argv)
         }
         
         // Compute fitness for each path and sum
-        // Each path is normalized by its own odometer, crash penalty applied per-path
+        // Crash penalty (soft lexicographic) applied per-path
         for (int i = 0; i < context.evalResults.pathList.size(); i++) {
           auto& path = context.evalResults.pathList.at(i);
           auto& aircraftState = context.evalResults.aircraftStateList.at(i);
@@ -1498,17 +1492,22 @@ int main(int argc, char** argv)
             gp_scalar rabbit_altitude = -currentPathPoint.start.z();
             gp_scalar rabbit_energy = static_cast<gp_scalar>(0.5f) * rabbit_speed * rabbit_speed + g * rabbit_altitude;
 
-            // Symmetric deviation: penalize being above OR below rabbit energy
+            // Asymmetric energy deviation: penalize being below target more than above
             gp_scalar energy_deviation = std::abs(craft_energy - rabbit_energy);
             gp_scalar energyDeviationPercent = (rabbit_energy > static_cast<gp_scalar>(1.0f))
                 ? (energy_deviation * static_cast<gp_scalar>(100.0f)) / rabbit_energy
                 : energy_deviation;
 
+            // Apply asymmetric power based on altitude
+            gp_scalar altitude_power = (craft_altitude < rabbit_altitude)
+                ? ALTITUDE_LOW_POWER    // Below target: harsher penalty
+                : ALTITUDE_HIGH_POWER;  // Above target: lighter penalty
+
             // Per-step fitness: apply weights and combine per sample
             gp_fitness step_fitness = pow(waypointDistancePercent, WAYPOINT_DISTANCE_WEIGHT) +
                                       pow(crossTrackPercent, CROSS_TRACK_WEIGHT) +
                                       pow(movementDirectionError, MOVEMENT_DIRECTION_WEIGHT) +
-                                      pow(energyDeviationPercent, ENERGY_DEVIATION_WEIGHT);
+                                      pow(energyDeviationPercent, ENERGY_DEVIATION_WEIGHT * altitude_power);
 
             step_fitness_sum += step_fitness;
 
@@ -1614,28 +1613,23 @@ int main(int argc, char** argv)
             }
           }
           
-          // PER-STEP FITNESS NORMALIZATION
-          // Normalize accumulated per-step fitness by path distance
-          gp_fitness total_path_distance = path.back().distanceFromStart;
-          gp_fitness normalization_factor = (total_path_distance > 0.1) ? total_path_distance : 1.0;
-
-          localFitness = step_fitness_sum / normalization_factor;
+          localFitness = step_fitness_sum;
 
           if (isnan(localFitness)) {
             nanDetector++;
           }
 
-          // Crash penalty: scale fitness by 1/fraction_completed, then apply power function
+          // Crash penalty: soft lexicographic - completion dominates, quality provides gradient
           if (crashReason != CrashReason::None) {
+            gp_fitness total_path_distance = path.back().distanceFromStart;
             gp_fitness fraction_completed =
               static_cast<gp_fitness>(path.at(aircraftState.back().getThisPathIndex()).distanceFromStart) / total_path_distance;
-            fraction_completed = std::max(fraction_completed, static_cast<gp_fitness>(0.01));
-            localFitness = localFitness / fraction_completed;
-            gp_fitness exponent = CRASH_POW_AT_0PCT + (CRASH_POW_AT_100PCT - CRASH_POW_AT_0PCT) * fraction_completed;
-            localFitness = std::pow(localFitness, exponent);
+            fraction_completed = std::max(fraction_completed, static_cast<gp_fitness>(0.001));
+            gp_fitness completion_penalty = (1.0 - fraction_completed) * CRASH_COMPLETION_WEIGHT;
+            localFitness = completion_penalty + localFitness;
           }
 
-          // Sum path fitness (each path already normalized by its own odometer)
+          // Sum path fitness
           stdFitness += localFitness;
         }
         
