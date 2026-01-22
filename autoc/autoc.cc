@@ -906,25 +906,21 @@ void MyGP::evalTask(WorkerContext& context)
       gp_vec3 aircraftUp = craftOrientation * gp_vec3::UnitZ();
 
       // ====================================================================
-      // METRIC 1: Waypoint distance (reach current target on time)
-      // ====================================================================
-      gp_scalar waypointDistance = (currentPathPoint.start - aircraftPosition).norm();
-      gp_scalar waypointDistancePercent = (waypointDistance * static_cast<gp_scalar>(100.0f)) /
-                                           (static_cast<gp_scalar>(2.0f) * SIM_PATH_RADIUS_LIMIT);
-
-      // ====================================================================
-      // METRIC 2: Cross-track error (stay near path centerline)
+      // METRIC 1: Waypoint distance (meters, raw)
+      // Asymmetric power based on position relative to rabbit's velocity vector
       // ====================================================================
       gp_vec3 craftOffset = aircraftPosition - currentPathPoint.start;
-      gp_vec3 lateral = craftOffset - frame.tangent * craftOffset.dot(frame.tangent);
-      gp_scalar crossTrackMagnitude = lateral.norm();
-      gp_scalar crossTrackPercent = 0.0f;
-      if (SIM_PATH_RADIUS_LIMIT > 0.0f) {
-        crossTrackPercent = (crossTrackMagnitude * static_cast<gp_scalar>(100.0f)) / SIM_PATH_RADIUS_LIMIT;
-      }
+      gp_scalar waypointDistance = craftOffset.norm();
+
+      // Project craft offset onto rabbit's path tangent to determine ahead/behind
+      // Positive = craft is ahead of rabbit (overshooting), Negative = behind (following)
+      gp_scalar alongTrack = craftOffset.dot(frame.tangent);
+      gp_scalar waypoint_power = (alongTrack > 0)
+          ? WAYPOINT_AHEAD_POWER    // Ahead of rabbit: harsher penalty
+          : WAYPOINT_BEHIND_POWER;  // Behind rabbit: lighter penalty
 
       // ====================================================================
-      // METRIC 3: Movement direction alignment (move along path efficiently)
+      // METRIC 2: Movement direction alignment (scaled to ~meter equivalent)
       // ====================================================================
       gp_scalar movementDirectionError = 0.0f;
       if (stepIndex > 1) {
@@ -932,17 +928,15 @@ void MyGP::evalTask(WorkerContext& context)
         gp_scalar aircraft_distance = aircraft_movement.norm();
 
         if (aircraft_distance > static_cast<gp_scalar>(0.1f)) {
-          // Path direction is the tangent
           gp_scalar direction_alignment = aircraft_movement.normalized().dot(frame.tangent);
-          // Clamp to valid range to handle floating-point precision errors at boundaries
           direction_alignment = std::clamp(direction_alignment, static_cast<gp_scalar>(-1.0f), static_cast<gp_scalar>(1.0f));
-          // Convert to 0-100 scale: perfect=0, opposite=100
-          movementDirectionError = (static_cast<gp_scalar>(1.0f) - direction_alignment) * static_cast<gp_scalar>(50.0f);
+          // Range 0 (aligned) to 2 (opposite), scaled by DIRECTION_SCALE to ~meter equivalent
+          movementDirectionError = (static_cast<gp_scalar>(1.0f) - direction_alignment) * DIRECTION_SCALE;
         }
       }
 
       // ====================================================================
-      // METRIC 4: Energy deviation (match rabbit's energy state)
+      // METRIC 3: Energy deviation (J/kg = m^2/s^2, raw)
       // ====================================================================
       // E = 0.5*v^2 + g*h  (specific energy, mass cancels)
       // In NED: h = -z (altitude increases as z decreases)
@@ -956,30 +950,22 @@ void MyGP::evalTask(WorkerContext& context)
       gp_scalar rabbit_altitude = -currentPathPoint.start.z();
       gp_scalar rabbit_energy = static_cast<gp_scalar>(0.5f) * rabbit_speed * rabbit_speed + g * rabbit_altitude;
 
-      // Asymmetric energy deviation: penalize being below target more than above
-      // Being low is harder to recover (must climb, costs energy)
-      // Being high is easily corrected (just descend)
+      // Raw energy deviation in J/kg
       gp_scalar energy_deviation = std::abs(craft_energy - rabbit_energy);
-      gp_scalar energyDeviationPercent = (rabbit_energy > static_cast<gp_scalar>(1.0f))
-          ? (energy_deviation * static_cast<gp_scalar>(100.0f)) / rabbit_energy
-          : energy_deviation;
 
-      // Apply asymmetric power based on altitude
+      // Asymmetric power based on altitude (NED: craft_alt < rabbit_alt means BELOW)
       gp_scalar altitude_power = (craft_altitude < rabbit_altitude)
           ? ALTITUDE_LOW_POWER    // Below target: harsher penalty
           : ALTITUDE_HIGH_POWER;  // Above target: lighter penalty
 
       // ====================================================================
-      // PER-STEP FITNESS: Apply weights and combine per sample
+      // PER-STEP FITNESS: Raw units with power-law weighting
       // ====================================================================
-      // This allows tradeoffs in exponential space per timestep rather than
-      // averaging across the flight then weighting. Bad steps can't hide.
-      gp_fitness step_fitness = pow(waypointDistancePercent, WAYPOINT_DISTANCE_WEIGHT) +
-                                pow(crossTrackPercent, CROSS_TRACK_WEIGHT) +
+      gp_fitness step_fitness = pow(waypointDistance, waypoint_power) +
                                 pow(movementDirectionError, MOVEMENT_DIRECTION_WEIGHT) +
-                                pow(energyDeviationPercent, ENERGY_DEVIATION_WEIGHT * altitude_power);
+                                pow(energy_deviation, altitude_power);
 
-      step_fitness_sum += step_fitness;
+      step_fitness_sum += step_fitness * STEP_TIME_WEIGHT;
 
       // ====================================================================
       // Logging variables for compatibility (not used in fitness)
@@ -999,7 +985,10 @@ void MyGP::evalTask(WorkerContext& context)
       }
       angle_rad = angle_rad * static_cast<gp_scalar>(100.0f) / static_cast<gp_scalar>(M_PI);
 
-      gp_scalar crossTrackPercentForLog = crossTrackPercent;
+      // Cross-track for logging only (not used in fitness)
+      // craftOffset already computed above for waypoint distance
+      gp_vec3 lateral = craftOffset - frame.tangent * craftOffset.dot(frame.tangent);
+      gp_scalar crossTrackPercentForLog = (lateral.norm() * static_cast<gp_scalar>(100.0f)) / SIM_PATH_RADIUS_LIMIT;
       gp_scalar movement_efficiency = movementDirectionError;
 
       simulation_steps++;
@@ -1053,7 +1042,7 @@ void MyGP::evalTask(WorkerContext& context)
         gp_vec3 craftToTarget = path.at(pathIndex).start - stepAircraftState.getPosition();
         gp_vec3 target_body = stepAircraftState.getOrientation().inverse() * craftToTarget;
         gp_scalar dtheta_deg = atan2(-target_body.z(), target_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);    // GETDTHETA
-        gp_scalar dphi_deg = atan2(target_body.y(), target_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);       // GETDPHI
+        gp_scalar dphi_deg = atan2(target_body.y(), -target_body.z()) * static_cast<gp_scalar>(180.0 / M_PI);      // GETDPHI (YZ plane, matches evaluator)
 
         // Distance to home (GETDHOME)
         gp_vec3 home(0, 0, SIM_INITIAL_ALTITUDE);
@@ -1454,34 +1443,31 @@ int main(int argc, char** argv)
             gp_quat craftOrientation = stepAircraftState.getOrientation();
             gp_vec3 aircraftUp = craftOrientation * gp_vec3::UnitZ();
 
-            // Waypoint distance
-            gp_scalar waypointDistance = (currentPathPoint.start - aircraftPosition).norm();
-            gp_scalar waypointDistancePercent = (waypointDistance * static_cast<gp_scalar>(100.0f)) /
-                                                 (static_cast<gp_scalar>(2.0f) * SIM_PATH_RADIUS_LIMIT);
-
-            // Cross-track error
+            // Waypoint distance (meters, raw)
+            // Asymmetric power based on position relative to rabbit's velocity vector
             gp_vec3 craftOffset = aircraftPosition - currentPathPoint.start;
-            gp_vec3 lateral = craftOffset - frame.tangent * craftOffset.dot(frame.tangent);
-            gp_scalar crossTrackMagnitude = lateral.norm();
-            gp_scalar crossTrackPercent = 0.0f;
-            if (SIM_PATH_RADIUS_LIMIT > static_cast<gp_scalar>(0.0f)) {
-              crossTrackPercent = (crossTrackMagnitude * static_cast<gp_scalar>(100.0f)) / SIM_PATH_RADIUS_LIMIT;
-            }
+            gp_scalar waypointDistance = craftOffset.norm();
 
-            // Movement direction alignment
+            // Project craft offset onto rabbit's path tangent to determine ahead/behind
+            // Positive = craft is ahead of rabbit (overshooting), Negative = behind (following)
+            gp_scalar alongTrack = craftOffset.dot(frame.tangent);
+            gp_scalar waypoint_power = (alongTrack > 0)
+                ? WAYPOINT_AHEAD_POWER    // Ahead of rabbit: harsher penalty
+                : WAYPOINT_BEHIND_POWER;  // Behind rabbit: lighter penalty
+
+            // Movement direction alignment (scaled to ~meter equivalent)
             gp_scalar movementDirectionError = 0.0f;
             if (stepIndex > 1) {
               gp_vec3 aircraft_movement = stepAircraftState.getPosition() - aircraftState.at(stepIndex-1).getPosition();
               gp_scalar aircraft_distance = aircraft_movement.norm();
               if (aircraft_distance > static_cast<gp_scalar>(0.1f)) {
                 gp_scalar direction_alignment = aircraft_movement.normalized().dot(frame.tangent);
-                // Clamp to valid range to handle floating-point precision errors at boundaries
                 direction_alignment = std::clamp(direction_alignment, static_cast<gp_scalar>(-1.0f), static_cast<gp_scalar>(1.0f));
-                movementDirectionError = (static_cast<gp_scalar>(1.0f) - direction_alignment) * static_cast<gp_scalar>(50.0f);
+                movementDirectionError = (static_cast<gp_scalar>(1.0f) - direction_alignment) * DIRECTION_SCALE;
               }
             }
 
-            // Energy deviation (match rabbit's energy state)
+            // Energy deviation (J/kg = m^2/s^2, raw)
             gp_scalar craft_speed = stepAircraftState.getVelocity().norm();
             gp_scalar craft_altitude = -aircraftPosition.z();  // NED: -z = altitude
 
@@ -1492,24 +1478,20 @@ int main(int argc, char** argv)
             gp_scalar rabbit_altitude = -currentPathPoint.start.z();
             gp_scalar rabbit_energy = static_cast<gp_scalar>(0.5f) * rabbit_speed * rabbit_speed + g * rabbit_altitude;
 
-            // Asymmetric energy deviation: penalize being below target more than above
+            // Raw energy deviation in J/kg
             gp_scalar energy_deviation = std::abs(craft_energy - rabbit_energy);
-            gp_scalar energyDeviationPercent = (rabbit_energy > static_cast<gp_scalar>(1.0f))
-                ? (energy_deviation * static_cast<gp_scalar>(100.0f)) / rabbit_energy
-                : energy_deviation;
 
-            // Apply asymmetric power based on altitude
+            // Asymmetric power based on altitude (NED: craft_alt < rabbit_alt means BELOW)
             gp_scalar altitude_power = (craft_altitude < rabbit_altitude)
                 ? ALTITUDE_LOW_POWER    // Below target: harsher penalty
                 : ALTITUDE_HIGH_POWER;  // Above target: lighter penalty
 
-            // Per-step fitness: apply weights and combine per sample
-            gp_fitness step_fitness = pow(waypointDistancePercent, WAYPOINT_DISTANCE_WEIGHT) +
-                                      pow(crossTrackPercent, CROSS_TRACK_WEIGHT) +
+            // Per-step fitness: raw units with power-law weighting
+            gp_fitness step_fitness = pow(waypointDistance, waypoint_power) +
                                       pow(movementDirectionError, MOVEMENT_DIRECTION_WEIGHT) +
-                                      pow(energyDeviationPercent, ENERGY_DEVIATION_WEIGHT * altitude_power);
+                                      pow(energy_deviation, altitude_power);
 
-            step_fitness_sum += step_fitness;
+            step_fitness_sum += step_fitness * STEP_TIME_WEIGHT;
 
             // Logging variables for compatibility (not used in fitness)
             gp_scalar distanceFromGoal = (currentPathPoint.start - aircraftPosition).norm();
@@ -1530,7 +1512,10 @@ int main(int argc, char** argv)
             }
             angle_rad = angle_rad * static_cast<gp_scalar>(100.0f) / static_cast<gp_scalar>(M_PI);
 
-            gp_scalar crossTrackPercentForLog = crossTrackPercent;
+            // Cross-track for logging only (not used in fitness)
+            // craftOffset already computed above for waypoint distance
+            gp_vec3 lateral = craftOffset - frame.tangent * craftOffset.dot(frame.tangent);
+            gp_scalar crossTrackPercentForLog = (lateral.norm() * static_cast<gp_scalar>(100.0f)) / SIM_PATH_RADIUS_LIMIT;
             gp_scalar movement_efficiency = movementDirectionError;
 
             simulation_steps++;
@@ -1572,7 +1557,7 @@ int main(int argc, char** argv)
               gp_vec3 craftToTarget = path.at(pathIndex).start - stepAircraftState.getPosition();
               gp_vec3 target_body = stepAircraftState.getOrientation().inverse() * craftToTarget;
               gp_scalar dtheta_deg = atan2(-target_body.z(), target_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);    // GETDTHETA
-              gp_scalar dphi_deg = atan2(target_body.y(), target_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);       // GETDPHI
+              gp_scalar dphi_deg = atan2(target_body.y(), -target_body.z()) * static_cast<gp_scalar>(180.0 / M_PI);      // GETDPHI (YZ plane, matches evaluator)
 
               // Distance to home (GETDHOME)
               gp_vec3 home(0, 0, SIM_INITIAL_ALTITUDE);

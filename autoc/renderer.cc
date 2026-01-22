@@ -560,7 +560,7 @@ bool Renderer::updateGenerationDisplay(int newGen) {
   renderWindow->SetWindowName(title.c_str());
 
   // Extract fitness from GP data and update text displays
-  gp_scalar fitness = extractFitnessFromGP(evalResults.gp);
+  gp_fitness fitness = extractFitnessFromGP(evalResults.gp);
   updateTextDisplay(newGen, fitness);
 
   // Render the updated scene
@@ -1174,28 +1174,28 @@ std::vector<vec3> Renderer::stateToOrientation(std::vector<AircraftState> state)
   return points;
 }
 
-gp_scalar Renderer::extractFitnessFromGP(const std::vector<char>& gpData) {
+gp_fitness Renderer::extractFitnessFromGP(const std::vector<char>& gpData) {
   if (gpData.empty()) {
-    return 0.0f;
+    return 0.0;
   }
-  
+
   try {
     // Create stream from the char vector
     boost::iostreams::stream<boost::iostreams::array_source> inStream(gpData.data(), gpData.size());
-    
+
     // Create and load a base GP object
     GP gp;
     gp.load(inStream);
-    
-    return static_cast<gp_scalar>(gp.getFitness());
+
+    return gp.getFitness();
   }
   catch (const std::exception& e) {
     std::cerr << "Error extracting fitness from GP: " << e.what() << std::endl;
-    return 0.0f;
+    return 0.0;
   }
 }
 
-void Renderer::updateTextDisplay(int generation, gp_scalar fitness) {
+void Renderer::updateTextDisplay(int generation, gp_fitness fitness) {
   // Store current values for resize updates
   currentGeneration = generation;
   currentFitness = fitness;

@@ -10,26 +10,36 @@
 struct WorkerContext;
 
 // ========================================================================
-// SIMPLIFIED FITNESS FUNCTION
+// SIMPLIFIED FITNESS FUNCTION (v2 - raw units, no percentage scaling)
 // Goal: Smooth control to intercept and track path with minimum energy
+// All metrics in raw units (meters, J/kg) with power-law weighting
+// Step fitness normalized by time (per-second basis at 10Hz sampling)
 // ========================================================================
 
-// Primary objectives: Reach waypoints on time
-#define WAYPOINT_DISTANCE_WEIGHT 1.5f        // Distance from current target waypoint
-#define CROSS_TRACK_WEIGHT 1.2f              // Lateral deviation from path centerline
+// Time normalization: scale step fitness to per-second basis
+// At 10Hz (100ms steps), each step contributes 0.1 seconds worth of error
+#define STEP_TIME_WEIGHT (SIM_TIME_STEP_MSEC / 1000.0)  // 0.1 at 10Hz
+
+// Primary objective: Reach waypoints on time (meters)
+// Asymmetric based on position relative to rabbit's velocity vector
+// Ahead (in front of rabbit's path tangent): harsher penalty (overshooting)
+// Behind (trailing rabbit): lighter penalty (following correctly)
+#define WAYPOINT_AHEAD_POWER 1.8            // Power when ahead of rabbit (worse)
+#define WAYPOINT_BEHIND_POWER 1.2           // Power when behind rabbit (acceptable)
 
 // Secondary objective: Move efficiently along path
-#define MOVEMENT_DIRECTION_WEIGHT 1.3f       // Direction alignment with path
+#define MOVEMENT_DIRECTION_WEIGHT 1.3       // Power for direction alignment
+#define DIRECTION_SCALE 20.0                // Scale 0-2 direction error to ~meter equivalent
 
 // Tertiary objective: Match rabbit's energy state (kinetic + potential)
-// Asymmetric: being below target altitude is harder to recover than being above
-#define ENERGY_DEVIATION_WEIGHT 1.0f         // Base power for energy deviation
-#define ALTITUDE_LOW_POWER 1.5f              // Extra power when below target (harder to recover)
-#define ALTITUDE_HIGH_POWER 1.0f             // Power when above target (easy to correct)
+// Energy deviation in J/kg (= m^2/s^2), asymmetric by altitude
+// NED coords: altitude = -z, so craft_alt < rabbit_alt means craft is BELOW
+#define ALTITUDE_LOW_POWER 1.5              // Power when below target (harder to recover)
+#define ALTITUDE_HIGH_POWER 1.0             // Power when above target (easy to correct)
 
 // Crash penalty: soft lexicographic multiplier
 // Completion dominates (1e6 scale), quality provides gradient within similar completion levels
-#define CRASH_COMPLETION_WEIGHT 1e6          // Multiplier for (1 - fraction_completed)
+#define CRASH_COMPLETION_WEIGHT 1e6         // Multiplier for (1 - fraction_completed)
 
 struct WindScenarioConfig {
   unsigned int windSeed = 0;

@@ -182,7 +182,7 @@ inline int getPathIndex(PathProvider& pathProvider, AircraftState& aircraftState
 
     int steps = CLAMP_DEF((int)arg, -5, 5);
     // Clamp current index defensively
-    int currentStep = std::clamp(pathProvider.getCurrentIndex(), 0, pathProvider.getPathSize() - 1);
+    int currentStep = CLAMP_DEF(pathProvider.getCurrentIndex(), 0, pathProvider.getPathSize() - 1);
     const gp_scalar distanceSoFar = pathProvider.getPath(currentStep).distanceFromStart;
     const gp_scalar distanceGoal = distanceSoFar + steps * SIM_RABBIT_VELOCITY * (SIM_TIME_STEP_MSEC / 1000.0f);
 

@@ -93,7 +93,7 @@ public:
   void initialize();
   bool isRunning();
   bool updateGenerationDisplay(int genNumber);
-  void updateTextDisplay(int generation, gp_scalar fitness);
+  void updateTextDisplay(int generation, gp_fitness fitness);
   void jumpToNewestGeneration();
   void jumpToOldestGeneration();
   void nextTest();
@@ -118,7 +118,7 @@ public:
   
   // Store current generation and fitness for resize updates
   int currentGeneration = 0;
-  gp_scalar currentFitness = 0.0f;
+  gp_fitness currentFitness = 0.0;
   
   // Test span navigation state
   std::vector<TestSpan> testSpans;
@@ -201,7 +201,7 @@ private:
   std::vector<gp_vec3> pathToVector(const std::vector<Path> path);
   std::vector<gp_vec3> stateToVector(const std::vector<AircraftState> path);
   std::vector<gp_vec3> stateToOrientation(const std::vector<AircraftState> state);
-  gp_scalar extractFitnessFromGP(const std::vector<char>& gpData);
+  gp_fitness extractFitnessFromGP(const std::vector<char>& gpData);
   void createHighlightedFlightTapes(gp_vec3 offset);
   void createStopwatch();
   void updateStopwatch(gp_scalar currentTime);

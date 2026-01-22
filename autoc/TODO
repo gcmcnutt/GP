@@ -79,6 +79,13 @@ DEMETIC MODE ELITE PRESERVATION (broken fitness tracking)
   - Benefits: Single source of truth, easier maintenance, guaranteed consistency
   - Defer: Wait until path system stabilizes and other generators are improved
 
+* GP LIBRARY FITNESS SERIALIZATION PRECISION
+  - Renderer shows fitness as 164073.000 instead of 164073.136503
+  - Root cause: GP::save() in /home/gmcnutt/GP/src/gp.cc:148-157 uses default ostream precision
+  - Default stream precision is 6 significant digits, truncates fractional part
+  - Fix: Add `os << std::setprecision(17) << stdFitness` (17 = max_digits10 for double)
+  - Also add `#include <iomanip>` at top of gp.cc
+
 * MIGRATE AWAY FROM BOOST SERIALIZATION
   - Boost serialization is NOT portable across different Boost versions
   - Current issue: Boost 1.74 (x86) cannot read archives from Boost 1.83 (ARM64)
