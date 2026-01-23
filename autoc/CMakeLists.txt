@@ -32,8 +32,14 @@ endif()
 
 if(ENABLE_PROFILING)
     message(STATUS "Enabling profiling-friendly compiler flags for autoc")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -fno-omit-frame-pointer -fno-optimize-sibling-calls")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -fno-omit-frame-pointer -fno-optimize-sibling-calls")
+    # -O2: Optimize but keep code structure recognizable (avoid -O3 which over-inlines)
+    # -g: Debug symbols for perf to resolve symbols
+    # -fno-omit-frame-pointer: Essential for perf call graph
+    # -fno-optimize-sibling-calls: Preserve tail call frames in stack traces
+    # Note: -O2 gives representative percentages vs PERFORMANCE_BUILD's -O3
+    #       (difference is typically <5% in time distribution)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O2 -g -fno-omit-frame-pointer -fno-optimize-sibling-calls")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O2 -g -fno-omit-frame-pointer -fno-optimize-sibling-calls")
 endif()
 
 if(PERFORMANCE_BUILD)
