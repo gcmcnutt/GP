@@ -65,7 +65,6 @@ DEMETIC MODE ELITE PRESERVATION (broken fitness tracking)
 - also seems crrcsim is dependent on a valid DISPLAY even when in headless
 - need to refactor the opcode enum to only have one -- and then to stop using numeric opcodes in the bytecode2cpp generator
 - checkpoint/resume a run -- including for LLM enhancement over time, etc
-- autoc is leaking memory on each generation -- investigate where as this'll impact large runs
 - check for dangling or vestiage source files
 
 * MAKE PATHGEN.H PORTABLE FOR EMBEDDED
@@ -98,3 +97,9 @@ DEMETIC MODE ELITE PRESERVATION (broken fitness tracking)
     * Custom text format (simplest, most control)
   - Migration required for: EvalData, EvalResults, Path, AircraftState, ScenarioMetadata
   - Benefits: version independence, better portability, potentially smaller/faster
+
+* We are going to need a SAFETY cross check which is a second inference that examines the current state to see if we are too close to crash or out of bounds.
+  - for each sample, also input craft state to an OOB estimator
+  - if the system determines it is too close, there is a phase shift where corrective action takes over to reset orientation toward origin
+  - then this state can toggle back to intercept and track
+  - random examples show the system can find paths which will trigger a crash so we need the safety eval along with capture/track

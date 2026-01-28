@@ -570,34 +570,36 @@ perf script -i profile.data | stackcollapse-perf.pl | flamegraph.pl > flame.svg
 
 ## Recommended Next Steps (UPDATED Jan 2026)
 
-**Profiling complete.** Priorities revised based on actual measurements.
+**Profiling complete. Phase 0 and Phase 1 complete.** Priorities revised based on actual measurements.
 
-1. **Immediate: Disable Gear for Gliders** (1-2 days)
-   - Add config knob to crrcsim
-   - **+14% performance with minimal risk**
-   - See Implementation Proposal Phase 0
+1. ~~**Immediate: Disable Gear for Gliders**~~ **DONE** (Jan 2026)
+   - Added `<wheels enabled="0">` to aircraft XML
+   - **+14% achieved**
 
-2. **Week 1: SIMD Matrix33** (high impact, medium effort)
-   - Vectorize hot Matrix33 operations
-   - **+8-10% performance**
-   - See Implementation Proposal Phase 1
+2. ~~**Immediate: Arena Thermal System**~~ **DONE** (Jan 2026)
+   - Replaced global 12.8km thermal grid with bounded arena system
+   - **+13% achieved** (20x more efficient thermal simulation)
 
-3. **Week 2-3: Wind Model Optimization**
-   - Dryden turbulence caching
-   - Thermal model simplification
-   - **+10-15% performance**
+3. ~~**Next: SIMD Matrix33**~~ **DONE** (Jan 2026)
+   - Migrated Matrix33/Vector3 to Eigen library for SIMD vectorization
+   - **+15.4% achieved** (exceeded 8-10% estimate)
+   - SSE2 vectorization confirmed via perf profile
+
+4. **Next: Wind Model Optimization**
+   - Dryden turbulence caching (still ~25% of runtime post-Eigen)
+   - **+10-15% performance expected**
    - See Implementation Proposal Phase 2
 
-4. **Week 4-5: Platform Plugin Architecture**
+5. **Later: Platform Plugin Architecture**
    - Abstraction for future GPU backend
-   - No performance change, but enables Phase 5+
+   - No performance change, but enables GPU port
 
-5. **Month 2+: GPU Prototype**
+6. **Future: GPU Prototype**
    - Port wind model to CUDA (primary target, not aero)
    - GP interpreter on GPU
    - Target: 10,000+ sims/sec
 
-5. **Month 4+: Optimization**
+7. **Future: GPU Optimization**
    - Memory layout optimization (SOA)
    - Multi-GPU support
    - Target: 50,000-100,000 sims/sec
@@ -608,105 +610,289 @@ perf script -i profile.data | stackcollapse-perf.pl | flamegraph.pl > flame.svg
 
 Based on profiling results, here is a phased approach where each step produces a working, testable system.
 
-### Phase 0: Quick Win - Disable Gear Physics (1-2 days)
+### Phase 0: Quick Wins - Gear Disable + Arena Thermals (COMPLETED Jan 2026)
 
-**Goal:** +14% performance by disabling unnecessary wheel physics for aircraft without landing gear.
+**Goal:** Eliminate unnecessary physics calculations for GP training scenarios.
 
-**Changes:**
-1. Add config option `gear.enabled` to crrcsim aircraft XML (default: true)
-2. Add runtime flag in `CRRC_AirplaneSim_Larcsim` to skip `gear()` call
-3. Set `gear.enabled=false` for glider/flying wing models
+#### Phase 0a: Disable Gear Physics (COMPLETED)
 
-**Files:**
-- `crrcsim/src/mod_fdm/fdm_larcsim.cpp` - Add conditional around gear() call
-- `crrcsim/src/mod_fdm/fdm_larcsim.h` - Add `bool gearEnabled_` member
-- Aircraft XML files - Add `<gear enabled="false"/>`
+**Result:** Gear physics disabled for gliders via `<wheels enabled="0">` in aircraft XML.
 
-**Verification:**
-- Run same GP with gear enabled/disabled
-- Verify fitness unchanged (aircraft shouldn't be touching ground during flight)
-- Measure performance improvement (~14% expected)
+**Impact:** 13.7% → 0% (gear no longer appears in profile)
+
+#### Phase 0b: Arena-Bounded Thermal System (COMPLETED)
+
+**Problem:** Global thermal grid simulated ~393 thermals across 12.8km grid, but training arena is only ±75m.
+The old system spent 7% + 6.5% = 13.5% of runtime on `update_thermals()` and `Thermal::update()`
+processing thermals that had zero effect on aircraft in the training arena.
+
+**Solution:** New `arena_thermal` module that:
+- Spawns 0-5 thermals within bounded arena (±150m spawn, ±75m active)
+- Uses simplified bell-curve profile (vs complex v3 shell model)
+- Fixed array of max 8 thermals (no linked list traversal)
+- Bypasses global thermal grid entirely when enabled
+
+**Files created:**
+- `crrcsim/src/mod_windfield/arena_thermal.h` - Header with `ArenaThermalConfig`, `ArenaThermal`, `ArenaThermalField`
+- `crrcsim/src/mod_windfield/arena_thermal.cpp` - Implementation
+- Modified `windfield.cpp` to integrate arena thermals
+
+**Config (in autoc_config.xml location section):**
+```xml
+<arena_thermals enabled="1">
+  <bounds x_min="-150" x_max="150" y_min="-150" y_max="150" />
+  <count_min>0</count_min>
+  <count_max>5</count_max>
+  <strength_mean>2.0</strength_mean>
+  <strength_sigma>0.5</strength_sigma>
+  <radius_mean>20</radius_mean>
+  <radius_sigma>5</radius_sigma>
+  <lifetime_mean>180</lifetime_mean>
+  <lifetime_sigma>60</lifetime_sigma>
+  <height_m>300</height_m>
+</arena_thermals>
+```
+
+**Performance comparison (perf.out vs perf2.out):**
+
+| Component | Before | After | Change |
+|-----------|--------|-------|--------|
+| `gear()` / `WheelSystem::update()` | 13.66% | 0% | **-13.66%** |
+| `update_thermals()` | 7.02% | 0% | **-7.02%** |
+| `Thermal::update()` | 6.56% | 0% | **-6.56%** |
+| `calculate_wind()` | ~5.7% | 2.83% | **-2.9%** |
+| `ArenaThermalField::calculateThermalWind()` | N/A | 0.65% | +0.65% |
+| **Total reduction** | | | **~30%** |
+
+**Arena thermal efficiency:** 0.65% vs 13.6% for global grid = **20x improvement**
 
 ---
 
-### Phase 1: SIMD Matrix33 Operations (1 week)
+### Phase 1: Eigen Integration for Matrix/Vector SIMD (1 week)
 
-**Goal:** Vectorize the hot Matrix33 operations that dominate wind calculations (~8-10%).
+**Goal:** Replace hand-rolled `Matrix33`/`Vector3` with Eigen for automatic SIMD vectorization.
 
-**Approach:** Platform-specific SIMD backend with compile-time selection.
+**Why Eigen:**
+- Already a dependency in autoc (`gp_types.h`) and xiao-gp (`ArduinoEigen`)
+- Header-only, zero runtime overhead
+- Auto-detects SSE/AVX (x86) and NEON (ARM) at compile time
+- Expression templates eliminate temporaries and fuse operations
+- Battle-tested, well-maintained library
 
-**Files to create:**
-```
-crrcsim/src/include/
-  crrc_math_simd.h       # Unified interface
-  crrc_math_scalar.h     # Fallback (current implementation)
-  crrc_math_sse.h        # x86-64 SSE4.1/AVX
-  crrc_math_neon.h       # ARM64 NEON (future)
-```
+**Current state:**
+- crrcsim uses custom `CRRCMath::Matrix33` and `CRRCMath::Vector3` (circa 2005)
+- Simple scalar loops, no SIMD
+- `Matrix33::operator*` is 11.75% of runtime (in `calculate_gust`)
+- Additional 3% in `aero()` for total ~15%
 
-**Key operations to vectorize:**
-1. `Matrix33::operator*(Matrix33)` - 8% of total time
-2. `Matrix33::operator*(Vector3)` - 2% of total time
-3. `Matrix33::multrans()` - 3% of total time
+**Approach: Option 1 - Wrapper with Eigen backend**
 
-**Implementation:**
+Keep existing API stable, replace internal storage with Eigen:
+
 ```cpp
-// crrc_math_simd.h - unified interface
-#if defined(__AVX__)
-  #include "crrc_math_avx.h"
-#elif defined(__SSE4_1__)
-  #include "crrc_math_sse.h"
-#elif defined(__ARM_NEON)
-  #include "crrc_math_neon.h"
-#else
-  #include "crrc_math_scalar.h"
-#endif
+// matrix33.h - before
+class Matrix33 {
+  double v[3][3];  // Row-major storage
+public:
+  Matrix33 operator*(const Matrix33& b) const;  // Scalar loops
+  // ...
+};
 
-// crrc_math_sse.h - example
-inline Matrix33 Matrix33::operator*(const Matrix33& rhs) const {
-    // Use _mm_* intrinsics for 4-wide SIMD
-    // Pack 3 rows into 4-element vectors (pad with 0)
-    __m128 row0 = _mm_loadu_ps(&m[0][0]);  // loads m[0][0..2] + garbage
-    // ... vectorized multiply-add ...
-}
+// matrix33.h - after
+#include <Eigen/Dense>
+
+class Matrix33 {
+  // Row-major to match existing v[row][col] access pattern
+  Eigen::Matrix<double, 3, 3, Eigen::RowMajor> m_;
+public:
+  // Compatibility accessor for direct v[i][j] access (~100 call sites)
+  double& operator()(int row, int col) { return m_(row, col); }
+  double operator()(int row, int col) const { return m_(row, col); }
+
+  // Hot path - now SIMD vectorized
+  Matrix33 operator*(const Matrix33& b) const {
+    Matrix33 result;
+    result.m_ = m_ * b.m_;
+    return result;
+  }
+
+  Vector3 operator*(const Vector3& b) const;  // Similar treatment
+  // ...
+};
 ```
 
-**Verification:**
-- Unit tests comparing scalar vs SIMD results (bit-exact or within epsilon)
-- Benchmark Matrix33 operations before/after
-- Full simulation regression test
+**Migration steps:**
 
-**Expected improvement:** 8-10% overall (Matrix33 ops are ~10% of runtime)
+1. **Add Eigen dependency to crrcsim CMakeLists.txt**
+   ```cmake
+   find_package(Eigen3 3.3 REQUIRED NO_MODULE)
+   target_link_libraries(crrcsim Eigen3::Eigen)
+   ```
+
+2. **Update Vector3 class** (`src/mod_math/vector3.h`)
+   - Replace `double r[3]` with `Eigen::Vector3d`
+   - Keep `r[i]` accessor for ~509 call sites (via `operator[]` or inline accessor)
+
+3. **Update Matrix33 class** (`src/mod_math/matrix33.h`, `matrix33.cpp`)
+   - Replace `double v[3][3]` with `Eigen::Matrix<double, 3, 3, Eigen::RowMajor>`
+   - Update ~100 direct `v[i][j]` accesses to `operator()(i,j)`
+   - Delete scalar loop implementations (Eigen inlines everything)
+
+4. **Handle Quaternion** (`src/mod_math/quaternion.cpp`)
+   - ~44 lines access `mat.v[i][j]` for quat↔matrix conversion
+   - Update to `mat(i,j)` syntax
+
+5. **Update other files with direct access**
+   - `windfield.cpp` - gradient calculations (~15 sites)
+   - `fdm_larcsim.cpp` - atmospheric rotation (~3 sites)
+   - `fdm_002.cpp` - similar (~12 sites)
+   - `eom01.cpp` - LocalToBody matrix (~20 sites)
+
+**Key files to modify:**
+```
+crrcsim/CMakeLists.txt                    # Add Eigen dependency
+crrcsim/src/mod_math/vector3.h            # Eigen::Vector3d backend
+crrcsim/src/mod_math/matrix33.h           # Eigen::Matrix3d backend
+crrcsim/src/mod_math/matrix33.cpp         # Delete (all inlined)
+crrcsim/src/mod_math/quaternion.cpp       # v[i][j] → (i,j) syntax
+crrcsim/src/mod_fdm/eom01/eom01.cpp       # v[i][j] → (i,j) syntax
+crrcsim/src/mod_windfield/windfield.cpp   # v[i][j] → (i,j) syntax
+crrcsim/src/mod_fdm/fdm_002/fdm_002.cpp   # v[i][j] → (i,j) syntax
+crrcsim/src/mod_fdm/fdm_larcsim/fdm_larcsim.cpp  # v[i][j] → (i,j)
+```
+
+**Storage layout consideration:**
+- Eigen default is column-major, crrcsim uses row-major `v[row][col]`
+- Use `Eigen::RowMajor` template parameter to match existing semantics
+- Eigen still vectorizes row-major matrices
+
+**Verification:**
+1. **Unit tests** - Compare old vs new Matrix33/Vector3 operations (bit-exact)
+2. **Simulation regression** - Run GP training, verify fitness convergence unchanged
+3. **Perf profile** - Measure reduction in `calculate_gust` and `aero` overhead
+
+**Expected improvement:** 8-10% overall (Matrix33 ops currently ~15% of runtime)
 
 ---
 
-### Phase 2: Wind Model Optimization (1-2 weeks)
+#### Phase 1 Results: COMPLETED (Jan 2026)
 
-**Goal:** Reduce wind/turbulence overhead from 27.5% to ~15%.
+**Approach taken:** Full Eigen migration (Option 2 - typedef to Eigen types)
+
+```cpp
+// vector3.h
+using Vector3 = Eigen::Vector3d;
+
+// matrix33.h
+using Matrix33 = Eigen::Matrix<double, 3, 3, Eigen::RowMajor>;
+```
+
+**Benchmark methodology:**
+- Controlled A/B test with identical seeds (GPSeed=42, WindSeedBase=12121, RandomPathSeedB=13337)
+- PERFORMANCE_BUILD flags (`-O3 -march=native -flto -ffast-math`)
+- 21 generations, 1000 population, 9 wind scenarios = 189,180 total simulations
+- Intel 4-core CPU with hyperthreading
+
+**Results:**
+
+| Configuration | Threads | Total Time | Sims/sec | vs Baseline |
+|---------------|---------|------------|----------|-------------|
+| Without Eigen | 8 | 788.3 sec | 240 | baseline |
+| With Eigen | 8 | 683.2 sec | 277 | **+15.4%** |
+| With Eigen | 4 | 805.7 sec | 235 | -2% vs baseline |
+
+**Key findings:**
+1. **Eigen SIMD delivers +15.4% speedup** - exceeds the 8-10% estimate
+2. **Thread scaling:** 8 threads (2× cores) still optimal; hyperthreading provides ~18% boost over 4 threads
+3. **Numerical equivalence:** Fitness values identical to 6+ decimal places (minor FP differences in later digits)
+4. **Rule of thumb:** Use `threads = cores × 2` on SMT systems, `threads = cores` otherwise
+
+**SIMD evidence from perf profile:**
+- `double __vector(2)` operations visible (SSE2 packed doubles)
+- Eigen internal ops: `pmul`, `predux`, matrix products
+- Function signatures show `Eigen::Matrix<double, 3, 3, 1, 3, 3>` (RowMajor)
+
+**Files modified:**
+- `src/mod_math/vector3.h` - typedef to `Eigen::Vector3d`
+- `src/mod_math/matrix33.h` - typedef to `Eigen::Matrix<double,3,3,RowMajor>` + helper functions
+- `src/mod_math/CMakeLists.txt` - removed vector3.cpp/matrix33.cpp, added Eigen dependency
+- ~200 call sites updated from `.r[i]`/`.v[i][j]` to `(i)`/`(i,j)` accessor syntax
+
+---
+
+#### Future mod_math Eigen Cleanup (Low Priority)
+
+Analysis of remaining mod_math files for potential Eigen migration:
+
+| File | Eigen Replacement | Effort | Benefit | Recommendation |
+|------|------------------|--------|---------|----------------|
+| **matrix44.h** | `Eigen::Matrix4d` | Low | Medium (not in hot path) | Could migrate |
+| **quaternion.h/cpp** | Partial - `Eigen::Quaterniond` for storage | Medium | Low | Keep custom integration logic |
+| **intgr.h** | None (ODE integration, not linear algebra) | N/A | N/A | Keep as-is |
+| **pt1.h** | None (signal processing filter) | N/A | N/A | Keep as-is |
+| **linearreg.h** | None (statistics) | N/A | N/A | Keep as-is |
+| **ratelim.h** | None (value clamping) | N/A | N/A | Keep as-is |
+
+**Notes on quaternion.h:**
+- Eigen has `Eigen::Quaterniond` with `toRotationMatrix()`, normalization, slerp
+- However, crrcsim's Quaternion classes include custom integration state (`IntegrationsverfahrenB<double> e0,e1,e2,e3`)
+- Multiple implementations (Quaternion_001, _002, _003) with different integration schemes
+- Would require keeping the integration wrapper around Eigen's quaternion storage
+
+**Verdict:** Matrix44 is the cleanest candidate for future cleanup. Quaternion partial migration possible but not high value. Other files are not linear algebra and should stay as-is.
+
+---
+
+**Future Option 2:** ~~Full Eigen migration (remove wrapper classes entirely)~~ **DONE**
+- `using Matrix33 = Eigen::Matrix3d;`
+- `using Vector3 = Eigen::Vector3d;`
+- ~~More invasive, but cleaner long-term~~
+- ~~Can migrate incrementally after Option 1 is validated~~
+
+---
+
+### Phase 2: Dryden Turbulence Optimization (1-2 weeks)
+
+**Goal:** Reduce Dryden turbulence overhead (currently ~25% of runtime after Phase 0/1).
+
+**Current profile (perf2.out):**
+- `calculate_gust()`: 25.74% total
+  - `Matrix33::operator*`: 11.75% → addressed by Phase 1 Eigen
+  - `RandGauss`: 5.36% → RNG calls per timestep
+  - `pow`: 2.25% → power calculations
+
+**Note:** Thermal optimization is DONE (Phase 0b achieved 20x improvement via arena thermals).
 
 **Sub-phases:**
 
-#### 2a: Dryden Turbulence Caching
-- Pre-compute turbulence tables at simulation start
-- Interpolate during timesteps instead of full Dryden calculation
+#### 2a: Dryden State Caching
+The Dryden model computes turbulence as a filtered noise process. Some state can be cached:
+- Filter coefficients depend only on airspeed and altitude bands
+- Pre-compute coefficient tables for discrete altitude/airspeed bins
+- Interpolate coefficients instead of recomputing
+
+#### 2b: RNG Optimization
+`RandGauss` at 5.36% is significant:
+- Consider faster Gaussian approximation (Ziggurat method)
+- Or pre-generate Gaussian sequences per scenario (determinism benefit too)
 - Trade memory for compute
 
-#### 2b: Thermal Model Simplification
-- `Thermal::update()` at 7% - profile for specific hotspots
-- Consider reduced-fidelity mode for GP training (full fidelity for elite re-eval)
-
-#### 2c: Wind Gradient Batching
-- `CalculateWindGrad()` computes gradient via finite differences
-- Cache gradient when aircraft position hasn't moved significantly
+#### 2c: Power Function Optimization
+`pow()` at 2.25%:
+- Identify which powers are constant (e.g., `pow(x, 0.5)` → `sqrt(x)`)
+- Use fast approximations for non-critical paths
+- Consider lookup tables for common exponents
 
 **Files:**
-- `crrcsim/src/mod_windfield/windfield.cpp`
-- `crrcsim/src/mod_windfield/thermalmodel.cpp`
+- `crrcsim/src/mod_windfield/windfield.cpp` - Dryden implementation
+- `crrcsim/src/mod_misc/crrc_rand.cpp` - RNG functions
 
 **Verification:**
 - Compare wind vectors before/after optimization (should be identical or within tolerance)
 - Verify GP training still produces good controllers
 - Measure performance improvement
+
+**Expected improvement:** 10-15% overall (targeting 25% → ~15% for Dryden)
 
 ---
 
@@ -787,10 +973,11 @@ crrcsim/src/mod_fdm/
 
 | Phase | Test | Pass Criteria |
 |-------|------|---------------|
-| 0 | Same GP, gear on vs off | Fitness identical (within 0.1%) |
-| 1 | Matrix33 unit tests | Bit-exact or <1e-6 epsilon |
-| 1 | Full simulation | Fitness identical |
-| 2 | Wind vector comparison | <1% difference |
+| 0a | Same GP, gear on vs off | Fitness identical (within 0.1%) |
+| 0b | Arena thermals vs global grid | Wind vectors equivalent, 20x faster |
+| 1 | Eigen vs old Matrix33/Vector3 | Bit-exact or <1e-10 epsilon |
+| 1 | Full simulation | Fitness identical to pre-Eigen |
+| 2 | Dryden output comparison | <1% difference |
 | 2 | GP training | Converges to similar fitness |
 | 3 | Backend A/B test | All backends produce same results |
 | 4 | SOA vs AOS comparison | Bit-exact fitness |
@@ -799,16 +986,19 @@ crrcsim/src/mod_fdm/
 
 ### Timeline Summary
 
-| Phase | Duration | Expected Speedup | Cumulative |
-|-------|----------|------------------|------------|
-| 0: Disable gear | 1-2 days | +14% | 1.14x |
-| 1: SIMD Matrix33 | 1 week | +8-10% | 1.25x |
-| 2: Wind optimization | 1-2 weeks | +10-15% | 1.40x |
-| 3: Plugin architecture | 2 weeks | - (prep) | 1.40x |
-| 4: GPU preparation | 1 month | - (prep) | 1.40x |
-| 5: GPU port (future) | 2+ months | 10-50x | 15-70x |
+| Phase | Duration | Expected Speedup | Actual Speedup | Cumulative | Status |
+|-------|----------|------------------|----------------|------------|--------|
+| 0a: Disable gear | 1-2 days | +14% | +14% | 1.14x | **DONE** |
+| 0b: Arena thermals | 2-3 days | +13% | +13% | 1.30x | **DONE** |
+| 1: Eigen integration | 1 week | +8-10% | **+15.4%** | 1.50x | **DONE** |
+| 2: Dryden optimization | 1-2 weeks | +10-15% | - | ~1.65x | Pending |
+| 3: Plugin architecture | 2 weeks | - (prep) | - | ~1.65x | Pending |
+| 4: GPU preparation | 1 month | - (prep) | - | ~1.65x | Pending |
+| 5: GPU port (future) | 2+ months | 10-50x | - | 15-75x | Future |
 
-**Conservative target after Phase 2:** 1200 × 1.4 = **1680 sims/sec**
+**Achieved after Phase 0:** ~30% reduction in crrcsim execution time
+**Achieved after Phase 1:** ~50% total improvement (Eigen exceeded expectations)
+**Conservative target after Phase 2:** 1200 × 1.65 = **~2000 sims/sec**
 **Target after GPU port:** 10,000-60,000 sims/sec
 
 ---
