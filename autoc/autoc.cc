@@ -1195,9 +1195,22 @@ int main(int argc, char** argv)
   *logger.info() << "GPSeed: " << ConfigManager::getExtraConfig().gpSeed << endl;
   *logger.info() << "RandomPathSeedB: " << ConfigManager::getExtraConfig().randomPathSeedB << endl << endl;
 
+  // Set training node mask before creating node set
+  setTrainingNodesMask(ConfigManager::getExtraConfig().trainingNodes);
+
   // Create the adf function/terminal set and print it out.
   createNodeSet(adfNs);
   *logger.info() << adfNs << endl;
+
+  // Log training nodes (the subset used for tree creation/mutation)
+  extern std::vector<std::string> trainingNodeNames;
+  std::ostringstream nodeListStr;
+  nodeListStr << "TrainingNodes (" << trainingNodeNames.size() << "): ";
+  for (size_t i = 0; i < trainingNodeNames.size(); i++) {
+    if (i > 0) nodeListStr << ",";
+    nodeListStr << trainingNodeNames[i];
+  }
+  *logger.info() << nodeListStr.str() << endl;
 
   // Open the main output file for the data and statistics file.
   // First set up names for data file.  Remember we should delete the

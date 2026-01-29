@@ -103,3 +103,53 @@ DEMETIC MODE ELITE PRESERVATION (broken fitness tracking)
   - if the system determines it is too close, there is a phase shift where corrective action takes over to reset orientation toward origin
   - then this state can toggle back to intercept and track
   - random examples show the system can find paths which will trigger a crash so we need the safety eval along with capture/track
+
+* TEMPORAL STATE FOR GP NODES
+  The GP tree is stateless - re-evaluated fresh each tick with no memory of prior evaluations.
+  This limits ability to do true integral control or trajectory prediction.
+
+  What we have:
+  - Current aircraft state (position, attitude, velocity)
+  - Future path points (via GETDPHI/GETDTHETA/GETDTARGET with positive lookahead)
+
+  What we're missing for integration:
+  - Past aircraft states (where was I 1, 2, 3 steps ago?)
+  - Past errors (what was GETDPHI(n) on previous evaluations?)
+
+  Options to enable true integration:
+
+  1. State registers - Add nodes like STORE(n, val) and RECALL(n) that persist across
+     evaluations. Complex, makes programs harder to analyze.
+
+  2. Error history terminals - GETDPHI_PREV(n) returns GETDPHI from n evaluations ago.
+     Requires ring buffer in AircraftState. Simpler than general registers.
+
+  3. Position history - GETPOS_PREV(n) for past aircraft positions. Could compute
+     velocity changes, acceleration.
+
+  4. Derivative approximation - GETDPHI_RATE = (current GETDPHI - previous GETDPHI) / dt.
+     Gives the D in PID directly.
+
+  Trade-off: Stateless design means programs are pure functions - same inputs always
+  give same outputs, easier to verify and port. Adding state complicates this.
+
+  Related: Lookbehind with negative values (GETDPHI(-n)) looks at path points behind
+  the rabbit, not at past aircraft errors. Could be useful for detecting overshoot.
+
+* ERROR CONE FOR FUTURE PATH POINTS
+  The further ahead we look from rabbit's current position, the less accurate the
+  target point becomes (wind, path changes, aircraft response time).
+
+  Options:
+  1. Weight by distance - MUL(GETDPHI(n), DIV(1, n)) - discount far lookahead.
+     GP could discover this pattern naturally.
+
+  2. New operator GETDPHI_WEIGHTED(n) - internally scales by 1/n or similar.
+     But this bakes in assumptions about decay function.
+
+  3. Keep it simple - For a pure tracking layer, the uncertainty in far lookahead
+     may actually help by forcing GP to rely more on near-term corrections.
+     Error cone matters more for prediction/planning (higher-level controller).
+
+  Current evolved programs already show adaptive lookahead via nested GETDPHI,
+  which may be an emergent solution to this problem.

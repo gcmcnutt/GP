@@ -70,6 +70,7 @@ public:
   int windSeedStride = 1;
   int randomPathSeedB = 67890;  // Seed for SeededRandomB path generation (-1 = use time-based seed)
   int gpSeed = -1;  // Seed for GP initialization (-1 = use time-based seed)
+  char* trainingNodes = "";  // Comma-separated list of node names for training (empty = all nodes)
 
   // // Custom implementation of the << operator for the extraCfg type
   // std::ostream& operator << (std::ostream& os) {
@@ -102,6 +103,7 @@ class MyGP;
 
 extern GPAdfNodeSet adfNs;
 extern void createNodeSet(GPAdfNodeSet& adfNs);
+extern void setTrainingNodesMask(const char* mask);  // Call before createNodeSet() to filter nodes
 extern AircraftState aircraftState;
 extern void initializeSimGP();
 

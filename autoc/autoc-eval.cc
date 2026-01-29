@@ -3,6 +3,9 @@
 
 #include <vector>
 #include <math.h>
+#include <set>
+#include <string>
+#include <sstream>
 
 #include "gp.h"
 #include "minisim.h"
@@ -10,6 +13,17 @@
 #include "gp_evaluator_portable.h"
 
 GPAdfNodeSet adfNs;
+
+// Track which nodes are enabled for training (for logging purposes)
+std::vector<std::string> trainingNodeNames;
+
+// Training node mask - set by autoc.cc before calling createNodeSet()
+// Empty string means use all nodes (default for minisim, crrcsim, xiao-gp)
+static const char* gTrainingNodesMask = "";
+
+void setTrainingNodesMask(const char* mask) {
+  gTrainingNodesMask = mask ? mask : "";
+}
 
 // TODO really get rid of this global!
 AircraftState aircraftState;
@@ -45,59 +59,112 @@ void initializeSimGP() {
   GPRegisterClass(new MyGP());
 }
 
+// Parse comma-separated node names into a set
+static std::set<std::string> parseTrainingMask(const char* nodeList) {
+  std::set<std::string> mask;
+  if (!nodeList || nodeList[0] == '\0') {
+    return mask;  // Empty = no filtering (all nodes enabled)
+  }
+  std::istringstream ss(nodeList);
+  std::string node;
+  while (std::getline(ss, node, ',')) {
+    // Trim whitespace
+    size_t start = node.find_first_not_of(" \t");
+    size_t end = node.find_last_not_of(" \t");
+    if (start != std::string::npos && end != std::string::npos) {
+      mask.insert(node.substr(start, end - start + 1));
+    }
+  }
+  return mask;
+}
+
+// Node definition table for consistent iteration
+struct NodeDef {
+  int opcode;
+  const char* name;
+  int args;  // 0 = terminal
+};
+
+static const NodeDef allNodes[] = {
+  {ADD, "ADD", 2},
+  {SUB, "SUB", 2},
+  {MUL, "MUL", 2},
+  {DIV, "DIV", 2},
+  {IF, "IF", 3},
+  {EQ, "EQ", 2},
+  {GT, "GT", 2},
+  {SETPITCH, "SETPITCH", 1},
+  {SETROLL, "SETROLL", 1},
+  {SETTHROTTLE, "SETTHROTTLE", 1},
+  {GETPITCH, "GETPITCH", 0},
+  {GETROLL, "GETROLL", 0},
+  {GETTHROTTLE, "GETTHROTTLE", 0},
+  {SIN, "SIN", 1},
+  {COS, "COS", 1},
+  {OP_PI, "OP_PI", 0},
+  {ZERO, "0", 0},
+  {ONE, "1", 0},
+  {TWO, "2", 0},
+  {PROGN, "PROGN", 2},
+  {GETDPHI, "GETDPHI", 1},
+  {GETDTHETA, "GETDTHETA", 1},
+  {GETDTARGET, "GETDTARGET", 1},
+  {GETVEL, "GETVEL", 0},
+  {GETDHOME, "GETDHOME", 0},
+  {GETALPHA, "GETALPHA", 0},
+  {GETBETA, "GETBETA", 0},
+  {GETVELX, "GETVELX", 0},
+  {GETVELY, "GETVELY", 0},
+  {GETVELZ, "GETVELZ", 0},
+  {GETROLL_RAD, "GETROLL_RAD", 0},
+  {GETPITCH_RAD, "GETPITCH_RAD", 0},
+  {CLAMP, "CLAMP", 3},
+  {ATAN2, "ATAN2", 2},
+  {ABS, "ABS", 1},
+  {SQRT, "SQRT", 1},
+  {MIN, "MIN", 2},
+  {MAX, "MAX", 2},
+};
+static const int allNodesCount = sizeof(allNodes) / sizeof(allNodes[0]);
+
 // Create function and terminal set
 void createNodeSet(GPAdfNodeSet& adfNs)
 {
+  // Get training mask (set by setTrainingNodesMask() before this call)
+  std::set<std::string> mask = parseTrainingMask(gTrainingNodesMask);
+  bool filterEnabled = !mask.empty();
+
+  // Clear the training node names list
+  trainingNodeNames.clear();
+
+  // First pass: count how many nodes will be added
+  int nodeCount = 0;
+  for (int i = 0; i < allNodesCount; i++) {
+    if (!filterEnabled || mask.count(allNodes[i].name) > 0) {
+      nodeCount++;
+    }
+  }
+
   // Reserve space for the node sets
   adfNs.reserveSpace(1);
 
-  // Now define the function and terminal set for each ADF and place
-  // function/terminal sets into overall ADF container
-  GPNodeSet& ns = *new GPNodeSet(OPERATORS_NR_ITEM);
+  // Create GPNodeSet with exact size needed
+  GPNodeSet& ns = *new GPNodeSet(nodeCount);
 
   adfNs.put(0, ns);
 
-  // Define functions/terminals and place them into the appropriate
-  // sets.  Terminals take two arguments, functions three (the third
-  // parameter is the number of arguments the function has)
-  ns.putNode(*new GPNode(ADD, "ADD", 2));
-  ns.putNode(*new GPNode(SUB, "SUB", 2));
-  ns.putNode(*new GPNode(MUL, "MUL", 2));
-  ns.putNode(*new GPNode(DIV, "DIV", 2));
-  ns.putNode(*new GPNode(IF, "IF", 3));
-  ns.putNode(*new GPNode(EQ, "EQ", 2));
-  ns.putNode(*new GPNode(GT, "GT", 2));
-  ns.putNode(*new GPNode(SETPITCH, "SETPITCH", 1));
-  ns.putNode(*new GPNode(SETROLL, "SETROLL", 1));
-  ns.putNode(*new GPNode(SETTHROTTLE, "SETTHROTTLE", 1));
-  ns.putNode(*new GPNode(GETPITCH, "GETPITCH"));
-  ns.putNode(*new GPNode(GETROLL, "GETROLL"));
-  ns.putNode(*new GPNode(GETTHROTTLE, "GETTHROTTLE"));
-  ns.putNode(*new GPNode(SIN, "SIN", 1));
-  ns.putNode(*new GPNode(COS, "COS", 1));
-  ns.putNode(*new GPNode(OP_PI, "OP_PI"));
-  ns.putNode(*new GPNode(ZERO, "0"));
-  ns.putNode(*new GPNode(ONE, "1"));
-  ns.putNode(*new GPNode(TWO, "2"));
-  ns.putNode(*new GPNode(PROGN, "PROGN", 2));
-  ns.putNode(*new GPNode(GETDPHI, "GETDPHI", 1));
-  ns.putNode(*new GPNode(GETDTHETA, "GETDTHETA", 1));
-  ns.putNode(*new GPNode(GETDTARGET, "GETDTARGET", 1));
-  ns.putNode(*new GPNode(GETVEL, "GETVEL"));
-  ns.putNode(*new GPNode(GETDHOME, "GETDHOME"));
-  ns.putNode(*new GPNode(GETALPHA, "GETALPHA"));
-  ns.putNode(*new GPNode(GETBETA, "GETBETA"));
-  ns.putNode(*new GPNode(GETVELX, "GETVELX"));
-  ns.putNode(*new GPNode(GETVELY, "GETVELY"));
-  ns.putNode(*new GPNode(GETVELZ, "GETVELZ"));
-  ns.putNode(*new GPNode(GETROLL_RAD, "GETROLL_RAD"));
-  ns.putNode(*new GPNode(GETPITCH_RAD, "GETPITCH_RAD"));
-  ns.putNode(*new GPNode(CLAMP, "CLAMP", 3));
-  ns.putNode(*new GPNode(ATAN2, "ATAN2", 2));
-  ns.putNode(*new GPNode(ABS, "ABS", 1));
-  ns.putNode(*new GPNode(SQRT, "SQRT", 1));
-  ns.putNode(*new GPNode(MIN, "MIN", 2));
-  ns.putNode(*new GPNode(MAX, "MAX", 2));
+  // Second pass: add the nodes
+  for (int i = 0; i < allNodesCount; i++) {
+    const NodeDef& def = allNodes[i];
+    if (!filterEnabled || mask.count(def.name) > 0) {
+      if (def.args > 0) {
+        ns.putNode(*new GPNode(def.opcode, const_cast<char*>(def.name), def.args));
+      } else {
+        ns.putNode(*new GPNode(def.opcode, const_cast<char*>(def.name)));
+      }
+      trainingNodeNames.push_back(def.name);
+    }
+  }
 }
 
 
