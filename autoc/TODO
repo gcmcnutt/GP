@@ -98,11 +98,31 @@ DEMETIC MODE ELITE PRESERVATION (broken fitness tracking)
   - Migration required for: EvalData, EvalResults, Path, AircraftState, ScenarioMetadata
   - Benefits: version independence, better portability, potentially smaller/faster
 
-* We are going to need a SAFETY cross check which is a second inference that examines the current state to see if we are too close to crash or out of bounds.
-  - for each sample, also input craft state to an OOB estimator
-  - if the system determines it is too close, there is a phase shift where corrective action takes over to reset orientation toward origin
-  - then this state can toggle back to intercept and track
-  - random examples show the system can find paths which will trigger a crash so we need the safety eval along with capture/track
+* LAYERED CONTROLLER ARCHITECTURE
+  See specs/LAYERED_CONTROLLER.md for full design document.
+
+  Current tracking layer (autoc-minimal.ini) follows the rabbit but has no awareness of:
+  - Am I about to crash?
+  - Am I going out of bounds?
+  - Am I in recovery vs tracking mode?
+
+  SAFETY LAYER (next priority):
+  - Hardcoded constraints that override GP outputs when danger detected
+  - OOB detection: if approaching geofence, break off and head toward origin
+  - Altitude protection: if too low, force climb
+  - Stall prevention: if too slow, force dive + throttle
+  - Re-engagement: when near origin/safe, resume tracking
+  - Implementation: post-GP safety clamping in evaluateOutput() or similar
+
+  Testing:
+  - Create intentional OOB paths to verify safety layer behavior
+  - Paths that go toward boundaries, into the ground, etc.
+  - Verify break-off and re-engagement logic works
+
+  STRATEGY LAYER (future):
+  - Phase detection (intercept → track → recover)
+  - Energy management
+  - Path preview / anticipation
 
 * TEMPORAL STATE FOR GP NODES
   The GP tree is stateless - re-evaluated fresh each tick with no memory of prior evaluations.
