@@ -207,8 +207,12 @@ public:
         }
         
         code << "\n    return applyRangeLimit(stack[0]);\n";
-        code << "}\n";
-        
+        code << "}\n\n";
+
+        // Generate source identifier string
+        code << "// GP program source identifier for logging\n";
+        code << "const char* generatedGPProgramSource = \"" << std::string(header.s3_key) << "\";\n";
+
         return code.str();
     }
     
@@ -255,8 +259,12 @@ public:
         code << "gp_scalar " << functionName << "(PathProvider& pathProvider, AircraftState& aircraftState, gp_scalar arg) {\n";
         code << "    // Use portable bytecode evaluator for consistent behavior\n";
         code << "    return evaluateBytecodePortable(embedded_gp_bytecode, embedded_gp_bytecode_size, pathProvider, aircraftState, arg);\n";
-        code << "}\n";
-        
+        code << "}\n\n";
+
+        // Generate source identifier string
+        code << "// GP program source identifier for logging\n";
+        code << "const char* generatedGPProgramSource = \"" << std::string(header.s3_key) << "\";\n";
+
         return code.str();
     }
     
