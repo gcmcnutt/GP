@@ -69,6 +69,7 @@ struct TimestampedVec {
 struct SpanData {
   vec3 origin;
   std::vector<TimestampedVec> vecs;
+  std::vector<vec3> rabbitPoints;  // Goal path points (rabbit positions with Z offset)
   size_t startStateIdx;
   size_t endStateIdx;
 };
@@ -1243,14 +1244,27 @@ void Renderer::updateTextDisplay(int generation, gp_fitness fitness) {
   testTextActor->SetPosition(labelX, testY);
   testValueActor->SetPosition(valueX, testY);
   
-  // Update text content - use same formula as title bar (10000 - generation)
-  int realGeneration = 10000 - generation;
-  generationValueActor->SetInput(std::to_string(realGeneration).c_str());
-  
-  std::ostringstream fitnessStream;
-  fitnessStream << std::fixed << std::setprecision(3) << fitness;
-  fitnessValueActor->SetInput(fitnessStream.str().c_str());
-  
+  // In xiao-only mode, hide generation and fitness (not applicable)
+  if (inXiaoOnlyMode) {
+    generationTextActor->SetVisibility(0);
+    generationValueActor->SetVisibility(0);
+    fitnessTextActor->SetVisibility(0);
+    fitnessValueActor->SetVisibility(0);
+  } else {
+    // Update text content - use same formula as title bar (10000 - generation)
+    int realGeneration = 10000 - generation;
+    generationValueActor->SetInput(std::to_string(realGeneration).c_str());
+
+    std::ostringstream fitnessStream;
+    fitnessStream << std::fixed << std::setprecision(3) << fitness;
+    fitnessValueActor->SetInput(fitnessStream.str().c_str());
+
+    generationTextActor->SetVisibility(1);
+    generationValueActor->SetVisibility(1);
+    fitnessTextActor->SetVisibility(1);
+    fitnessValueActor->SetVisibility(1);
+  }
+
   // Update test display based on decode mode or xiao mode and current state
   if ((inDecodeMode || inXiaoMode) && !testSpans.empty()) {
     // Make test actors visible
@@ -1404,6 +1418,12 @@ int main(int argc, char** argv) {
   if (inXiaoOnlyMode) {
     // Initialize renderer without S3 data
     renderer.initialize();
+
+    // Update text display (hides generation/fitness, shows test span)
+    renderer.updateTextDisplay(0, 0.0f);
+
+    // Render the initial scene with xiao data
+    renderer.renderFullScene();
 
     // Print xiao-specific controls
     std::cout << "\nXiao Flight Mode Controls:" << std::endl;
@@ -1900,6 +1920,7 @@ bool parseXiaoData(const std::string& xiaoLogPath) {
       // Start new span tracking
       currentSpanData.origin = currentOrigin;
       currentSpanData.vecs.clear();
+      currentSpanData.rabbitPoints.clear();
       currentSpanData.startStateIdx = currentStateIdx;
       continue;
     }
@@ -1917,9 +1938,20 @@ bool parseXiaoData(const std::string& xiaoLogPath) {
 
     if (!inSpan) continue;
 
-    // Parse GP Input (vec and relvel)
+    // Parse GP Input (vec, relvel, and rabbit for goal path)
     if (std::regex_search(line, matches, inputRe)) {
       int idx = std::stoi(matches[1].str());
+
+      // Capture rabbit position (goal point along path, in virtual/origin-relative coords)
+      scalar rabbit_x = std::stof(matches[2].str());
+      scalar rabbit_y = std::stof(matches[3].str());
+      scalar rabbit_z = std::stof(matches[4].str());
+      vec3 rabbitPos(rabbit_x, rabbit_y, rabbit_z);
+      // Apply same Z offset as actual positions to align with simulation convention
+      rabbitPos[2] = rabbitPos[2] + SIM_INITIAL_ALTITUDE;
+      currentSpanData.rabbitPoints.push_back(rabbitPos);
+
+      // Capture vec (direction to target)
       scalar vec_n = std::stof(matches[5].str());
       scalar vec_e = std::stof(matches[6].str());
       scalar vec_d = std::stof(matches[7].str());
@@ -3861,15 +3893,53 @@ void Renderer::renderFullScene() {
     vec3 blackboxOffset(0.0f, 0.0f, 0.0f);  // No arena offset
     std::vector<vec3> a_bb = stateToVector(blackboxAircraftStates);
 
-    // Render blackbox tape
+    // Render blackbox tape (actual flight path - yellow)
     if (a_bb.size() >= 2) {
       this->blackboxTapes->AddInputData(createTapeSet(blackboxOffset, a_bb, stateToOrientation(blackboxAircraftStates)));
       blackboxActor->GetProperty()->SetOpacity(1.0);
       blackboxActor->GetBackfaceProperty()->SetOpacity(1.0);
     }
+
+    // Render goal path from rabbit points (blue path line)
+    if (currentTestIndex >= 0 && currentTestIndex < static_cast<int>(xiaoSpanData.size())) {
+      const std::vector<vec3>& rabbitPoints = xiaoSpanData[currentTestIndex].rabbitPoints;
+      if (!rabbitPoints.empty()) {
+        this->paths->AddInputData(createPointSet(blackboxOffset, rabbitPoints));
+      }
+    }
+
+    // Add ground plane for xiao-only mode
+    vtkNew<vtkPlaneSource> planeSource;
+    scalar width = static_cast<scalar>(FIELD_SIZE);
+    scalar height = static_cast<scalar>(FIELD_SIZE);
+    int resolution = static_cast<int>(FIELD_SIZE / 10.0f);
+    planeSource->SetOrigin(-width / 2.0f, -height / 2.0f, 0.0);
+    planeSource->SetPoint1(width / 2.0f, -height / 2.0f, 0.0);
+    planeSource->SetPoint2(-width / 2.0f, height / 2.0f, 0.0);
+    planeSource->SetXResolution(resolution);
+    planeSource->SetYResolution(resolution);
+    planeSource->Update();
+
+    // Checkerboard pattern
+    vtkNew<vtkUnsignedCharArray> cellData;
+    cellData->SetNumberOfComponents(4);
+    cellData->SetNumberOfTuples(planeSource->GetOutput()->GetNumberOfCells());
+    for (int i = 0; i < planeSource->GetOutput()->GetNumberOfCells(); i++) {
+      if (i % 2 ^ (i / 10) % 2) {
+        unsigned char rgb[4] = { 255, 255, 255, 100 };
+        cellData->InsertTypedTuple(i, rgb);
+      } else {
+        unsigned char rgb[4] = { 0, 0, 0, 100 };
+        cellData->InsertTypedTuple(i, rgb);
+      }
+    }
+    planeSource->GetOutput()->GetCellData()->SetScalars(cellData);
+    planeSource->Update();
+    planeData->AddInputConnection(planeSource->GetOutputPort());
   }
 
   // Update all pipelines
+  this->planeData->Update();
   this->paths->Update();
   this->actuals->Update();
   this->segmentGaps->Update();
