@@ -3774,6 +3774,16 @@ void Renderer::renderFullScene() {
   emptyVecData->SetPoints(emptyVecPoints);
   this->xiaoVecArrows->AddInputData(emptyVecData);
 
+  // Add empty data for actuals and segmentGaps to prevent pipeline errors in xiao-only mode
+  vtkNew<vtkPolyData> emptyActualsData;
+  vtkNew<vtkPoints> emptyActualsPoints;
+  emptyActualsData->SetPoints(emptyActualsPoints);
+  this->actuals->AddInputData(emptyActualsData);
+
+  vtkNew<vtkPolyData> emptySegmentGapsData;
+  vtkNew<vtkPoints> emptySegmentGapsPoints;
+  emptySegmentGapsData->SetPoints(emptySegmentGapsPoints);
+  this->segmentGaps->AddInputData(emptySegmentGapsData);
 
   // Render with full progress (1.0) using existing data
   int maxArenas = evalResults.pathList.size();
