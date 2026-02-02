@@ -3448,6 +3448,13 @@ void Renderer::updatePlaybackAnimation() {
       primaryDuration = std::max(primaryDuration, pathDuration);
     }
   }
+
+  // In xiao-only mode, use blackbox data duration instead
+  if (inXiaoOnlyMode && primaryDuration == 0.0f && !blackboxAircraftStates.empty()) {
+    scalar blackboxStartTime = static_cast<scalar>(blackboxAircraftStates.front().getSimTimeMsec()) / static_cast<scalar>(1000000.0f);
+    scalar blackboxEndTime = static_cast<scalar>(blackboxAircraftStates.back().getSimTimeMsec()) / static_cast<scalar>(1000000.0f);
+    primaryDuration = blackboxEndTime - blackboxStartTime;
+  }
   
   // Use real-time playback - elapsed seconds = simulation seconds
   scalar currentSimTime = elapsed;
@@ -3496,17 +3503,25 @@ void Renderer::updatePlaybackAnimation() {
   
   // Render with synchronized time progress
   int renderArenas = (!blackboxAircraftStates.empty()) ? 1 : static_cast<int>(evalResults.pathList.size());
+
+  // In xiao-only mode, skip evalResults iteration if it's empty
+  bool hasSimData = !evalResults.pathList.empty() && !evalResults.aircraftStateList.empty();
+
   for (int i = 0; i < renderArenas; i++) {
     vec3 offset = renderingOffset(i);
-    
-    std::vector<vec3> p = pathToVector(evalResults.pathList[i]);
-    std::vector<vec3> a = stateToVector(evalResults.aircraftStateList[i]);
+
+    std::vector<vec3> p;
+    std::vector<vec3> a;
+    if (hasSimData && i < static_cast<int>(evalResults.pathList.size())) {
+      p = pathToVector(evalResults.pathList[i]);
+      a = stateToVector(evalResults.aircraftStateList[i]);
+    }
     
     // Time-based filtering: show data up to currentSimTime
-    
+
     // Filter path points by simulation timestamp
     std::vector<vec3> visiblePathVector;
-    if (!evalResults.pathList[i].empty()) {
+    if (hasSimData && i < static_cast<int>(evalResults.pathList.size()) && !evalResults.pathList[i].empty()) {
       std::vector<Path> visiblePath;
       for (const auto& pathPoint : evalResults.pathList[i]) {
         scalar pathPointTime = static_cast<scalar>(pathPoint.simTimeMsec) / static_cast<scalar>(1000.0f); // Convert to seconds
@@ -3520,11 +3535,11 @@ void Renderer::updatePlaybackAnimation() {
     }
     // Always add path data (empty if no visible path) to prevent VTK warnings
     this->paths->AddInputData(createPointSet(offset, visiblePathVector));
-    
+
     // Filter aircraft states by timestamp
     std::vector<AircraftState> visibleStates;
     std::vector<vec3> visibleStateVector;
-    if (!evalResults.aircraftStateList[i].empty()) {
+    if (hasSimData && i < static_cast<int>(evalResults.aircraftStateList.size()) && !evalResults.aircraftStateList[i].empty()) {
       for (const auto& state : evalResults.aircraftStateList[i]) {
         scalar stateTime = static_cast<scalar>(state.getSimTimeMsec()) / static_cast<scalar>(1000.0f);
         if (stateTime <= currentSimTime) {
@@ -3536,14 +3551,14 @@ void Renderer::updatePlaybackAnimation() {
       }
     }
     // Always add aircraft data (empty if no visible states) to prevent VTK warnings
-    this->actuals->AddInputData(createTapeSet(offset, visibleStateVector, 
+    this->actuals->AddInputData(createTapeSet(offset, visibleStateVector,
       visibleStates.empty() ? std::vector<vec3>() : stateToOrientation(visibleStates)));
-    
+
     // Add segment gaps only if we have visible states and the full path exists
-    if (!visibleStates.empty() && !evalResults.pathList[i].empty()) {
+    if (hasSimData && i < static_cast<int>(evalResults.pathList.size()) && !visibleStates.empty() && !evalResults.pathList[i].empty()) {
       // Use full path for segment connections (aircraft states reference original path indices)
       std::vector<vec3> fullPathVector = pathToVector(evalResults.pathList[i]);
-      
+
       // Further filter visible states to only include those with valid path references
       std::vector<AircraftState> validStates;
       for (const auto& state : visibleStates) {
@@ -3551,7 +3566,7 @@ void Renderer::updatePlaybackAnimation() {
           validStates.push_back(state);
         }
       }
-      
+
       if (!validStates.empty()) {
         this->segmentGaps->AddInputData(createSegmentSet(offset, validStates, fullPathVector));
       } else {
@@ -3658,6 +3673,53 @@ void Renderer::updatePlaybackAnimation() {
             this->blackboxTapes->AddInputData(createTapeSet(blackboxOffset, visibleBlackboxVector, stateToOrientation(visibleBlackboxStates)));
             blackboxActor->GetProperty()->SetOpacity(1.0);
             blackboxActor->GetBackfaceProperty()->SetOpacity(1.0);
+          }
+        }
+      }
+
+      // Render goal path from rabbit points in xiao-only mode (with time-based animation)
+      if (inXiaoOnlyMode && currentTestIndex >= 0 && currentTestIndex < static_cast<int>(xiaoSpanData.size())) {
+        const std::vector<vec3>& rabbitPoints = xiaoSpanData[currentTestIndex].rabbitPoints;
+        if (!rabbitPoints.empty()) {
+          // Animate goal path with time progress (similar to blackbox)
+          size_t numPointsToShow = static_cast<size_t>(rabbitPoints.size() * blackboxProgress);
+          if (numPointsToShow == 0 && blackboxProgress > 0.0f) numPointsToShow = 1;
+          if (numPointsToShow > rabbitPoints.size()) numPointsToShow = rabbitPoints.size();
+
+          std::vector<vec3> visibleRabbitPoints(rabbitPoints.begin(), rabbitPoints.begin() + numPointsToShow);
+          this->paths->AddInputData(createPointSet(blackboxOffset, visibleRabbitPoints));
+
+          // Render animated error bars connecting visible blackbox positions to rabbit points
+          size_t numVisibleStates = static_cast<size_t>(blackboxAircraftStates.size() * blackboxProgress);
+          if (numVisibleStates > 0 && numPointsToShow > 0) {
+            vtkSmartPointer<vtkPolyData> segmentData = vtkSmartPointer<vtkPolyData>::New();
+            vtkSmartPointer<vtkPoints> segmentPoints = vtkSmartPointer<vtkPoints>::New();
+            vtkSmartPointer<vtkCellArray> segmentLines = vtkSmartPointer<vtkCellArray>::New();
+
+            size_t numRabbit = numPointsToShow;
+
+            // Sample every Nth state to reduce clutter (show ~20-50 error bars)
+            size_t step = std::max(static_cast<size_t>(1), numVisibleStates / 50);
+
+            for (size_t i = 0; i < numVisibleStates; i += step) {
+              size_t rabbitIdx = (i * numRabbit) / numVisibleStates;
+              if (rabbitIdx >= numRabbit) rabbitIdx = numRabbit - 1;
+
+              vec3 statePos = blackboxAircraftStates[i].getPosition() + blackboxOffset;
+              vec3 rabbitPos = visibleRabbitPoints[rabbitIdx] + blackboxOffset;
+
+              vtkIdType p1 = segmentPoints->InsertNextPoint(statePos[0], statePos[1], statePos[2]);
+              vtkIdType p2 = segmentPoints->InsertNextPoint(rabbitPos[0], rabbitPos[1], rabbitPos[2]);
+
+              vtkSmartPointer<vtkLine> line = vtkSmartPointer<vtkLine>::New();
+              line->GetPointIds()->SetId(0, p1);
+              line->GetPointIds()->SetId(1, p2);
+              segmentLines->InsertNextCell(line);
+            }
+
+            segmentData->SetPoints(segmentPoints);
+            segmentData->SetLines(segmentLines);
+            this->segmentGaps->AddInputData(segmentData);
           }
         }
       }
@@ -3915,6 +3977,40 @@ void Renderer::renderFullScene() {
       const std::vector<vec3>& rabbitPoints = xiaoSpanData[currentTestIndex].rabbitPoints;
       if (!rabbitPoints.empty()) {
         this->paths->AddInputData(createPointSet(blackboxOffset, rabbitPoints));
+
+        // Render error bars connecting blackbox positions to rabbit points
+        // Correlate by index proportion: blackbox state i -> rabbit point floor(i * numRabbit / numStates)
+        if (!blackboxAircraftStates.empty()) {
+          vtkSmartPointer<vtkPolyData> segmentData = vtkSmartPointer<vtkPolyData>::New();
+          vtkSmartPointer<vtkPoints> segmentPoints = vtkSmartPointer<vtkPoints>::New();
+          vtkSmartPointer<vtkCellArray> segmentLines = vtkSmartPointer<vtkCellArray>::New();
+
+          size_t numStates = blackboxAircraftStates.size();
+          size_t numRabbit = rabbitPoints.size();
+
+          // Sample every Nth state to reduce clutter (show ~20-50 error bars)
+          size_t step = std::max(static_cast<size_t>(1), numStates / 50);
+
+          for (size_t i = 0; i < numStates; i += step) {
+            size_t rabbitIdx = (i * numRabbit) / numStates;
+            if (rabbitIdx >= numRabbit) rabbitIdx = numRabbit - 1;
+
+            vec3 statePos = blackboxAircraftStates[i].getPosition() + blackboxOffset;
+            vec3 rabbitPos = rabbitPoints[rabbitIdx] + blackboxOffset;
+
+            vtkIdType p1 = segmentPoints->InsertNextPoint(statePos[0], statePos[1], statePos[2]);
+            vtkIdType p2 = segmentPoints->InsertNextPoint(rabbitPos[0], rabbitPos[1], rabbitPos[2]);
+
+            vtkSmartPointer<vtkLine> line = vtkSmartPointer<vtkLine>::New();
+            line->GetPointIds()->SetId(0, p1);
+            line->GetPointIds()->SetId(1, p2);
+            segmentLines->InsertNextCell(line);
+          }
+
+          segmentData->SetPoints(segmentPoints);
+          segmentData->SetLines(segmentLines);
+          this->segmentGaps->AddInputData(segmentData);
+        }
       }
     }
 
