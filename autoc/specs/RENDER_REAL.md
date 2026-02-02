@@ -384,13 +384,14 @@ Xiao Log File
 - [x] Verify Z offset applied (-25m)
 - [x] Handle control disable properly
 
-### Phase 2
-- [ ] Add `inXiaoOnlyMode` flag
-- [ ] Capture rabbit points in `parseXiaoData()`
-- [ ] Implement `renderXiaoOnlyScene()`
-- [ ] Skip S3 operations in xiao-only mode
-- [ ] Adapt keyboard controls
-- [ ] Update text display for xiao mode
+### Phase 2 ✅
+- [x] Add `inXiaoOnlyMode` flag
+- [x] Capture rabbit points in `parseXiaoData()`
+- [x] Render goal path in `renderFullScene()` (reused existing function)
+- [x] Skip S3 operations in xiao-only mode
+- [x] Adapt keyboard controls (disable n/p/N/P)
+- [x] Update text display for xiao mode (hide gen/fitness)
+- [x] Add ground plane for xiao-only mode
 - [ ] Test with flight25a log (5 spans)
 - [ ] Verify goal path renders correctly
 - [ ] Verify actual path aligns with goal path
