@@ -1698,8 +1698,11 @@ void updateBlackboxForCurrentTest() {
         AircraftState offsetState = fullBlackboxAircraftStates[i];
 
         if (useVirtualPositions) {
-          // Xiao mode: use virtual position directly (already offset in xiao log)
-          offsetState.setPosition(xiaoVirtualPositions[i]);
+          // Xiao mode: use virtual position (pos field is origin-relative)
+          // Apply Z offset to align with simulation path convention (SIM_INITIAL_ALTITUDE = -25m)
+          vec3 virtualPos = xiaoVirtualPositions[i];
+          virtualPos[2] = virtualPos[2] + SIM_INITIAL_ALTITUDE;  // Offset Z to match path altitude
+          offsetState.setPosition(virtualPos);
         } else {
           // Decode mode: apply calculated offset
           vec3 originalPosition = offsetState.getPosition();
@@ -1787,7 +1790,8 @@ bool parseXiaoData(const std::string& xiaoLogPath) {
   // Regex patterns for xiao log parsing
   // Format: #<seqnum> <xiao_ms> <inav_ms> <level> GP ...
   std::regex timestampRe(R"(^#\d+\s+(\d+)\s+(\d+)\s+\w)");  // Capture xiao_ms (2nd) and inav_ms (3rd)
-  std::regex controlEnableRe(R"(GP Control: Switch enabled - test origin NED=\[([-0-9\.]+),\s*([-0-9\.]+),\s*([-0-9\.]+)\])");
+  // Updated regex to match current xiao-gp log format (changed from "test origin NED" to "origin NED")
+  std::regex controlEnableRe(R"(GP Control: Switch enabled - origin NED=\[([-0-9\.]+),\s*([-0-9\.]+),\s*([-0-9\.]+)\])");
   std::regex controlDisableRe(R"(GP Control: Switch disabled)");
   std::regex inputRe(R"(GP Input:.*idx=(\d+).*rabbit=\[([-0-9\.]+),([-0-9\.]+),([-0-9\.]+)\].*vec=\[([-0-9\.]+),([-0-9\.]+),([-0-9\.]+)\].*relvel=([-0-9\.]+))");
   std::regex stateRe(R"(GP State:.*pos_raw=\[([-0-9\.]+),([-0-9\.]+),([-0-9\.]+)\].*pos=\[([-0-9\.]+),([-0-9\.]+),([-0-9\.]+)\].*vel=\[([-0-9\.]+),([-0-9\.]+),([-0-9\.]+)\].*quat=\[([-0-9\.]+),([-0-9\.]+),([-0-9\.]+),([-0-9\.]+)\])");
@@ -2063,8 +2067,9 @@ void extractXiaoTestSpans() {
     return;
   }
 
-  // Regex patterns
-  std::regex controlEnableRe(R"(GP Control: Switch enabled - test origin NED=\[([-0-9\.]+),\s*([-0-9\.]+),\s*([-0-9\.]+)\])");
+  // Regex patterns - updated to match current xiao-gp log format
+  std::regex controlEnableRe(R"(GP Control: Switch enabled - origin NED=\[([-0-9\.]+),\s*([-0-9\.]+),\s*([-0-9\.]+)\])");
+  std::regex controlDisableRe(R"(GP Control:.*(disabled|Autoc disabled))");  // Various ways control can end
   std::regex stateRe(R"(GP State:)");
   std::regex autocFlagRe(R"(autoc=(Y|N))");
 
@@ -2076,13 +2081,33 @@ void extractXiaoTestSpans() {
   std::smatch matches;
 
   for (const std::string& line : xiaoLines) {
-    // Check for control enable
+    // Check for control enable - starts a new control span
     if (std::regex_search(line, matches, controlEnableRe)) {
+      // Close any unclosed autoc span from previous control span
+      if (inAutocSpan && stateIndex > 0) {
+        currentSpan.endIndex = stateIndex - 1;
+        currentSpan.endTime = (stateIndex - 1) * 100;
+        renderer.testSpans.push_back(currentSpan);
+        inAutocSpan = false;
+      }
       scalar origin_n = std::stof(matches[1].str());
       scalar origin_e = std::stof(matches[2].str());
       scalar origin_d = std::stof(matches[3].str());
       currentOrigin = vec3(origin_n, origin_e, origin_d);
       inControlSpan = true;
+      continue;
+    }
+
+    // Check for control disable - ends the control span
+    if (std::regex_search(line, controlDisableRe)) {
+      inControlSpan = false;
+      // Close any open autoc span
+      if (inAutocSpan && stateIndex > 0) {
+        currentSpan.endIndex = stateIndex - 1;
+        currentSpan.endTime = (stateIndex - 1) * 100;
+        renderer.testSpans.push_back(currentSpan);
+        inAutocSpan = false;
+      }
       continue;
     }
 
