@@ -1,4 +1,9 @@
 
+* EXPORT RC COMMANDS TO XIAO LOG OUTSIDE TEST SPANS
+  - Currently: GP Output (rc=[...]) only logged during autoc=Y test spans
+  - Need: Log RC commands throughout entire flight for full playback visualization
+  - Location: xiao-gp/src/msplink.cpp - add logging in non-autoc code path
+  - Benefit: Control HUD in renderer 'a' mode will show stick/throttle for full flight
 
 DEMETIC MODE ELITE PRESERVATION (broken fitness tracking)
   - Current: Best fitness jumps wildly (135→191→192→191→174→180→173→177)

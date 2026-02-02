@@ -81,6 +81,7 @@ std::vector<TimestampedVec> craftToTargetVectors;  // Vec field with timestamps 
 std::vector<vec3> xiaoVirtualPositions;  // Virtual (pos) coordinates for individual test spans
 std::vector<std::string> xiaoLines;  // Store xiao log lines for span analysis
 std::vector<SpanData> xiaoSpanData;  // Rabbit and vec data organized by span
+std::vector<size_t> gpStateLineToStateIndex;  // Map GP State line number to actual state index
 
 // Forward declarations
 bool parseBlackboxData(const std::string& csvData);
@@ -98,8 +99,18 @@ std::shared_ptr<Aws::S3::S3Client> getS3Client() {
 // Function to lay out the squares
 // given i, and NUM_PATHS_PER_GEN, compute the offsets for this particular square
 vec3 Renderer::renderingOffset(int i) {
+  // Handle xiao-only mode or empty pathList - return origin offset
+  if (evalResults.pathList.empty()) {
+    return vec3(0.0f, 0.0f, 0.0f);
+  }
+
   // Calculate the dimension of the larger square
   int sideLength = static_cast<int>(std::ceil(std::sqrt(static_cast<scalar>(evalResults.pathList.size()))));
+
+  // Safety check to prevent division by zero
+  if (sideLength == 0) {
+    return vec3(0.0f, 0.0f, 0.0f);
+  }
 
   int row = i / sideLength;
   int col = i % sideLength;
@@ -478,8 +489,9 @@ bool Renderer::updateGenerationDisplay(int newGen) {
         }
       }
 
-      // Render vec arrows (craft-to-target vectors) for xiao mode
-      if (inXiaoMode && !craftToTargetVectors.empty() && !blackboxAircraftStates.empty()) {
+      // Render vec arrows (craft-to-target vectors) for decode mode only (not xiao-only mode)
+      // In -x mode, blue error bars are sufficient; purple arrows are for -d mode overlay
+      if (inXiaoMode && !inXiaoOnlyMode && !craftToTargetVectors.empty() && !blackboxAircraftStates.empty()) {
         size_t arrowCount = 0;
         size_t skippedCount = 0;
 
@@ -1705,8 +1717,14 @@ void updateBlackboxForCurrentTest() {
   // Always update the blackbox data, even if renderer isn't fully initialized yet
   // The safety check for renderWindow is only needed for text display updates
   
-  if (renderer.showingFullFlight || renderer.testSpans.empty()) {
-    // Show full flight - use all data
+  if (renderer.showingFullFlight) {
+    // All-flight mode: data was already set up by showAllFlight() with translated positions
+    // Just return to preserve the position translations
+    return;
+  }
+
+  if (renderer.testSpans.empty()) {
+    // No test spans - use all data
     blackboxAircraftStates = fullBlackboxAircraftStates;
     // Keep all vec data
     // (craftToTargetVectors already has all data)
@@ -1739,6 +1757,9 @@ void updateBlackboxForCurrentTest() {
         positionOffset[2] = SIM_INITIAL_ALTITUDE - testStartPosition[2]; // Offset Z to SIM_INITIAL_ALTITUDE
       }
 
+      // Get the first state's timestamp to normalize all span timestamps to start from 0 (time since arm)
+      unsigned long spanBaseTime = fullBlackboxAircraftStates[startIdx].getSimTimeMsec();
+
       for (size_t i = startIdx; i < endIdx; i++) {
         AircraftState offsetState = fullBlackboxAircraftStates[i];
 
@@ -1754,6 +1775,10 @@ void updateBlackboxForCurrentTest() {
           vec3 offsetPosition = originalPosition + positionOffset;
           offsetState.setPosition(offsetPosition);
         }
+
+        // Normalize timestamp to start from 0 (time since arm/span start)
+        unsigned long normalizedTime = offsetState.getSimTimeMsec() - spanBaseTime;
+        offsetState.setSimTimeMsec(normalizedTime);
 
         // Keep original attitude (yaw, pitch, roll) - no attitude offset needed
         blackboxAircraftStates.push_back(offsetState);
@@ -1831,6 +1856,7 @@ bool parseXiaoData(const std::string& xiaoLogPath) {
   xiaoLines.clear();
   craftToTargetVectors.clear();
   xiaoVirtualPositions.clear();
+  gpStateLineToStateIndex.clear();
 
   // Regex patterns for xiao log parsing
   // Format: #<seqnum> <xiao_ms> <inav_ms> <level> GP ...
@@ -1847,6 +1873,8 @@ bool parseXiaoData(const std::string& xiaoLogPath) {
   std::string line;
   bool inSpan = false;
   unsigned long spanStartTimeMs = 0;
+  unsigned long flightStartTimeMs = 0;  // First GP State time for full flight timing
+  bool flightStartSet = false;
   vec3 currentOrigin(0.0f, 0.0f, 0.0f);
   std::vector<TimestampedVec> currentVecPoints;
   std::smatch matches;
@@ -1941,10 +1969,8 @@ bool parseXiaoData(const std::string& xiaoLogPath) {
       continue;
     }
 
-    if (!inSpan) continue;
-
-    // Parse GP Input (vec, relvel, and rabbit for goal path)
-    if (std::regex_search(line, matches, inputRe)) {
+    // Parse GP Input (vec, relvel, and rabbit for goal path) - ONLY when in span
+    if (inSpan && std::regex_search(line, matches, inputRe)) {
       int idx = std::stoi(matches[1].str());
 
       // Capture rabbit position (goal point along path, in virtual/origin-relative coords)
@@ -1976,8 +2002,14 @@ bool parseXiaoData(const std::string& xiaoLogPath) {
       timestampRelVelMap[inavMs] = relVel;
     }
 
-    // Parse GP State (position and attitude)
+    // Parse GP State (position and attitude) - for ALL lines to capture full flight
     if (std::regex_search(line, matches, stateRe)) {
+      // Track flight start time for full flight timing
+      if (!flightStartSet) {
+        flightStartTimeMs = xiaoMs;
+        flightStartSet = true;
+      }
+
       // Check autoc flag
       std::smatch autocMatch;
       std::string autocFlag = "N";
@@ -2019,8 +2051,14 @@ bool parseXiaoData(const std::string& xiaoLogPath) {
       vec3 position(pos_raw_n, pos_raw_e, pos_raw_d);  // Raw position (for 'a' all mode)
       vec3 virtualPosition(pos_n, pos_e, pos_d);        // Virtual position (for individual span mode)
 
-      // Filter out coincident points
-      if (blackboxPoints.empty() || (position - blackboxPoints.back()).norm() > static_cast<scalar>(0.01f)) {
+      // Filter out coincident points, but track mapping for span extraction
+      bool addState = blackboxPoints.empty() || (position - blackboxPoints.back()).norm() > static_cast<scalar>(0.01f);
+
+      // Record mapping from GP State line number to actual state index
+      // If filtered out, use SIZE_MAX to indicate no state was created
+      gpStateLineToStateIndex.push_back(addState ? fullBlackboxAircraftStates.size() : SIZE_MAX);
+
+      if (addState) {
         blackboxPoints.push_back(position);
         xiaoVirtualPositions.push_back(virtualPosition);
 
@@ -2033,8 +2071,10 @@ bool parseXiaoData(const std::string& xiaoLogPath) {
           speed = timestampRelVelMap[inavMs];
         }
 
-        // Calculate relative time in microseconds (to match blackbox convention)
-        unsigned long relativeTimeUs = (xiaoMs - spanStartTimeMs) * 1000;  // Convert ms to us
+        // Calculate absolute time in microseconds (relative to flight start)
+        // Always use flightStartTimeMs so fullBlackboxAircraftStates has continuous timeline
+        // Single-span mode normalization is handled by updateBlackboxForCurrentTest()
+        unsigned long absoluteTimeUs = (xiaoMs - flightStartTimeMs) * 1000;  // Convert ms to us
 
         // Get RC commands from INAV timestamp if available
         scalar pitchCmd = 0.0f;
@@ -2055,7 +2095,7 @@ bool parseXiaoData(const std::string& xiaoLogPath) {
           throttleCmd = std::max(-1.0f, std::min(1.0f, throttleCmd));
         }
 
-        // Create AircraftState with real timestamp and RC commands
+        // Create AircraftState with absolute timestamp and RC commands
         AircraftState state(
           static_cast<int>(blackboxAircraftStates.size()),
           speed,
@@ -2065,7 +2105,7 @@ bool parseXiaoData(const std::string& xiaoLogPath) {
           pitchCmd,
           rollCmd,
           throttleCmd,
-          relativeTimeUs
+          absoluteTimeUs
         );
 
         // Store vec vector for this state if available (match by INAV timestamp)
@@ -2075,6 +2115,7 @@ bool parseXiaoData(const std::string& xiaoLogPath) {
 
         blackboxAircraftStates.push_back(state);
         fullBlackboxAircraftStates.push_back(state);
+        currentStateIdx++;  // Track state count for xiaoSpanData indices
       }
     }
   }
@@ -2142,16 +2183,17 @@ void extractXiaoTestSpans() {
   bool inAutocSpan = false;
   TestSpan currentSpan;
   vec3 currentOrigin(0.0f, 0.0f, 0.0f);
-  size_t stateIndex = 0;
+  size_t stateIndex = 0;  // GP State line number (not actual state index)
+  size_t lastSpanStateIndex = 0;  // Track last actual state index in current span
   std::smatch matches;
 
   for (const std::string& line : xiaoLines) {
     // Check for control enable - starts a new control span
     if (std::regex_search(line, matches, controlEnableRe)) {
       // Close any unclosed autoc span from previous control span
-      if (inAutocSpan && stateIndex > 0) {
-        currentSpan.endIndex = stateIndex - 1;
-        currentSpan.endTime = (stateIndex - 1) * 100;
+      if (inAutocSpan) {
+        currentSpan.endIndex = lastSpanStateIndex;
+        currentSpan.endTime = lastSpanStateIndex * 100;
         renderer.testSpans.push_back(currentSpan);
         inAutocSpan = false;
       }
@@ -2167,51 +2209,63 @@ void extractXiaoTestSpans() {
     if (std::regex_search(line, controlDisableRe)) {
       inControlSpan = false;
       // Close any open autoc span
-      if (inAutocSpan && stateIndex > 0) {
-        currentSpan.endIndex = stateIndex - 1;
-        currentSpan.endTime = (stateIndex - 1) * 100;
+      if (inAutocSpan) {
+        currentSpan.endIndex = lastSpanStateIndex;
+        currentSpan.endTime = lastSpanStateIndex * 100;
         renderer.testSpans.push_back(currentSpan);
         inAutocSpan = false;
       }
       continue;
     }
 
-    // Skip if not in control span
-    if (!inControlSpan) continue;
-
-    // Check for GP State line
+    // Check for GP State line - count ALL states, use mapping to get actual state indices
     if (std::regex_search(line, stateRe)) {
-      if (stateIndex >= fullBlackboxAircraftStates.size()) break;
+      // stateIndex is the GP State LINE number (0-based)
+      // Use gpStateLineToStateIndex to get actual state array index
+      if (stateIndex >= gpStateLineToStateIndex.size()) break;
 
-      // Check autoc flag
-      std::smatch autocMatch;
-      std::string autocFlag = "N";
-      if (std::regex_search(line, autocMatch, autocFlagRe)) {
-        autocFlag = autocMatch[1].str();
+      size_t actualStateIndex = gpStateLineToStateIndex[stateIndex];
+      bool hasActualState = (actualStateIndex != SIZE_MAX);
+
+      // Only process span tracking when in control span
+      if (inControlSpan) {
+        // Check autoc flag
+        std::smatch autocMatch;
+        std::string autocFlag = "N";
+        if (std::regex_search(line, autocMatch, autocFlagRe)) {
+          autocFlag = autocMatch[1].str();
+        }
+
+        if (autocFlag == "Y") {
+          if (!inAutocSpan && hasActualState) {
+            // Start of autoc=Y span - use actual state index
+            currentSpan.startIndex = actualStateIndex;
+            currentSpan.startTime = actualStateIndex * 100;  // Fake timestamp
+            currentSpan.origin = currentOrigin;
+            inAutocSpan = true;
+            lastSpanStateIndex = actualStateIndex;
+          } else if (inAutocSpan && hasActualState) {
+            // Track last valid state in span
+            lastSpanStateIndex = actualStateIndex;
+          }
+        } else if (autocFlag == "N" && inAutocSpan) {
+          // End of autoc=Y span - use last tracked state index
+          currentSpan.endIndex = lastSpanStateIndex;
+          currentSpan.endTime = lastSpanStateIndex * 100;
+          renderer.testSpans.push_back(currentSpan);
+          inAutocSpan = false;
+        }
       }
 
-      if (autocFlag == "Y" && !inAutocSpan) {
-        // Start of autoc=Y span
-        currentSpan.startIndex = stateIndex;
-        currentSpan.startTime = stateIndex * 100;  // Fake timestamp
-        currentSpan.origin = currentOrigin;
-        inAutocSpan = true;
-      } else if (autocFlag == "N" && inAutocSpan) {
-        // End of autoc=Y span
-        currentSpan.endIndex = stateIndex - 1;
-        currentSpan.endTime = (stateIndex - 1) * 100;
-        renderer.testSpans.push_back(currentSpan);
-        inAutocSpan = false;
-      }
-
+      // Always increment GP State line counter
       stateIndex++;
     }
   }
 
   // Handle span that continues to end of log
-  if (inAutocSpan && stateIndex > 0) {
-    currentSpan.endIndex = stateIndex - 1;
-    currentSpan.endTime = (stateIndex - 1) * 100;
+  if (inAutocSpan) {
+    currentSpan.endIndex = lastSpanStateIndex;
+    currentSpan.endTime = lastSpanStateIndex * 100;
     renderer.testSpans.push_back(currentSpan);
   }
 
@@ -2230,6 +2284,13 @@ void extractXiaoTestSpans() {
   renderer.testSpans = validSpans;
 
   // Copy vec data and path index from xiaoSpanData to TestSpans
+  // WARNING: This assumes xiaoSpanData and testSpans are 1:1 aligned. If spans were
+  // removed during validation, this will be wrong!
+  if (xiaoSpanData.size() != renderer.testSpans.size()) {
+    std::cerr << "WARNING: xiaoSpanData size (" << xiaoSpanData.size()
+              << ") != testSpans size (" << renderer.testSpans.size()
+              << ") - rabbit path data may be misaligned!" << std::endl;
+  }
   for (size_t i = 0; i < renderer.testSpans.size() && i < xiaoSpanData.size(); i++) {
     renderer.testSpans[i].vecPoints = xiaoSpanData[i].vecs;
     renderer.testSpans[i].pathIndex = xiaoSpanData[i].pathIndex;
@@ -2483,16 +2544,36 @@ void Renderer::previousTest() {
 
 void Renderer::showAllFlight() {
   showingFullFlight = true;
-  
+
   // Hide stopwatch when switching to full flight mode
   hideStopwatch();
-  
-  // Restore full blackbox data
-  blackboxAircraftStates = fullBlackboxAircraftStates;
-  
+
+  // In xiao-only mode, translate positions so first arming point is at origin
+  if (inXiaoOnlyMode && !testSpans.empty() && !fullBlackboxAircraftStates.empty()) {
+    // Get first arming point as the origin offset
+    vec3 firstOrigin = testSpans[0].origin;
+
+    // Clear and rebuild blackboxAircraftStates with translated positions
+    blackboxAircraftStates.clear();
+    for (const auto& state : fullBlackboxAircraftStates) {
+      AircraftState translatedState = state;
+      // Translate position so first arming point is at (0,0,0)
+      vec3 translatedPos = state.getPosition() - firstOrigin;
+      translatedState.setPosition(translatedPos);
+      blackboxAircraftStates.push_back(translatedState);
+    }
+
+    std::cout << "All-flight mode: translated " << blackboxAircraftStates.size()
+              << " states, first arming point at [" << firstOrigin[0] << ", "
+              << firstOrigin[1] << ", " << firstOrigin[2] << "] now at origin" << std::endl;
+  } else {
+    // Restore full blackbox data (non-xiao mode)
+    blackboxAircraftStates = fullBlackboxAircraftStates;
+  }
+
   // Update the blackbox rendering
   updateBlackboxForCurrentTest();
-  
+
   // Re-render using in-memory data (no S3 fetch)
   renderFullScene();
 }
@@ -2501,30 +2582,29 @@ void Renderer::createHighlightedFlightTapes(vec3 offset) {
   if (fullBlackboxAircraftStates.empty() || testSpans.empty()) {
     return;
   }
-  
+
   // Remove the empty data we added earlier
   this->blackboxHighlightTapes->RemoveAllInputs();
-  
+
   // Create dimmed version of full flight (25% brightness)
   std::vector<vec3> fullPoints = stateToVector(fullBlackboxAircraftStates);
   if (fullPoints.size() >= 2) {
     this->blackboxTapes->AddInputData(createTapeSet(offset, fullPoints, stateToOrientation(fullBlackboxAircraftStates)));
-    // Adjust opacity to 25% for dimmed effect
     blackboxActor->GetProperty()->SetOpacity(0.25);
     blackboxActor->GetBackfaceProperty()->SetOpacity(0.25);
   }
-  
+
   // Create bright highlighted segments for each test span
   for (const TestSpan& span : testSpans) {
     size_t startIdx = std::min(span.startIndex, fullBlackboxAircraftStates.size());
     size_t endIdx = std::min(span.endIndex + 1, fullBlackboxAircraftStates.size());
-    
+
     if (startIdx < endIdx && startIdx < fullBlackboxAircraftStates.size()) {
       std::vector<AircraftState> spanStates;
       for (size_t i = startIdx; i < endIdx; i++) {
         spanStates.push_back(fullBlackboxAircraftStates[i]);
       }
-      
+
       if (spanStates.size() >= 2) {
         std::vector<vec3> spanPoints = stateToVector(spanStates);
         this->blackboxHighlightTapes->AddInputData(createTapeSet(offset, spanPoints, stateToOrientation(spanStates)));
@@ -3172,6 +3252,15 @@ void Renderer::updateControlsPosition() {
 }
 
 void Renderer::toggleFocusMode() {
+  // Handle xiao-only mode where there are no evalResults but we have blackbox data
+  if (inXiaoOnlyMode && !blackboxAircraftStates.empty()) {
+    focusMode = true;
+    focusArenaIndex = 0;
+    setFocusArena(0);
+    renderWindow->Render();
+    return;
+  }
+
   if (evalResults.pathList.empty()) {
     return;
   }
@@ -3200,6 +3289,14 @@ void Renderer::adjustFocusArena(int delta) {
 }
 
 void Renderer::focusMoveLeft() {
+  // In xiao-only mode, there's only one arena - just re-focus
+  if (inXiaoOnlyMode) {
+    focusMode = true;
+    setFocusArena(0);
+    renderWindow->Render();
+    return;
+  }
+
   if (evalResults.pathList.empty()) {
     return;
   }
@@ -3228,6 +3325,14 @@ void Renderer::focusMoveLeft() {
 }
 
 void Renderer::focusMoveRight() {
+  // In xiao-only mode, there's only one arena - just re-focus
+  if (inXiaoOnlyMode) {
+    focusMode = true;
+    setFocusArena(0);
+    renderWindow->Render();
+    return;
+  }
+
   if (evalResults.pathList.empty()) {
     return;
   }
@@ -3256,6 +3361,14 @@ void Renderer::focusMoveRight() {
 }
 
 void Renderer::focusMoveUp() {
+  // In xiao-only mode, there's only one arena - just re-focus
+  if (inXiaoOnlyMode) {
+    focusMode = true;
+    setFocusArena(0);
+    renderWindow->Render();
+    return;
+  }
+
   if (evalResults.pathList.empty()) {
     return;
   }
@@ -3283,6 +3396,14 @@ void Renderer::focusMoveUp() {
 }
 
 void Renderer::focusMoveDown() {
+  // In xiao-only mode, there's only one arena - just re-focus
+  if (inXiaoOnlyMode) {
+    focusMode = true;
+    setFocusArena(0);
+    renderWindow->Render();
+    return;
+  }
+
   if (evalResults.pathList.empty()) {
     return;
   }
@@ -3310,27 +3431,45 @@ void Renderer::focusMoveDown() {
 }
 
 void Renderer::setFocusArena(int arenaIdx) {
-  if (evalResults.pathList.empty()) {
-    return;
-  }
-
-  int total = static_cast<int>(evalResults.pathList.size());
-  if (total == 0) {
-    return;
-  }
-
-  arenaIdx = (arenaIdx % total + total) % total;
-  focusArenaIndex = arenaIdx;
-
   vtkRenderer* activeRenderer = renderWindow->GetRenderers()->GetFirstRenderer();
   if (!activeRenderer) {
     return;
   }
 
-  vec3 offset = renderingOffset(arenaIdx);
+  vec3 offset(0.0f, 0.0f, 0.0f);
   scalar focusZ = 0.0f;
-  if (arenaIdx < static_cast<int>(evalResults.pathList.size()) && !evalResults.pathList[arenaIdx].empty()) {
-    focusZ = evalResults.pathList[arenaIdx].front().start[2];
+
+  // Handle xiao-only mode where we have a single arena at origin
+  if (inXiaoOnlyMode && !blackboxAircraftStates.empty()) {
+    focusArenaIndex = 0;
+    // Use a focal point near the center of the flight data
+    if (!blackboxAircraftStates.empty()) {
+      // Calculate centroid of visible blackbox states for better focus
+      vec3 centroid(0.0f, 0.0f, 0.0f);
+      for (const auto& state : blackboxAircraftStates) {
+        centroid += state.getPosition();
+      }
+      centroid /= static_cast<scalar>(blackboxAircraftStates.size());
+      focusZ = centroid[2];
+      offset = vec3(centroid[0], centroid[1], 0.0f);
+    }
+  } else {
+    if (evalResults.pathList.empty()) {
+      return;
+    }
+
+    int total = static_cast<int>(evalResults.pathList.size());
+    if (total == 0) {
+      return;
+    }
+
+    arenaIdx = (arenaIdx % total + total) % total;
+    focusArenaIndex = arenaIdx;
+
+    offset = renderingOffset(arenaIdx);
+    if (arenaIdx < static_cast<int>(evalResults.pathList.size()) && !evalResults.pathList[arenaIdx].empty()) {
+      focusZ = evalResults.pathList[arenaIdx].front().start[2];
+    }
   }
 
   scalar camX = offset[0] - static_cast<scalar>(70.0f);
@@ -3493,7 +3632,7 @@ void Renderer::updatePlaybackAnimation() {
     }
     std::cout << "Playback animation completed (duration: " << primaryDuration << "s)" << std::endl;
   }
-  
+
   // Clear existing data
   this->paths->RemoveAllInputs();
   this->actuals->RemoveAllInputs();
@@ -3502,7 +3641,28 @@ void Renderer::updatePlaybackAnimation() {
   this->blackboxHighlightTapes->RemoveAllInputs();
   this->xiaoVecArrows->RemoveAllInputs();
 
-  // Always ensure these have at least empty data to prevent VTK pipeline errors
+  // Always ensure ALL pipelines have at least empty data to prevent VTK pipeline errors
+  // This is especially important during animation before any spans are reached
+  vtkNew<vtkPolyData> emptyPathData;
+  vtkNew<vtkPoints> emptyPathPoints;
+  emptyPathData->SetPoints(emptyPathPoints);
+  this->paths->AddInputData(emptyPathData);
+
+  vtkNew<vtkPolyData> emptyActualData;
+  vtkNew<vtkPoints> emptyActualPoints;
+  emptyActualData->SetPoints(emptyActualPoints);
+  this->actuals->AddInputData(emptyActualData);
+
+  vtkNew<vtkPolyData> emptySegmentData;
+  vtkNew<vtkPoints> emptySegmentPoints;
+  emptySegmentData->SetPoints(emptySegmentPoints);
+  this->segmentGaps->AddInputData(emptySegmentData);
+
+  vtkNew<vtkPolyData> emptyBlackboxData;
+  vtkNew<vtkPoints> emptyBlackboxPoints;
+  emptyBlackboxData->SetPoints(emptyBlackboxPoints);
+  this->blackboxTapes->AddInputData(emptyBlackboxData);
+
   vtkNew<vtkPolyData> emptyHighlightData;
   vtkNew<vtkPoints> emptyHighlightPoints;
   emptyHighlightData->SetPoints(emptyHighlightPoints);
@@ -3513,7 +3673,7 @@ void Renderer::updatePlaybackAnimation() {
   emptyVecData->SetPoints(emptyVecPoints);
   this->xiaoVecArrows->AddInputData(emptyVecData);
 
-  
+
   // Render with synchronized time progress
   int renderArenas = (!blackboxAircraftStates.empty()) ? 1 : static_cast<int>(evalResults.pathList.size());
 
@@ -3625,7 +3785,7 @@ void Renderer::updatePlaybackAnimation() {
           // For full flight mode, filter full flight blackbox data by time
           scalar fullStartTime = static_cast<scalar>(fullBlackboxAircraftStates.front().getSimTimeMsec()) / static_cast<scalar>(1000000.0f); // microseconds to seconds
           std::vector<AircraftState> visibleFullStates;
-          
+
           for (const auto& state : fullBlackboxAircraftStates) {
             scalar stateTime = static_cast<scalar>(state.getSimTimeMsec()) / static_cast<scalar>(1000000.0f); // microseconds to seconds
             scalar relativeTime = stateTime - fullStartTime; // normalize to start at 0
@@ -3633,18 +3793,18 @@ void Renderer::updatePlaybackAnimation() {
               visibleFullStates.push_back(state);
             }
           }
-          
+
           if (visibleFullStates.size() >= 2) {
             std::vector<vec3> visibleFullVector = stateToVector(visibleFullStates);
             this->blackboxTapes->AddInputData(createTapeSet(blackboxOffset, visibleFullVector, stateToOrientation(visibleFullStates)));
             blackboxActor->GetProperty()->SetOpacity(0.25);
             blackboxActor->GetBackfaceProperty()->SetOpacity(0.25);
-            
+
             // Animate highlighted test spans with time-based filtering
             for (const TestSpan& span : testSpans) {
               size_t startIdx = std::min(span.startIndex, fullBlackboxAircraftStates.size());
               size_t endIdx = std::min(span.endIndex + 1, fullBlackboxAircraftStates.size());
-              
+
               if (startIdx < endIdx && startIdx < fullBlackboxAircraftStates.size()) {
                 std::vector<AircraftState> spanStates;
                 for (size_t j = startIdx; j < endIdx; j++) {
@@ -3691,7 +3851,61 @@ void Renderer::updatePlaybackAnimation() {
       }
 
       // Render goal path from rabbit points in xiao-only mode (with time-based animation)
-      if (inXiaoOnlyMode && currentTestIndex >= 0 && currentTestIndex < static_cast<int>(xiaoSpanData.size())) {
+      if (inXiaoOnlyMode && showingFullFlight && !testSpans.empty() && !fullBlackboxAircraftStates.empty()) {
+        // ALL-FLIGHT MODE: Render each span's path progressively as animation reaches it
+        scalar fullStartTime = static_cast<scalar>(fullBlackboxAircraftStates.front().getSimTimeMsec()) / static_cast<scalar>(1000000.0f);
+
+        for (size_t spanIdx = 0; spanIdx < testSpans.size(); spanIdx++) {
+          const TestSpan& span = testSpans[spanIdx];
+
+          // Get span start/end times from the blackbox states
+          size_t startIdx = std::min(span.startIndex, fullBlackboxAircraftStates.size());
+          size_t endIdx = std::min(span.endIndex, fullBlackboxAircraftStates.size());
+
+          if (startIdx >= fullBlackboxAircraftStates.size()) continue;
+
+          scalar spanStartTime = static_cast<scalar>(fullBlackboxAircraftStates[startIdx].getSimTimeMsec()) / static_cast<scalar>(1000000.0f) - fullStartTime;
+          scalar spanEndTime = static_cast<scalar>(fullBlackboxAircraftStates[endIdx].getSimTimeMsec()) / static_cast<scalar>(1000000.0f) - fullStartTime;
+          scalar spanDuration = spanEndTime - spanStartTime;
+
+          // Skip spans we haven't reached yet
+          if (currentSimTime < spanStartTime) continue;
+
+          // Calculate progress through this span (0.0 to 1.0)
+          scalar spanProgress = 1.0f;  // Default to fully visible if past end
+          if (spanDuration > 0.0f && currentSimTime < spanEndTime) {
+            spanProgress = (currentSimTime - spanStartTime) / spanDuration;
+          }
+
+          // Calculate path offset: actual aircraft position at span start
+          vec3 pathOffset(0.0f, 0.0f, 0.0f);
+          if (startIdx < fullBlackboxAircraftStates.size()) {
+            pathOffset = fullBlackboxAircraftStates[startIdx].getPosition();
+          }
+
+          // Render this span's rabbit path with progress
+          if (spanIdx < xiaoSpanData.size()) {
+            const std::vector<vec3>& rabbitPoints = xiaoSpanData[spanIdx].rabbitPoints;
+            if (!rabbitPoints.empty()) {
+              // Calculate how many points to show based on span progress
+              size_t numPointsToShow = static_cast<size_t>(rabbitPoints.size() * spanProgress);
+              if (numPointsToShow == 0 && spanProgress > 0.0f) numPointsToShow = 1;
+              if (numPointsToShow > rabbitPoints.size()) numPointsToShow = rabbitPoints.size();
+
+              // Transform rabbit points to absolute coordinates
+              std::vector<vec3> absoluteRabbitPoints;
+              for (size_t ptIdx = 0; ptIdx < numPointsToShow; ptIdx++) {
+                vec3 rawPt = rabbitPoints[ptIdx];
+                rawPt[2] -= SIM_INITIAL_ALTITUDE;  // Remove simulation Z offset
+                absoluteRabbitPoints.push_back(rawPt + pathOffset);
+              }
+
+              this->paths->AddInputData(createPointSet(blackboxOffset, absoluteRabbitPoints));
+            }
+          }
+        }
+      } else if (inXiaoOnlyMode && currentTestIndex >= 0 && currentTestIndex < static_cast<int>(xiaoSpanData.size())) {
+        // SINGLE SPAN MODE: Render current test span only
         const std::vector<vec3>& rabbitPoints = xiaoSpanData[currentTestIndex].rabbitPoints;
         if (!rabbitPoints.empty()) {
           // Animate goal path with time progress (similar to blackbox)
@@ -3737,8 +3951,8 @@ void Renderer::updatePlaybackAnimation() {
         }
       }
 
-      // Render vec arrows for xiao mode (with time-based animation)
-      if (inXiaoMode && !craftToTargetVectors.empty() && !blackboxAircraftStates.empty()) {
+      // Render vec arrows for decode mode only (not xiao-only mode, with time-based animation)
+      if (inXiaoMode && !inXiaoOnlyMode && !craftToTargetVectors.empty() && !blackboxAircraftStates.empty()) {
         // Filter vecs by timestamp, same as blackbox states and rabbits
         scalar vecStartTime = static_cast<scalar>(blackboxAircraftStates.front().getSimTimeMsec()) / static_cast<scalar>(1000000.0f);
 
@@ -3900,8 +4114,8 @@ void Renderer::renderFullScene() {
         }
       }
 
-      // Render vec arrows for xiao mode
-      if (inXiaoMode && !craftToTargetVectors.empty() && !blackboxAircraftStates.empty()) {
+      // Render vec arrows for decode mode only (not xiao-only mode)
+      if (inXiaoMode && !inXiaoOnlyMode && !craftToTargetVectors.empty() && !blackboxAircraftStates.empty()) {
         // Create arrows from craft positions pointing in vec direction
         size_t arrowCount = 0;
 
@@ -3978,51 +4192,114 @@ void Renderer::renderFullScene() {
     vec3 blackboxOffset(0.0f, 0.0f, 0.0f);  // No arena offset
     std::vector<vec3> a_bb = stateToVector(blackboxAircraftStates);
 
-    // Render blackbox tape (actual flight path - yellow)
-    if (a_bb.size() >= 2) {
-      this->blackboxTapes->AddInputData(createTapeSet(blackboxOffset, a_bb, stateToOrientation(blackboxAircraftStates)));
-      blackboxActor->GetProperty()->SetOpacity(1.0);
-      blackboxActor->GetBackfaceProperty()->SetOpacity(1.0);
-    }
+    if (showingFullFlight && !testSpans.empty() && !fullBlackboxAircraftStates.empty()) {
+      // ALL-FLIGHT MODE: Show dimmed full flight with highlighted test spans
+      // Use fullBlackboxAircraftStates for raw positions
 
-    // Render goal path from rabbit points (blue path line)
-    if (currentTestIndex >= 0 && currentTestIndex < static_cast<int>(xiaoSpanData.size())) {
-      const std::vector<vec3>& rabbitPoints = xiaoSpanData[currentTestIndex].rabbitPoints;
-      if (!rabbitPoints.empty()) {
-        this->paths->AddInputData(createPointSet(blackboxOffset, rabbitPoints));
+      // Render dimmed full flight tape from full flight data
+      std::vector<vec3> fullPoints = stateToVector(fullBlackboxAircraftStates);
+      if (fullPoints.size() >= 2) {
+        this->blackboxTapes->AddInputData(createTapeSet(blackboxOffset, fullPoints, stateToOrientation(fullBlackboxAircraftStates)));
+        blackboxActor->GetProperty()->SetOpacity(0.25);
+        blackboxActor->GetBackfaceProperty()->SetOpacity(0.25);
+      }
 
-        // Render error bars connecting blackbox positions to rabbit points
-        // Correlate by index proportion: blackbox state i -> rabbit point floor(i * numRabbit / numStates)
-        if (!blackboxAircraftStates.empty()) {
-          vtkSmartPointer<vtkPolyData> segmentData = vtkSmartPointer<vtkPolyData>::New();
-          vtkSmartPointer<vtkPoints> segmentPoints = vtkSmartPointer<vtkPoints>::New();
-          vtkSmartPointer<vtkCellArray> segmentLines = vtkSmartPointer<vtkCellArray>::New();
+      // Render highlighted test spans and paths at their actual positions
+      for (size_t spanIdx = 0; spanIdx < testSpans.size(); spanIdx++) {
+        const TestSpan& span = testSpans[spanIdx];
 
-          size_t numStates = blackboxAircraftStates.size();
-          size_t numRabbit = rabbitPoints.size();
+        // Render highlighted flight segment for this span
+        size_t startIdx = std::min(span.startIndex, fullBlackboxAircraftStates.size());
+        size_t endIdx = std::min(span.endIndex + 1, fullBlackboxAircraftStates.size());
 
-          // Sample every Nth state to reduce clutter (show ~20-50 error bars)
-          size_t step = std::max(static_cast<size_t>(1), numStates / 50);
+        // Calculate path offset: actual aircraft position at span start
+        vec3 pathOffset(0.0f, 0.0f, 0.0f);
+        if (startIdx < fullBlackboxAircraftStates.size()) {
+          pathOffset = fullBlackboxAircraftStates[startIdx].getPosition();
+        }
 
-          for (size_t i = 0; i < numStates; i += step) {
-            size_t rabbitIdx = (i * numRabbit) / numStates;
-            if (rabbitIdx >= numRabbit) rabbitIdx = numRabbit - 1;
-
-            vec3 statePos = blackboxAircraftStates[i].getPosition() + blackboxOffset;
-            vec3 rabbitPos = rabbitPoints[rabbitIdx] + blackboxOffset;
-
-            vtkIdType p1 = segmentPoints->InsertNextPoint(statePos[0], statePos[1], statePos[2]);
-            vtkIdType p2 = segmentPoints->InsertNextPoint(rabbitPos[0], rabbitPos[1], rabbitPos[2]);
-
-            vtkSmartPointer<vtkLine> line = vtkSmartPointer<vtkLine>::New();
-            line->GetPointIds()->SetId(0, p1);
-            line->GetPointIds()->SetId(1, p2);
-            segmentLines->InsertNextCell(line);
+        if (startIdx < endIdx && startIdx < fullBlackboxAircraftStates.size()) {
+          std::vector<AircraftState> spanStates;
+          for (size_t j = startIdx; j < endIdx; j++) {
+            spanStates.push_back(fullBlackboxAircraftStates[j]);
           }
 
-          segmentData->SetPoints(segmentPoints);
-          segmentData->SetLines(segmentLines);
-          this->segmentGaps->AddInputData(segmentData);
+          if (spanStates.size() >= 2) {
+            std::vector<vec3> spanPoints = stateToVector(spanStates);
+            this->blackboxHighlightTapes->AddInputData(createTapeSet(blackboxOffset, spanPoints, stateToOrientation(spanStates)));
+          }
+        }
+
+        // Render path (rabbit points) at actual span position
+        if (spanIdx < xiaoSpanData.size()) {
+          const std::vector<vec3>& rabbitPoints = xiaoSpanData[spanIdx].rabbitPoints;
+          if (!rabbitPoints.empty()) {
+            // Rabbit points are in virtual coords + SIM_INITIAL_ALTITUDE
+            // Remove SIM_INITIAL_ALTITUDE and add actual position offset
+            std::vector<vec3> absoluteRabbitPoints;
+            for (const auto& pt : rabbitPoints) {
+              vec3 rawPt = pt;
+              rawPt[2] -= SIM_INITIAL_ALTITUDE;  // Remove simulation Z offset
+              absoluteRabbitPoints.push_back(rawPt + pathOffset);
+            }
+            this->paths->AddInputData(createPointSet(blackboxOffset, absoluteRabbitPoints));
+          }
+        }
+      }
+
+      // Ensure highlight actor is at full brightness
+      blackboxHighlightActor->GetProperty()->SetOpacity(1.0);
+      blackboxHighlightActor->GetBackfaceProperty()->SetOpacity(1.0);
+
+    } else {
+      // SINGLE SPAN MODE: Render current test span only
+
+      // Render blackbox tape (actual flight path - yellow)
+      if (a_bb.size() >= 2) {
+        this->blackboxTapes->AddInputData(createTapeSet(blackboxOffset, a_bb, stateToOrientation(blackboxAircraftStates)));
+        blackboxActor->GetProperty()->SetOpacity(1.0);
+        blackboxActor->GetBackfaceProperty()->SetOpacity(1.0);
+      }
+
+      // Render goal path from rabbit points (blue path line)
+      if (currentTestIndex >= 0 && currentTestIndex < static_cast<int>(xiaoSpanData.size())) {
+        const std::vector<vec3>& rabbitPoints = xiaoSpanData[currentTestIndex].rabbitPoints;
+        if (!rabbitPoints.empty()) {
+          this->paths->AddInputData(createPointSet(blackboxOffset, rabbitPoints));
+
+          // Render error bars connecting blackbox positions to rabbit points
+          // Correlate by index proportion: blackbox state i -> rabbit point floor(i * numRabbit / numStates)
+          if (!blackboxAircraftStates.empty()) {
+            vtkSmartPointer<vtkPolyData> segmentData = vtkSmartPointer<vtkPolyData>::New();
+            vtkSmartPointer<vtkPoints> segmentPoints = vtkSmartPointer<vtkPoints>::New();
+            vtkSmartPointer<vtkCellArray> segmentLines = vtkSmartPointer<vtkCellArray>::New();
+
+            size_t numStates = blackboxAircraftStates.size();
+            size_t numRabbit = rabbitPoints.size();
+
+            // Sample every Nth state to reduce clutter (show ~20-50 error bars)
+            size_t step = std::max(static_cast<size_t>(1), numStates / 50);
+
+            for (size_t i = 0; i < numStates; i += step) {
+              size_t rabbitIdx = (i * numRabbit) / numStates;
+              if (rabbitIdx >= numRabbit) rabbitIdx = numRabbit - 1;
+
+              vec3 statePos = blackboxAircraftStates[i].getPosition() + blackboxOffset;
+              vec3 rabbitPos = rabbitPoints[rabbitIdx] + blackboxOffset;
+
+              vtkIdType p1 = segmentPoints->InsertNextPoint(statePos[0], statePos[1], statePos[2]);
+              vtkIdType p2 = segmentPoints->InsertNextPoint(rabbitPos[0], rabbitPos[1], rabbitPos[2]);
+
+              vtkSmartPointer<vtkLine> line = vtkSmartPointer<vtkLine>::New();
+              line->GetPointIds()->SetId(0, p1);
+              line->GetPointIds()->SetId(1, p2);
+              segmentLines->InsertNextCell(line);
+            }
+
+            segmentData->SetPoints(segmentPoints);
+            segmentData->SetLines(segmentLines);
+            this->segmentGaps->AddInputData(segmentData);
+          }
         }
       }
     }
