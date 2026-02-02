@@ -72,6 +72,9 @@ struct SpanData {
   std::vector<vec3> rabbitPoints;  // Goal path points (rabbit positions with Z offset)
   size_t startStateIdx;
   size_t endStateIdx;
+  int pathIndex;  // Path index from GP State (0-5), -1 if not set
+
+  SpanData() : origin(0.0f, 0.0f, 0.0f), startStateIdx(0), endStateIdx(0), pathIndex(-1) {}
 };
 
 std::vector<TimestampedVec> craftToTargetVectors;  // Vec field with timestamps (all spans combined)
@@ -1838,6 +1841,7 @@ bool parseXiaoData(const std::string& xiaoLogPath) {
   std::regex inputRe(R"(GP Input:.*idx=(\d+).*rabbit=\[([-0-9\.]+),([-0-9\.]+),([-0-9\.]+)\].*vec=\[([-0-9\.]+),([-0-9\.]+),([-0-9\.]+)\].*relvel=([-0-9\.]+))");
   std::regex stateRe(R"(GP State:.*pos_raw=\[([-0-9\.]+),([-0-9\.]+),([-0-9\.]+)\].*pos=\[([-0-9\.]+),([-0-9\.]+),([-0-9\.]+)\].*vel=\[([-0-9\.]+),([-0-9\.]+),([-0-9\.]+)\].*quat=\[([-0-9\.]+),([-0-9\.]+),([-0-9\.]+),([-0-9\.]+)\])");
   std::regex autocFlagRe(R"(autoc=(Y|N))");
+  std::regex pathRe(R"(path=(\d+))");  // Capture path index from GP State line
   std::regex outputRe(R"(GP Output: rc=\[(\d+),(\d+),(\d+)\])");
 
   std::string line;
@@ -1922,6 +1926,7 @@ bool parseXiaoData(const std::string& xiaoLogPath) {
       currentSpanData.vecs.clear();
       currentSpanData.rabbitPoints.clear();
       currentSpanData.startStateIdx = currentStateIdx;
+      currentSpanData.pathIndex = -1;  // Reset path index for new span
       continue;
     }
 
@@ -1978,6 +1983,12 @@ bool parseXiaoData(const std::string& xiaoLogPath) {
       std::string autocFlag = "N";
       if (std::regex_search(line, autocMatch, autocFlagRe)) {
         autocFlag = autocMatch[1].str();
+      }
+
+      // Capture path index if present and not yet set for this span
+      std::smatch pathMatch;
+      if (inSpan && currentSpanData.pathIndex < 0 && std::regex_search(line, pathMatch, pathRe)) {
+        currentSpanData.pathIndex = std::stoi(pathMatch[1].str());
       }
 
       // Extract positions
@@ -2218,9 +2229,10 @@ void extractXiaoTestSpans() {
   }
   renderer.testSpans = validSpans;
 
-  // Copy vec data from xiaoSpanData to TestSpans
+  // Copy vec data and path index from xiaoSpanData to TestSpans
   for (size_t i = 0; i < renderer.testSpans.size() && i < xiaoSpanData.size(); i++) {
     renderer.testSpans[i].vecPoints = xiaoSpanData[i].vecs;
+    renderer.testSpans[i].pathIndex = xiaoSpanData[i].pathIndex;
   }
 
   std::cout << "Extracted " << renderer.testSpans.size() << " valid test spans from " << stateIndex << " aircraft states" << std::endl;
@@ -2230,6 +2242,7 @@ void extractXiaoTestSpans() {
               << " origin=[" << renderer.testSpans[i].origin[0] << ", "
               << renderer.testSpans[i].origin[1] << ", "
               << renderer.testSpans[i].origin[2] << "]"
+              << " path=" << renderer.testSpans[i].pathIndex
               << " vecs=" << renderer.testSpans[i].vecPoints.size() << std::endl;
   }
 }

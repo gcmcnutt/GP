@@ -83,12 +83,13 @@ struct TestSpan {
   unsigned long endTime;
   gp_vec3 origin;  // Test origin for xiao mode
   std::vector<TimestampedVec> vecPoints;  // Vec arrows for this span
+  int pathIndex;  // Path index from GP State (0-5)
 
-  TestSpan() : startIndex(0), endIndex(0), startTime(0), endTime(0), origin(0.0f, 0.0f, 0.0f) {}
+  TestSpan() : startIndex(0), endIndex(0), startTime(0), endTime(0), origin(0.0f, 0.0f, 0.0f), pathIndex(-1) {}
   TestSpan(size_t start, size_t end, unsigned long stime, unsigned long etime)
-    : startIndex(start), endIndex(end), startTime(stime), endTime(etime), origin(0.0f, 0.0f, 0.0f) {}
+    : startIndex(start), endIndex(end), startTime(stime), endTime(etime), origin(0.0f, 0.0f, 0.0f), pathIndex(-1) {}
   TestSpan(size_t start, size_t end, unsigned long stime, unsigned long etime, gp_vec3 orig)
-    : startIndex(start), endIndex(end), startTime(stime), endTime(etime), origin(orig) {}
+    : startIndex(start), endIndex(end), startTime(stime), endTime(etime), origin(orig), pathIndex(-1) {}
 };
 
 class Renderer {
