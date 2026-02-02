@@ -54,6 +54,7 @@ std::vector<std::string> csvLines;  // Store CSV lines for span analysis
 
 // Xiao-related global variables
 std::string xiaoLogFile = "";
+bool inXiaoOnlyMode = false;  // True when -x is used without simulation data
 
 // Timestamped vec structure for craft-to-target vectors
 struct TimestampedVec {
@@ -1373,6 +1374,9 @@ int main(int argc, char** argv) {
 
   // Load xiao log data if specified
   if (!xiaoLogFile.empty()) {
+    // Set xiao-only mode (no simulation data needed)
+    inXiaoOnlyMode = true;
+
     if (!loadXiaoData()) {
       std::cerr << "Failed to load xiao log data" << std::endl;
       return 1;
@@ -1394,6 +1398,24 @@ int main(int argc, char** argv) {
         renderer.showingFullFlight = true;
       }
     }
+  }
+
+  // Skip S3 operations in xiao-only mode
+  if (inXiaoOnlyMode) {
+    // Initialize renderer without S3 data
+    renderer.initialize();
+
+    // Print xiao-specific controls
+    std::cout << "\nXiao Flight Mode Controls:" << std::endl;
+    std::cout << "  t/r - Next/previous test span" << std::endl;
+    std::cout << "  a - Show all flight" << std::endl;
+    std::cout << "  SPACE - Playback animation" << std::endl;
+    std::cout << "  f - Focus mode" << std::endl;
+    std::cout << "  q - Quit" << std::endl;
+
+    // Start the interactor
+    renderer.renderWindowInteractor->Start();
+    return 0;
   }
 
   // should we look up the latest run?

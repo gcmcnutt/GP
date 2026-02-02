@@ -69,6 +69,9 @@ enum {
 // CustomInteractorStyle forward declaration
 class CustomInteractorStyle;
 
+// Extern declaration for xiao-only mode flag (defined in renderer.cc)
+extern bool inXiaoOnlyMode;
+
 // Forward declarations for timestamped structures (defined in renderer.cc)
 struct TimestampedVec;
 
@@ -227,16 +230,24 @@ protected:
     std::string key = rwi->GetKeySym();
 
     if (key == "n") {
-      this->InvokeEvent(NextModelEvent, nullptr);
+      if (!inXiaoOnlyMode) {  // Skip generation nav in xiao-only mode
+        this->InvokeEvent(NextModelEvent, nullptr);
+      }
     }
     else if (key == "N") {
-      this->InvokeEvent(NewestModelEvent, nullptr);
+      if (!inXiaoOnlyMode) {
+        this->InvokeEvent(NewestModelEvent, nullptr);
+      }
     }
     else if (key == "p") {
-      this->InvokeEvent(PreviousModelEvent, nullptr);
+      if (!inXiaoOnlyMode) {
+        this->InvokeEvent(PreviousModelEvent, nullptr);
+      }
     }
     else if (key == "P") {
-      this->InvokeEvent(OldestModelEvent, nullptr);
+      if (!inXiaoOnlyMode) {
+        this->InvokeEvent(OldestModelEvent, nullptr);
+      }
     }
     else if (key == "t") {
       this->InvokeEvent(NextTestEvent, nullptr);
