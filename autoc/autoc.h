@@ -72,6 +72,16 @@ public:
   int gpSeed = -1;  // Seed for GP initialization (-1 = use time-based seed)
   char* trainingNodes = "";  // Comma-separated list of node names for training (empty = all nodes)
 
+  // VARIATIONS1: Entry and wind direction variations (see specs/VARIATIONS1.md)
+  int enableEntryVariations = 0;  // 0=disabled, 1=enabled (requires crrcsim support)
+  int enableWindVariations = 0;   // 0=disabled, 1=enabled (requires crrcsim support)
+  // Sigma values in degrees (for documentation/logging, actual values in variation_generator.h)
+  double entryHeadingSigma = 45.0;
+  double entryRollSigma = 22.5;
+  double entryPitchSigma = 7.5;
+  double entrySpeedSigma = 0.1;
+  double windDirectionSigma = 45.0;
+
   // // Custom implementation of the << operator for the extraCfg type
   // std::ostream& operator << (std::ostream& os) {
   //   os << "simNumPathsPerGen: " + simNumPathsPerGen;

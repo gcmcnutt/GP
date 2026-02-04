@@ -238,16 +238,43 @@ vtkSmartPointer<vtkPolyData> Renderer::createTapeSet(vec3 offset, const std::vec
     return emptyPolyData;
   }
 
-  vtkSmartPointer<vtkPolyLine> polyLine = vtkSmartPointer<vtkPolyLine>::New();
-  polyLine->GetPointIds()->SetNumberOfIds(numPointsToShow);
+  // Filter out coincident points (VTK RibbonFilter fails on them)
+  std::vector<size_t> validIndices;
+  validIndices.reserve(numPointsToShow);
+  constexpr double MIN_DISTANCE_SQ = 1e-8;  // ~0.1mm threshold
 
   for (size_t i = 0; i < numPointsToShow; ++i) {
-    vec3 point = points[i] + offset;
+    if (validIndices.empty()) {
+      validIndices.push_back(i);
+    } else {
+      size_t lastIdx = validIndices.back();
+      vec3 delta = points[i] - points[lastIdx];
+      double distSq = delta[0]*delta[0] + delta[1]*delta[1] + delta[2]*delta[2];
+      if (distSq > MIN_DISTANCE_SQ) {
+        validIndices.push_back(i);
+      }
+    }
+  }
+
+  size_t numValidPoints = validIndices.size();
+
+  // Need at least 2 non-coincident points for ribbon
+  if (numValidPoints < 2) {
+    vtkSmartPointer<vtkPolyData> emptyPolyData = vtkSmartPointer<vtkPolyData>::New();
+    return emptyPolyData;
+  }
+
+  vtkSmartPointer<vtkPolyLine> polyLine = vtkSmartPointer<vtkPolyLine>::New();
+  polyLine->GetPointIds()->SetNumberOfIds(numValidPoints);
+
+  for (size_t i = 0; i < numValidPoints; ++i) {
+    size_t srcIdx = validIndices[i];
+    vec3 point = points[srcIdx] + offset;
     vtp->InsertNextPoint(point[0], point[1], point[2]);
     polyLine->GetPointIds()->SetId(i, i);
 
     // Use the path's orientation as the normal for the ribbon
-    orientations->InsertNextTuple(normals[i].data());
+    orientations->InsertNextTuple(normals[srcIdx].data());
   }
 
   lines->InsertNextCell(polyLine);
@@ -257,16 +284,12 @@ vtkSmartPointer<vtkPolyData> Renderer::createTapeSet(vec3 offset, const std::vec
   polyData->SetLines(lines);
   polyData->GetPointData()->SetNormals(orientations);
 
-  // Create a ribbon filter only if we have enough points
-  if (numPointsToShow >= 2) {
-    vtkSmartPointer<vtkRibbonFilter> ribbonFilter = vtkSmartPointer<vtkRibbonFilter>::New();
-    ribbonFilter->SetInputData(polyData);
-    ribbonFilter->SetWidth(0.5);
-    ribbonFilter->Update();
-    return ribbonFilter->GetOutput();
-  } else {
-    return polyData;
-  }
+  // Create ribbon from filtered points
+  vtkSmartPointer<vtkRibbonFilter> ribbonFilter = vtkSmartPointer<vtkRibbonFilter>::New();
+  ribbonFilter->SetInputData(polyData);
+  ribbonFilter->SetWidth(0.5);
+  ribbonFilter->Update();
+  return ribbonFilter->GetOutput();
 }
 
 /*

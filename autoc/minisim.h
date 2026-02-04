@@ -120,6 +120,14 @@ struct ScenarioMetadata {
   uint64_t bakeoffSequence = 0;
   bool enableDeterministicLogging = false;
 
+  // VARIATIONS1: Entry and wind direction offsets (computed by autoc, applied by crrcsim)
+  // All angles in radians, speed as multiplier
+  double entryHeadingOffset = 0.0;   // radians, offset from path tangent
+  double entryRollOffset = 0.0;      // radians, initial roll attitude
+  double entryPitchOffset = 0.0;     // radians, initial pitch attitude
+  double entrySpeedFactor = 1.0;     // multiplier on reference speed
+  double windDirectionOffset = 0.0;  // radians, offset from base wind direction
+
   friend class boost::serialization::access;
 
   template<class Archive>
@@ -142,9 +150,24 @@ struct ScenarioMetadata {
       scenarioSequence = 0;
       bakeoffSequence = 0;
     }
+    // VARIATIONS1 fields (version 5+)
+    if (version > 4) {
+      ar& entryHeadingOffset;
+      ar& entryRollOffset;
+      ar& entryPitchOffset;
+      ar& entrySpeedFactor;
+      ar& windDirectionOffset;
+    } else if (Archive::is_loading::value) {
+      // Defaults for older archives
+      entryHeadingOffset = 0.0;
+      entryRollOffset = 0.0;
+      entryPitchOffset = 0.0;
+      entrySpeedFactor = 1.0;
+      windDirectionOffset = 0.0;
+    }
   }
 };
-BOOST_CLASS_VERSION(ScenarioMetadata, 4)
+BOOST_CLASS_VERSION(ScenarioMetadata, 5)
 
 struct EvalData {
   std::vector<char> gp;

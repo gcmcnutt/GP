@@ -82,6 +82,7 @@ add_library(autoc_common STATIC
     aircraft_state.h
     threadpool.h
     gp_types.h
+    variation_generator.h
 )
 target_link_libraries(autoc_common gp ${Boost_LIBRARIES} Eigen3::Eigen)
 

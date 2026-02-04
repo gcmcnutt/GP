@@ -109,6 +109,14 @@ GPConfigVarInformation* ConfigManager::createConfigArray() {
         {"RandomPathSeedB", DATAINT, &extraConfig->randomPathSeedB},
         {"GPSeed", DATAINT, &extraConfig->gpSeed},
         {"TrainingNodes", DATASTRING, &extraConfig->trainingNodes},
+        // VARIATIONS1: Entry and wind direction variations
+        {"EnableEntryVariations", DATAINT, &extraConfig->enableEntryVariations},
+        {"EnableWindVariations", DATAINT, &extraConfig->enableWindVariations},
+        {"EntryHeadingSigma", DATADOUBLE, &extraConfig->entryHeadingSigma},
+        {"EntryRollSigma", DATADOUBLE, &extraConfig->entryRollSigma},
+        {"EntryPitchSigma", DATADOUBLE, &extraConfig->entryPitchSigma},
+        {"EntrySpeedSigma", DATADOUBLE, &extraConfig->entrySpeedSigma},
+        {"WindDirectionSigma", DATADOUBLE, &extraConfig->windDirectionSigma},
         {"", DATAINT, NULL}
     };
     return configArray;

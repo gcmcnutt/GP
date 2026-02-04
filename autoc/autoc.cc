@@ -36,6 +36,7 @@ From skeleton/skeleton.cc
 #include "logger.h"
 #include "pathgen.h"
 #include "config_manager.h"
+#include "variation_generator.h"
 
 #include <aws/core/Aws.h>
 #include <aws/s3/S3Client.h>
@@ -91,6 +92,24 @@ extern std::atomic_ulong nanDetector;
 
 std::vector<std::vector<Path>> generationPaths;
 std::vector<ScenarioDescriptor> generationScenarios;
+
+// VARIATIONS1: Global sigma parameters, initialized at startup from config
+static VariationSigmas gVariationSigmas = {0.0, 0.0, 0.0, 0.0, 0.0};
+static bool gVariationsEnabled = false;
+
+// Helper to populate variation offsets in ScenarioMetadata
+static void populateVariationOffsets(ScenarioMetadata& meta) {
+  if (!gVariationsEnabled) {
+    // Leave defaults (0.0, 1.0 for speed)
+    return;
+  }
+  VariationOffsets v = generateVariations(meta.windSeed, gVariationSigmas);
+  meta.entryHeadingOffset = v.entryHeadingOffset;
+  meta.entryRollOffset = v.entryRollOffset;
+  meta.entryPitchOffset = v.entryPitchOffset;
+  meta.entrySpeedFactor = v.entrySpeedFactor;
+  meta.windDirectionOffset = v.windDirectionOffset;
+}
 std::atomic_ulong nanDetector = 0;
 std::ofstream fout;
 std::ofstream bout;
@@ -766,6 +785,9 @@ void MyGP::evalTask(WorkerContext& context)
       }
     }
 
+    // VARIATIONS1: Populate entry/wind variation offsets from windSeed
+    populateVariationOffsets(meta);
+
     evalData.scenarioList.push_back(meta);
   }
   if (!evalData.scenarioList.empty()) {
@@ -1193,7 +1215,54 @@ int main(int argc, char** argv)
   *logger.info() << "WindSeedBase: " << ConfigManager::getExtraConfig().windSeedBase << endl;
   *logger.info() << "WindSeedStride: " << ConfigManager::getExtraConfig().windSeedStride << endl;
   *logger.info() << "GPSeed: " << ConfigManager::getExtraConfig().gpSeed << endl;
-  *logger.info() << "RandomPathSeedB: " << ConfigManager::getExtraConfig().randomPathSeedB << endl << endl;
+  *logger.info() << "RandomPathSeedB: " << ConfigManager::getExtraConfig().randomPathSeedB << endl;
+
+  // Log VARIATIONS1 settings and initialize global sigmas
+  const ExtraConfig& extraCfg = ConfigManager::getExtraConfig();
+  *logger.info() << "EnableEntryVariations: " << extraCfg.enableEntryVariations << endl;
+  *logger.info() << "EnableWindVariations: " << extraCfg.enableWindVariations << endl;
+
+  // Initialize global variation parameters from config (degrees -> radians)
+  gVariationsEnabled = (extraCfg.enableEntryVariations || extraCfg.enableWindVariations);
+  gVariationSigmas = VariationSigmas::fromDegrees(
+      extraCfg.entryHeadingSigma,
+      extraCfg.entryRollSigma,
+      extraCfg.entryPitchSigma,
+      extraCfg.entrySpeedSigma,  // already a fraction
+      extraCfg.windDirectionSigma
+  );
+
+  // Log scenario variation table (computed values for each windSeed)
+  if (extraCfg.enableEntryVariations || extraCfg.enableWindVariations) {
+    *logger.info() << endl;
+    *logger.info() << "SCENARIO VARIATIONS (base=" << extraCfg.windSeedBase
+                   << " stride=" << extraCfg.windSeedStride
+                   << " count=" << extraCfg.windScenarioCount << ")" << endl;
+    *logger.info() << "Sigmas: heading=" << extraCfg.entryHeadingSigma << "° "
+                   << "roll=" << extraCfg.entryRollSigma << "° "
+                   << "pitch=" << extraCfg.entryPitchSigma << "° "
+                   << "speed=" << (extraCfg.entrySpeedSigma * 100) << "% "
+                   << "wind=" << extraCfg.windDirectionSigma << "°" << endl;
+    *logger.info() << "# Idx    Seed   Heading    Roll   Pitch   Speed  WindDir" << endl;
+
+    for (int i = 0; i < extraCfg.windScenarioCount; i++) {
+      unsigned int seed = static_cast<unsigned int>(extraCfg.windSeedBase + i * extraCfg.windSeedStride);
+      VariationOffsets v = generateVariations(seed, gVariationSigmas);
+
+      // Format with fixed width for alignment
+      std::ostringstream line;
+      line << std::fixed << std::setprecision(1)
+           << std::setw(4) << i << "  "
+           << std::setw(6) << seed << "  "
+           << std::setw(7) << radToDeg(v.entryHeadingOffset) << "°  "
+           << std::setw(6) << radToDeg(v.entryRollOffset) << "°  "
+           << std::setw(5) << radToDeg(v.entryPitchOffset) << "°  "
+           << std::setw(5) << std::setprecision(2) << v.entrySpeedFactor << "x  "
+           << std::setw(7) << std::setprecision(1) << radToDeg(v.windDirectionOffset) << "°";
+      *logger.info() << line.str() << endl;
+    }
+    *logger.info() << endl;
+  }
 
   // Set training node mask before creating node set
   setTrainingNodesMask(ConfigManager::getExtraConfig().trainingNodes);
@@ -1367,6 +1436,8 @@ int main(int argc, char** argv)
               meta.windSeed = scenario.windSeed;
             }
           }
+          // VARIATIONS1: Populate entry/wind variation offsets from windSeed
+          populateVariationOffsets(meta);
           evalData.scenarioList.push_back(meta);
         }
         if (!evalData.scenarioList.empty()) {
