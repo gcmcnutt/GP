@@ -124,6 +124,11 @@ static const NodeDef allNodes[] = {
   {SQRT, "SQRT", 1},
   {MIN, "MIN", 2},
   {MAX, "MAX", 2},
+  // Temporal state terminals - see specs/TEMPORAL_STATE.md
+  {GETDPHI_PREV, "GETDPHI_PREV", 1},     // 1 arg: history tick index
+  {GETDTHETA_PREV, "GETDTHETA_PREV", 1}, // 1 arg: history tick index
+  {GETDPHI_RATE, "GETDPHI_RATE", 0},     // 0 args: nullary terminal
+  {GETDTHETA_RATE, "GETDTHETA_RATE", 0}, // 0 args: nullary terminal
 };
 static const int allNodesCount = sizeof(allNodes) / sizeof(allNodes[0]);
 

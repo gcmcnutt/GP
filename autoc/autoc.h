@@ -90,6 +90,8 @@ public:
 };
 
 // Define function and terminal identifiers
+// NOTE: New operators must be added at the END (before _END) to preserve
+// backward compatibility with serialized bytecode programs.
 enum Operators {
   ADD = 0, SUB, MUL, DIV,
   IF, EQ, GT,
@@ -100,7 +102,11 @@ enum Operators {
   GETALPHA, GETBETA, GETVELX, GETVELY, GETVELZ,
   GETROLL_RAD, GETPITCH_RAD,
   CLAMP, ATAN2, ABS, SQRT, MIN, MAX,
-  OP_PI, ZERO, ONE, TWO, PROGN, _END
+  OP_PI, ZERO, ONE, TWO, PROGN,
+  // Temporal state terminals (added 2026-02) - see specs/TEMPORAL_STATE.md
+  GETDPHI_PREV, GETDTHETA_PREV,   // History lookback (1 arg: tick index)
+  GETDPHI_RATE, GETDTHETA_RATE,   // Error derivatives (nullary)
+  _END
 };
 const int OPERATORS_NR_ITEM = _END;
 

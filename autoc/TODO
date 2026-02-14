@@ -28,27 +28,6 @@ DEMETIC MODE ELITE PRESERVATION (broken fitness tracking)
 - figure out how to use crrcsim robots to form lead plane
 - variations project - to get closer to zero-shot
   - power, drag, service response times
-  - get random start/orientation working in crrcsim, consider fitness function for distance, alignment is ramped sensitivity for first couple of seconds (to allow capture from random start)
-  - wind speed, direction, turbulence multiplier need to vary
-    * CURRENT: WindScenarios only varies turbulence/gust patterns via PRNG seed
-    * Wind direction fixed at 330° (from scenery/config davis-orig.xml)
-    * Base wind velocity fixed at 12 ft/s (~8 mph) from scenery/config
-    * Turbulence intensity fixed at 1.0 (relative Dryden model multiplier)
-    * TO ADD VARIATION:
-      - Wind direction: Should vary across 360° (or at least 0°, 90°, 180°, 270°)
-      - Wind velocity: Should vary 5-25 ft/s (3-17 mph) typical soaring range
-      - Turbulence intensity: Should vary 0.5-2.0 to test calm vs rough air
-      - Implementation: Modify config loading to randomize based on wind seed
-        * See config.cpp:173-249 (T_Wind::setDefaults and read methods)
-        * Wind seed controls: Dryden turbulence model gaussian noise (eta1-4 in windfield.h:131)
-        * Wind seed controls: Thermal updraft positions
-    * EXPECTED VELOCITY RANGES (from crrcsim source):
-      - Steady wind: 0-80 ft/s (GUI max), typical 10-30 ft/s for gliders
-      - Horizontal gusts (3σ): ±2-3 mph from Dryden turbulence model
-      - Vertical gusts (3σ): ±3-5 ft/s
-      - Thermal updrafts: 0-8 ft/s (strength_mean=5, sigma=1)
-      - Thermal inflow (near ground): ±1.4 mph horizontal
-      - Worst-case combined: ~24-27 mph horizontal, ±8-13 ft/s vertical
   - also varying speed rabbit
   - craft variations (for robustness to airframe differences)
     * CG position variation
@@ -129,37 +108,6 @@ DEMETIC MODE ELITE PRESERVATION (broken fitness tracking)
   - Energy management
   - Path preview / anticipation
 
-* TEMPORAL STATE FOR GP NODES
-  The GP tree is stateless - re-evaluated fresh each tick with no memory of prior evaluations.
-  This limits ability to do true integral control or trajectory prediction.
-
-  What we have:
-  - Current aircraft state (position, attitude, velocity)
-  - Future path points (via GETDPHI/GETDTHETA/GETDTARGET with positive lookahead)
-
-  What we're missing for integration:
-  - Past aircraft states (where was I 1, 2, 3 steps ago?)
-  - Past errors (what was GETDPHI(n) on previous evaluations?)
-
-  Options to enable true integration:
-
-  1. State registers - Add nodes like STORE(n, val) and RECALL(n) that persist across
-     evaluations. Complex, makes programs harder to analyze.
-
-  2. Error history terminals - GETDPHI_PREV(n) returns GETDPHI from n evaluations ago.
-     Requires ring buffer in AircraftState. Simpler than general registers.
-
-  3. Position history - GETPOS_PREV(n) for past aircraft positions. Could compute
-     velocity changes, acceleration.
-
-  4. Derivative approximation - GETDPHI_RATE = (current GETDPHI - previous GETDPHI) / dt.
-     Gives the D in PID directly.
-
-  Trade-off: Stateless design means programs are pure functions - same inputs always
-  give same outputs, easier to verify and port. Adding state complicates this.
-
-  Related: Lookbehind with negative values (GETDPHI(-n)) looks at path points behind
-  the rabbit, not at past aircraft errors. Could be useful for detecting overshoot.
 
 * ERROR CONE FOR FUTURE PATH POINTS
   The further ahead we look from rabbit's current position, the less accurate the

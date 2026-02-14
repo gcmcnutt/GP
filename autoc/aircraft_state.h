@@ -275,6 +275,50 @@ struct AircraftState {
     gp_vec3 getWindVelocity() const { return wind_velocity; }
     void setWindVelocity(const gp_vec3& wind) { wind_velocity = wind; }
 
+    // =========================================================================
+    // Temporal history for GP nodes - see specs/TEMPORAL_STATE.md
+    // =========================================================================
+    static constexpr int HISTORY_SIZE = 10;  // 1 sec at 10Hz
+
+    // Record current errors to history (call before GP eval each tick)
+    void recordErrorHistory(gp_scalar dPhi, gp_scalar dTheta, unsigned long timeMs) {
+      dPhiHistory_[historyIndex_] = dPhi;
+      dThetaHistory_[historyIndex_] = dTheta;
+      timeHistory_[historyIndex_] = timeMs;
+      historyIndex_ = (historyIndex_ + 1) % HISTORY_SIZE;
+      if (historyCount_ < HISTORY_SIZE) historyCount_++;
+    }
+
+    // Get historical dPhi (n=0 is most recent, n=1 is one tick ago, etc.)
+    // Returns 0.0f if history not available. Uses CLAMP_DEF for portability.
+    gp_scalar getHistoricalDPhi(int n) const {
+      if (historyCount_ == 0) return static_cast<gp_scalar>(0.0f);
+      n = CLAMP_DEF(n, 0, historyCount_ - 1);
+      int idx = (historyIndex_ - 1 - n + HISTORY_SIZE) % HISTORY_SIZE;
+      return dPhiHistory_[idx];
+    }
+
+    gp_scalar getHistoricalDTheta(int n) const {
+      if (historyCount_ == 0) return static_cast<gp_scalar>(0.0f);
+      n = CLAMP_DEF(n, 0, historyCount_ - 1);
+      int idx = (historyIndex_ - 1 - n + HISTORY_SIZE) % HISTORY_SIZE;
+      return dThetaHistory_[idx];
+    }
+
+    unsigned long getHistoricalTime(int n) const {
+      if (historyCount_ == 0) return 0;
+      n = CLAMP_DEF(n, 0, historyCount_ - 1);
+      int idx = (historyIndex_ - 1 - n + HISTORY_SIZE) % HISTORY_SIZE;
+      return timeHistory_[idx];
+    }
+
+    int getHistoryCount() const { return historyCount_; }
+
+    void clearHistory() {
+      historyIndex_ = 0;
+      historyCount_ = 0;
+    }
+
     void minisimAdvanceState(gp_scalar dt) {
       gp_scalar dtSec = dt / 1000.0f;
 
@@ -327,6 +371,13 @@ struct AircraftState {
 
     // Wind diagnostic fields (for debugging non-determinism)
     gp_vec3 wind_velocity;  // Wind vector (north, east, down) from calculate_wind()
+
+    // Temporal history for GP nodes - see specs/TEMPORAL_STATE.md
+    gp_scalar dPhiHistory_[HISTORY_SIZE] = {0};
+    gp_scalar dThetaHistory_[HISTORY_SIZE] = {0};
+    unsigned long timeHistory_[HISTORY_SIZE] = {0};
+    int historyIndex_ = 0;   // Next write position (ring buffer)
+    int historyCount_ = 0;   // Valid samples (0 to HISTORY_SIZE)
 
 #ifdef GP_BUILD
     friend class boost::serialization::access;
