@@ -981,11 +981,66 @@ void MyGP::evalTask(WorkerContext& context)
           : ALTITUDE_HIGH_POWER;  // Above target: lighter penalty
 
       // ====================================================================
+      // PATH NORMAL ALIGNMENT: Coordinated flight orientation error
+      // Aircraft "up" should point toward inside of turn for coordinated flight
+      // ====================================================================
+      gp_scalar normal_error = 0.0f;
+
+      // Compute desired normal from path curvature (Frenet frame)
+      gp_vec3 desired_normal(0.0f, 0.0f, -1.0f);  // Default: world "up" for straight flight
+
+      // Need at least 3 path points to compute curvature
+      if (nextIndex > 0 && nextIndex < static_cast<int>(path.size()) - 1) {
+        // Get three consecutive path points for curvature calculation
+        gp_vec3 p_prev = path.at(nextIndex - 1).start;
+        gp_vec3 p_curr = currentPathPoint.start;
+        gp_vec3 p_next = path.at(nextIndex + 1).start;
+
+        // Compute tangent vectors
+        gp_vec3 t1 = (p_curr - p_prev);
+        gp_vec3 t2 = (p_next - p_curr);
+        gp_scalar t1_norm = t1.norm();
+        gp_scalar t2_norm = t2.norm();
+
+        if (t1_norm > static_cast<gp_scalar>(1e-5f) && t2_norm > static_cast<gp_scalar>(1e-5f)) {
+          t1 = t1 / t1_norm;
+          t2 = t2 / t2_norm;
+
+          // Curvature direction: points toward center of turn circle
+          // For a discrete curve, approximate as the change in tangent direction
+          gp_vec3 delta_t = t2 - t1;
+          gp_scalar curvature_mag = delta_t.norm();
+
+          if (curvature_mag > static_cast<gp_scalar>(1e-4f)) {
+            // Turning: desired normal points toward center of curvature
+            desired_normal = delta_t / curvature_mag;
+          } else {
+            // Straight: desired normal is world "up" (NED: -Z)
+            desired_normal = gp_vec3(0.0f, 0.0f, -1.0f);
+          }
+        }
+      }
+
+      // Get aircraft's actual "up" vector in world frame
+      // Body frame: X=forward, Y=right, Z=down, so "up" is -Z
+      gp_vec3 aircraft_up = craftOrientation * gp_vec3(0.0f, 0.0f, -1.0f);
+
+      // Compute angle error between desired and actual normal
+      gp_scalar dot_product = std::clamp(aircraft_up.dot(desired_normal),
+                                         static_cast<gp_scalar>(-1.0f),
+                                         static_cast<gp_scalar>(1.0f));
+      gp_scalar normal_error_rad = std::acos(dot_product);
+
+      // Scale to meter-equivalent for fitness combination
+      normal_error = normal_error_rad * static_cast<gp_scalar>(NORMAL_ERROR_SCALE);
+
+      // ====================================================================
       // PER-STEP FITNESS: Raw units with power-law weighting
       // ====================================================================
       gp_fitness step_fitness = pow(waypointDistance, waypoint_power) +
                                 pow(movementDirectionError, MOVEMENT_DIRECTION_WEIGHT) +
-                                pow(energy_deviation, altitude_power);
+                                pow(energy_deviation, altitude_power) +
+                                pow(normal_error, NORMAL_ERROR_POWER);
 
       step_fitness_sum += step_fitness * STEP_TIME_WEIGHT;
 
@@ -1570,10 +1625,49 @@ int main(int argc, char** argv)
                 ? ALTITUDE_LOW_POWER    // Below target: harsher penalty
                 : ALTITUDE_HIGH_POWER;  // Above target: lighter penalty
 
+            // Path normal alignment: coordinated flight orientation error
+            gp_scalar normal_error = 0.0f;
+
+            // Compute desired normal from path curvature (Frenet frame)
+            gp_vec3 desired_normal(0.0f, 0.0f, -1.0f);  // Default: world "up" for straight flight
+
+            if (nextIndex > 0 && nextIndex < static_cast<int>(path.size()) - 1) {
+              gp_vec3 p_prev = path.at(nextIndex - 1).start;
+              gp_vec3 p_curr = currentPathPoint.start;
+              gp_vec3 p_next = path.at(nextIndex + 1).start;
+
+              gp_vec3 t1 = (p_curr - p_prev);
+              gp_vec3 t2 = (p_next - p_curr);
+              gp_scalar t1_norm = t1.norm();
+              gp_scalar t2_norm = t2.norm();
+
+              if (t1_norm > static_cast<gp_scalar>(1e-5f) && t2_norm > static_cast<gp_scalar>(1e-5f)) {
+                t1 = t1 / t1_norm;
+                t2 = t2 / t2_norm;
+
+                gp_vec3 delta_t = t2 - t1;
+                gp_scalar curvature_mag = delta_t.norm();
+
+                if (curvature_mag > static_cast<gp_scalar>(1e-4f)) {
+                  desired_normal = delta_t / curvature_mag;
+                } else {
+                  desired_normal = gp_vec3(0.0f, 0.0f, -1.0f);
+                }
+              }
+            }
+
+            gp_vec3 aircraft_up = craftOrientation * gp_vec3(0.0f, 0.0f, -1.0f);
+            gp_scalar dot_product = std::clamp(aircraft_up.dot(desired_normal),
+                                               static_cast<gp_scalar>(-1.0f),
+                                               static_cast<gp_scalar>(1.0f));
+            gp_scalar normal_error_rad = std::acos(dot_product);
+            normal_error = normal_error_rad * static_cast<gp_scalar>(NORMAL_ERROR_SCALE);
+
             // Per-step fitness: raw units with power-law weighting
             gp_fitness step_fitness = pow(waypointDistance, waypoint_power) +
                                       pow(movementDirectionError, MOVEMENT_DIRECTION_WEIGHT) +
-                                      pow(energy_deviation, altitude_power);
+                                      pow(energy_deviation, altitude_power) +
+                                      pow(normal_error, NORMAL_ERROR_POWER);
 
             step_fitness_sum += step_fitness * STEP_TIME_WEIGHT;
 
