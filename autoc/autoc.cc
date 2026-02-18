@@ -124,7 +124,7 @@ std::atomic<uint64_t> globalSimRunCounter{0};
 
 // Global elite tracking across generations (dispatcher-side)
 // Detect divergence when same gpHash + scenarios evaluates to different fitness
-static double gLastEliteFitness = std::numeric_limits<double>::infinity();
+static gp_fitness gLastEliteFitness = std::numeric_limits<gp_fitness>::infinity();
 static uint64_t gLastEliteGpHash = 0;
 static int gLastEliteLength = 0;
 static int gLastEliteDepth = 0;
@@ -489,14 +489,14 @@ public:
         }
         for (int start = 0; start < containerSize(); start += demeSize) {
           int end = std::min(start + demeSize, containerSize());
-          gp_scalar bestFitness = std::numeric_limits<gp_scalar>::infinity();
+          gp_fitness bestFitness = std::numeric_limits<gp_fitness>::infinity();
           int bestIndex = start;
           for (int idx = start; idx < end; ++idx) {
             MyGP* candidate = NthMyGP(idx);
             if (!candidate) {
               continue;
             }
-            gp_scalar fitness = static_cast<gp_scalar>(candidate->getFitness());
+            gp_fitness fitness = candidate->getFitness();
             if (!std::isfinite(fitness)) {
               continue;
             }
@@ -603,12 +603,12 @@ public:
 
               int demeEnd = std::min(demeStart + demeSize, containerSize());
               int worstInDeme = demeStart;
-              gp_scalar worstFitness = std::numeric_limits<gp_scalar>::lowest();
+              gp_fitness worstFitness = std::numeric_limits<gp_fitness>::lowest();
 
               for (int idx = demeStart; idx < demeEnd; ++idx) {
                 MyGP* candidate = NthMyGP(idx);
                 if (!candidate) continue;
-                gp_scalar fitness = static_cast<gp_scalar>(candidate->getFitness());
+                gp_fitness fitness = candidate->getFitness();
                 if (!std::isfinite(fitness) || fitness > worstFitness) {
                   worstFitness = fitness;
                   worstInDeme = idx;
@@ -914,6 +914,10 @@ void MyGP::evalTask(WorkerContext& context)
     gp_fitness step_fitness_sum = 0.0;
     int simulation_steps = 0;
 
+    // Attitude delta tracking: penalize excessive rotation per step
+    gp_fitness prev_roll = 0.0, prev_pitch = 0.0;
+    bool first_attitude_sample = true;
+
     // now walk next steps of actual path
     while (++stepIndex < aircraftState.size()) {
       auto& stepAircraftState = aircraftState.at(stepIndex);
@@ -926,6 +930,33 @@ void MyGP::evalTask(WorkerContext& context)
       gp_vec3 aircraftPosition = stepAircraftState.getPosition();
       gp_quat craftOrientation = stepAircraftState.getOrientation();
       gp_vec3 aircraftUp = craftOrientation * gp_vec3::UnitZ();
+
+      // ====================================================================
+      // ATTITUDE DELTA: Per-step roll/pitch change penalty
+      // ====================================================================
+      gp_fitness qw = craftOrientation.w();
+      gp_fitness qx = craftOrientation.x();
+      gp_fitness qy = craftOrientation.y();
+      gp_fitness qz = craftOrientation.z();
+
+      // Roll (phi): rotation around X axis
+      gp_fitness roll = atan2(2.0 * (qw * qx + qy * qz),
+                              1.0 - 2.0 * (qx * qx + qy * qy));
+      // Pitch (theta): rotation around Y axis
+      gp_fitness sinp = 2.0 * (qw * qy - qz * qx);
+      sinp = std::clamp(sinp, -1.0, 1.0);
+      gp_fitness pitch = asin(sinp);
+
+      gp_fitness attitude_delta = 0.0;
+      if (first_attitude_sample) {
+        prev_roll = roll;
+        prev_pitch = pitch;
+        first_attitude_sample = false;
+      } else {
+        attitude_delta = (fabs(roll - prev_roll) + fabs(pitch - prev_pitch)) * ATTITUDE_DELTA_SCALE;
+        prev_roll = roll;
+        prev_pitch = pitch;
+      }
 
       // ====================================================================
       // METRIC 1: Waypoint distance (meters, raw)
@@ -981,66 +1012,13 @@ void MyGP::evalTask(WorkerContext& context)
           : ALTITUDE_HIGH_POWER;  // Above target: lighter penalty
 
       // ====================================================================
-      // PATH NORMAL ALIGNMENT: Coordinated flight orientation error
-      // Aircraft "up" should point toward inside of turn for coordinated flight
-      // ====================================================================
-      gp_scalar normal_error = 0.0f;
-
-      // Compute desired normal from path curvature (Frenet frame)
-      gp_vec3 desired_normal(0.0f, 0.0f, -1.0f);  // Default: world "up" for straight flight
-
-      // Need at least 3 path points to compute curvature
-      if (nextIndex > 0 && nextIndex < static_cast<int>(path.size()) - 1) {
-        // Get three consecutive path points for curvature calculation
-        gp_vec3 p_prev = path.at(nextIndex - 1).start;
-        gp_vec3 p_curr = currentPathPoint.start;
-        gp_vec3 p_next = path.at(nextIndex + 1).start;
-
-        // Compute tangent vectors
-        gp_vec3 t1 = (p_curr - p_prev);
-        gp_vec3 t2 = (p_next - p_curr);
-        gp_scalar t1_norm = t1.norm();
-        gp_scalar t2_norm = t2.norm();
-
-        if (t1_norm > static_cast<gp_scalar>(1e-5f) && t2_norm > static_cast<gp_scalar>(1e-5f)) {
-          t1 = t1 / t1_norm;
-          t2 = t2 / t2_norm;
-
-          // Curvature direction: points toward center of turn circle
-          // For a discrete curve, approximate as the change in tangent direction
-          gp_vec3 delta_t = t2 - t1;
-          gp_scalar curvature_mag = delta_t.norm();
-
-          if (curvature_mag > static_cast<gp_scalar>(1e-4f)) {
-            // Turning: desired normal points toward center of curvature
-            desired_normal = delta_t / curvature_mag;
-          } else {
-            // Straight: desired normal is world "up" (NED: -Z)
-            desired_normal = gp_vec3(0.0f, 0.0f, -1.0f);
-          }
-        }
-      }
-
-      // Get aircraft's actual "up" vector in world frame
-      // Body frame: X=forward, Y=right, Z=down, so "up" is -Z
-      gp_vec3 aircraft_up = craftOrientation * gp_vec3(0.0f, 0.0f, -1.0f);
-
-      // Compute angle error between desired and actual normal
-      gp_scalar dot_product = std::clamp(aircraft_up.dot(desired_normal),
-                                         static_cast<gp_scalar>(-1.0f),
-                                         static_cast<gp_scalar>(1.0f));
-      gp_scalar normal_error_rad = std::acos(dot_product);
-
-      // Scale to meter-equivalent for fitness combination
-      normal_error = normal_error_rad * static_cast<gp_scalar>(NORMAL_ERROR_SCALE);
-
-      // ====================================================================
       // PER-STEP FITNESS: Raw units with power-law weighting
+      // Attitude delta is linear (already scaled), others use power-law
       // ====================================================================
       gp_fitness step_fitness = pow(waypointDistance, waypoint_power) +
                                 pow(movementDirectionError, MOVEMENT_DIRECTION_WEIGHT) +
                                 pow(energy_deviation, altitude_power) +
-                                pow(normal_error, NORMAL_ERROR_POWER);
+                                attitude_delta;
 
       step_fitness_sum += step_fitness * STEP_TIME_WEIGHT;
 
@@ -1570,6 +1548,10 @@ int main(int argc, char** argv)
           gp_fitness step_fitness_sum = 0.0;
           int simulation_steps = 0;
 
+          // Attitude delta tracking: penalize excessive rotation per step
+          gp_fitness prev_roll = 0.0, prev_pitch = 0.0;
+          bool first_attitude_sample = true;
+
           while (++stepIndex < aircraftState.size()) {
             auto& stepAircraftState = aircraftState.at(stepIndex);
             int rawPathIndex = stepAircraftState.getThisPathIndex();
@@ -1581,6 +1563,31 @@ int main(int argc, char** argv)
             gp_vec3 aircraftPosition = stepAircraftState.getPosition();
             gp_quat craftOrientation = stepAircraftState.getOrientation();
             gp_vec3 aircraftUp = craftOrientation * gp_vec3::UnitZ();
+
+            // Attitude delta: per-step roll/pitch change penalty
+            gp_fitness qw = craftOrientation.w();
+            gp_fitness qx = craftOrientation.x();
+            gp_fitness qy = craftOrientation.y();
+            gp_fitness qz = craftOrientation.z();
+
+            // Roll (phi): rotation around X axis
+            gp_fitness roll = atan2(2.0 * (qw * qx + qy * qz),
+                                    1.0 - 2.0 * (qx * qx + qy * qy));
+            // Pitch (theta): rotation around Y axis
+            gp_fitness sinp = 2.0 * (qw * qy - qz * qx);
+            sinp = std::clamp(sinp, -1.0, 1.0);
+            gp_fitness pitch = asin(sinp);
+
+            gp_fitness attitude_delta = 0.0;
+            if (first_attitude_sample) {
+              prev_roll = roll;
+              prev_pitch = pitch;
+              first_attitude_sample = false;
+            } else {
+              attitude_delta = (fabs(roll - prev_roll) + fabs(pitch - prev_pitch)) * ATTITUDE_DELTA_SCALE;
+              prev_roll = roll;
+              prev_pitch = pitch;
+            }
 
             // Waypoint distance (meters, raw)
             // Asymmetric power based on position relative to rabbit's velocity vector
@@ -1625,49 +1632,12 @@ int main(int argc, char** argv)
                 ? ALTITUDE_LOW_POWER    // Below target: harsher penalty
                 : ALTITUDE_HIGH_POWER;  // Above target: lighter penalty
 
-            // Path normal alignment: coordinated flight orientation error
-            gp_scalar normal_error = 0.0f;
-
-            // Compute desired normal from path curvature (Frenet frame)
-            gp_vec3 desired_normal(0.0f, 0.0f, -1.0f);  // Default: world "up" for straight flight
-
-            if (nextIndex > 0 && nextIndex < static_cast<int>(path.size()) - 1) {
-              gp_vec3 p_prev = path.at(nextIndex - 1).start;
-              gp_vec3 p_curr = currentPathPoint.start;
-              gp_vec3 p_next = path.at(nextIndex + 1).start;
-
-              gp_vec3 t1 = (p_curr - p_prev);
-              gp_vec3 t2 = (p_next - p_curr);
-              gp_scalar t1_norm = t1.norm();
-              gp_scalar t2_norm = t2.norm();
-
-              if (t1_norm > static_cast<gp_scalar>(1e-5f) && t2_norm > static_cast<gp_scalar>(1e-5f)) {
-                t1 = t1 / t1_norm;
-                t2 = t2 / t2_norm;
-
-                gp_vec3 delta_t = t2 - t1;
-                gp_scalar curvature_mag = delta_t.norm();
-
-                if (curvature_mag > static_cast<gp_scalar>(1e-4f)) {
-                  desired_normal = delta_t / curvature_mag;
-                } else {
-                  desired_normal = gp_vec3(0.0f, 0.0f, -1.0f);
-                }
-              }
-            }
-
-            gp_vec3 aircraft_up = craftOrientation * gp_vec3(0.0f, 0.0f, -1.0f);
-            gp_scalar dot_product = std::clamp(aircraft_up.dot(desired_normal),
-                                               static_cast<gp_scalar>(-1.0f),
-                                               static_cast<gp_scalar>(1.0f));
-            gp_scalar normal_error_rad = std::acos(dot_product);
-            normal_error = normal_error_rad * static_cast<gp_scalar>(NORMAL_ERROR_SCALE);
-
             // Per-step fitness: raw units with power-law weighting
+            // Attitude delta is linear (already scaled), others use power-law
             gp_fitness step_fitness = pow(waypointDistance, waypoint_power) +
                                       pow(movementDirectionError, MOVEMENT_DIRECTION_WEIGHT) +
                                       pow(energy_deviation, altitude_power) +
-                                      pow(normal_error, NORMAL_ERROR_POWER);
+                                      attitude_delta;
 
             step_fitness_sum += step_fitness * STEP_TIME_WEIGHT;
 

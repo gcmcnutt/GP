@@ -37,12 +37,10 @@ struct WorkerContext;
 #define ALTITUDE_LOW_POWER 1.5              // Power when below target (harder to recover)
 #define ALTITUDE_HIGH_POWER 1.0             // Power when above target (easy to correct)
 
-// Path normal alignment: aircraft orientation error relative to coordinated flight
-// For coordinated turns, aircraft "up" should point toward inside of turn circle
-// For straight flight, aircraft should be wings-level or transitioning smoothly
-// Error measured as angle (radians) between desired and actual aircraft normal
-#define NORMAL_ERROR_POWER 1.5              // Power for normal alignment error
-#define NORMAL_ERROR_SCALE 10.0             // Scale factor: normalize ~0.5 rad error to ~meter-equivalent
+// Attitude delta penalty: penalize excessive rotation over flight
+// Sum of absolute roll + pitch changes (radians) accumulated over entire flight
+// Rewards smooth, stable flight; penalizes spiraling or oscillation
+#define ATTITUDE_DELTA_SCALE 1.0            // Scale factor for attitude penalty (radians to fitness)
 
 // Crash penalty: soft lexicographic multiplier
 // Completion dominates (1e6 scale), quality provides gradient within similar completion levels
