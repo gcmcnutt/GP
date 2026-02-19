@@ -28,7 +28,7 @@ DEMETIC MODE ELITE PRESERVATION (broken fitness tracking)
 - figure out how to use crrcsim robots to form lead plane
 - variations project - to get closer to zero-shot
   - power, drag, service response times
-  - also varying speed rabbit
+  - [DONE] varying speed rabbit (see specs/ZZZ-VARIABLE_RABBIT.md)
   - craft variations (for robustness to airframe differences)
     * CG position variation
     * Wing loading variation

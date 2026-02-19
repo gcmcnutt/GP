@@ -97,6 +97,9 @@ std::vector<ScenarioDescriptor> generationScenarios;
 static VariationSigmas gVariationSigmas = {0.0, 0.0, 0.0, 0.0, 0.0};
 static bool gVariationsEnabled = false;
 
+// Variable rabbit speed: Global config, initialized at startup from config
+static RabbitSpeedConfig gRabbitSpeedConfig = RabbitSpeedConfig::defaultConfig();
+
 // Helper to populate variation offsets in ScenarioMetadata
 static void populateVariationOffsets(ScenarioMetadata& meta) {
   if (!gVariationsEnabled) {
@@ -109,6 +112,34 @@ static void populateVariationOffsets(ScenarioMetadata& meta) {
   meta.entryPitchOffset = v.entryPitchOffset;
   meta.entrySpeedFactor = v.entrySpeedFactor;
   meta.windDirectionOffset = v.windDirectionOffset;
+}
+
+// Helper to apply variable rabbit speed to a path
+// Recomputes simTimeMsec for each path point based on the speed profile
+static void applySpeedProfileToPath(std::vector<Path>& path, unsigned int windSeed) {
+  if (path.empty()) return;
+  if (gRabbitSpeedConfig.sigma <= 0.0) return;  // Constant speed mode, no changes needed
+
+  // Continue PRNG sequence after generateVariations would have consumed it
+  // This ensures consistent behavior whether or not entry variations are enabled
+  unsigned int seed = windSeed;
+  generateVariations(seed, gVariationSigmas);  // Advance PRNG state
+
+  // Generate speed profile
+  double totalDurationSec = SIM_TOTAL_TIME_MSEC / 1000.0;
+  auto speedProfile = generateSpeedProfile(seed, gRabbitSpeedConfig, totalDurationSec);
+
+  // Recompute simTimeMsec for each path point based on variable speed profile
+  gp_scalar simTimeMsec = 0.0f;
+  path[0].simTimeMsec = 0.0f;
+
+  for (size_t i = 1; i < path.size(); i++) {
+    gp_scalar segmentDistance = path[i].distanceFromStart - path[i-1].distanceFromStart;
+    double speed = getSpeedAtTime(speedProfile, static_cast<double>(simTimeMsec) / 1000.0);
+    gp_scalar dt = (segmentDistance / static_cast<gp_scalar>(speed)) * 1000.0f;
+    simTimeMsec += dt;
+    path[i].simTimeMsec = simTimeMsec;
+  }
 }
 std::atomic_ulong nanDetector = 0;
 std::ofstream fout;
@@ -788,6 +819,9 @@ void MyGP::evalTask(WorkerContext& context)
     // VARIATIONS1: Populate entry/wind variation offsets from windSeed
     populateVariationOffsets(meta);
 
+    // Variable rabbit speed: Apply speed profile to path timing
+    applySpeedProfileToPath(evalData.pathList[idx], meta.windSeed);
+
     evalData.scenarioList.push_back(meta);
   }
   if (!evalData.scenarioList.empty()) {
@@ -1052,9 +1086,29 @@ void MyGP::evalTask(WorkerContext& context)
       if (printEval) {
 
         if (printHeader) {
-          fout << "Scn    Bake   Pth/Wnd:Step:   Time Idx  totDist   pathX    pathY    pathZ        X        Y        Z       dr       dp       dy   relVel     roll    pitch    power    distP   angleP  movEffP      qw      qx      qy      qz   vxBody   vyBody   vzBody    alpha     beta   dtheta    dphi   dhome   xtrkP\n";
+          fout << "Scn    Bake   Pth/Wnd:Step:   Time Idx  totDist   pathX    pathY    pathZ        X        Y        Z       dr       dp       dy   relVel     roll    pitch    power    distP   angleP  movEffP      qw      qx      qy      qz   vxBody   vyBody   vzBody    alpha     beta   dtheta    dphi   dhome   xtrkP  rabVel\n";
           printHeader = false;
         }
+
+        // Compute rabbit velocity from path position delta
+        static gp_vec3 prevPathPos(0, 0, 0);
+        static long prevPathTime = 0;
+        static bool firstStep = true;
+        gp_scalar rabbitVel = 0.0f;
+        gp_vec3 currPathPos = path.at(pathIndex).start;
+        long currPathTime = path.at(pathIndex).simTimeMsec;
+        if (simulation_steps == 1) {
+          // Reset at start of each eval
+          firstStep = true;
+        }
+        if (!firstStep && currPathTime > prevPathTime) {
+          gp_scalar dist = (currPathPos - prevPathPos).norm();
+          gp_scalar dt = static_cast<gp_scalar>(currPathTime - prevPathTime) / 1000.0f;
+          rabbitVel = dist / dt;
+        }
+        prevPathPos = currPathPos;
+        prevPathTime = currPathTime;
+        firstStep = false;
 
         // convert aircraft_orientaton to euler
         Eigen::Matrix3f rotMatrix = craftOrientation.toRotationMatrix();
@@ -1107,7 +1161,7 @@ void MyGP::evalTask(WorkerContext& context)
         gp_quat q = craftOrientation;
 
         char outbuf[1600]; // XXX use c++20
-        sprintf(outbuf, "%06llu %06llu %03d/%02d:%04d: %06ld %3d % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.4f % 7.4f % 7.4f % 7.4f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.2f\n",
+        sprintf(outbuf, "%06llu %06llu %03d/%02d:%04d: %06ld %3d % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.4f % 7.4f % 7.4f % 7.4f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.2f % 6.1f\n",
           static_cast<unsigned long long>(scenarioSequence),
           static_cast<unsigned long long>(bakeoffSequence),
           pathVariantIndex, windVariantIndex, simulation_steps,
@@ -1134,7 +1188,8 @@ void MyGP::evalTask(WorkerContext& context)
           alpha_deg, beta_deg,                              // GETALPHA, GETBETA
           dtheta_deg, dphi_deg,                             // GETDTHETA, GETDPHI
           dhome,                                            // GETDHOME
-          crossTrackPercentForLog
+          crossTrackPercentForLog,
+          rabbitVel                                         // Rabbit velocity (variable speed)
         );
         fout << outbuf;
       }
@@ -1264,6 +1319,23 @@ int main(int argc, char** argv)
       extraCfg.entrySpeedSigma,  // already a fraction
       extraCfg.windDirectionSigma
   );
+
+  // Initialize global rabbit speed config
+  gRabbitSpeedConfig = RabbitSpeedConfig{
+      extraCfg.rabbitSpeedNominal,
+      extraCfg.rabbitSpeedSigma,
+      extraCfg.rabbitSpeedMin,
+      extraCfg.rabbitSpeedMax,
+      extraCfg.rabbitSpeedCycleMin,
+      extraCfg.rabbitSpeedCycleMax
+  };
+
+  // Log rabbit speed configuration
+  *logger.info() << "RabbitSpeed: nominal=" << extraCfg.rabbitSpeedNominal << " m/s"
+                 << " sigma=" << extraCfg.rabbitSpeedSigma << " m/s"
+                 << " range=[" << extraCfg.rabbitSpeedMin << ", " << extraCfg.rabbitSpeedMax << "] m/s"
+                 << " cycles=[" << extraCfg.rabbitSpeedCycleMin << ", " << extraCfg.rabbitSpeedCycleMax << "] s"
+                 << (extraCfg.rabbitSpeedSigma > 0 ? " (VARIABLE)" : " (CONSTANT)") << endl;
 
   // Log scenario variation table (computed values for each windSeed)
   if (extraCfg.enableEntryVariations || extraCfg.enableWindVariations) {
@@ -1471,6 +1543,10 @@ int main(int argc, char** argv)
           }
           // VARIATIONS1: Populate entry/wind variation offsets from windSeed
           populateVariationOffsets(meta);
+
+          // Variable rabbit speed: Apply speed profile to path timing
+          applySpeedProfileToPath(evalData.pathList[idx], meta.windSeed);
+
           evalData.scenarioList.push_back(meta);
         }
         if (!evalData.scenarioList.empty()) {
@@ -1670,10 +1746,29 @@ int main(int argc, char** argv)
             
             if (printEval) {
               bestOfEvalResults = context.evalResults;
-              
+
               if (stepIndex == 1) {
-                fout << "Pth:Step:   Time Idx  totDist   pathX    pathY    pathZ        X        Y        Z       dr       dp       dy   relVel     roll    pitch    power    distP   angleP  movEffP      qw      qx      qy      qz   vxBody   vyBody   vzBody    alpha     beta   dtheta    dphi   dhome   xtrkP\n";
+                fout << "Pth:Step:   Time Idx  totDist   pathX    pathY    pathZ        X        Y        Z       dr       dp       dy   relVel     roll    pitch    power    distP   angleP  movEffP      qw      qx      qy      qz   vxBody   vyBody   vzBody    alpha     beta   dtheta    dphi   dhome   xtrkP  rabVel\n";
               }
+
+              // Compute rabbit velocity from path position delta
+              static gp_vec3 prevPathPos2(0, 0, 0);
+              static long prevPathTime2 = 0;
+              static bool firstStep2 = true;
+              gp_scalar rabbitVel = 0.0f;
+              gp_vec3 currPathPos = path.at(pathIndex).start;
+              long currPathTime = path.at(pathIndex).simTimeMsec;
+              if (stepIndex == 1) {
+                firstStep2 = true;
+              }
+              if (!firstStep2 && currPathTime > prevPathTime2) {
+                gp_scalar dist = (currPathPos - prevPathPos2).norm();
+                gp_scalar dt = static_cast<gp_scalar>(currPathTime - prevPathTime2) / 1000.0f;
+                rabbitVel = dist / dt;
+              }
+              prevPathPos2 = currPathPos;
+              prevPathTime2 = currPathTime;
+              firstStep2 = false;
               
               Eigen::Matrix3f rotMatrix = craftOrientation.toRotationMatrix();
               gp_vec3 euler;
@@ -1715,7 +1810,7 @@ int main(int argc, char** argv)
               gp_quat q = craftOrientation;
 
               char outbuf[1500];
-              sprintf(outbuf, "%03d:%04d: %06ld %3d % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.4f % 7.4f % 7.4f % 7.4f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.2f\n",
+              sprintf(outbuf, "%03d:%04d: %06ld %3d % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.4f % 7.4f % 7.4f % 7.4f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.2f % 6.1f\n",
                 pathVariantIndex, simulation_steps,
                 stepAircraftState.getSimTimeMsec(), pathIndex,
                 path.at(pathIndex).distanceFromStart,
@@ -1740,7 +1835,8 @@ int main(int argc, char** argv)
                 alpha_deg, beta_deg,                              // GETALPHA, GETBETA
                 dtheta_deg, dphi_deg,                             // GETDTHETA, GETDPHI
                 dhome,                                            // GETDHOME
-                crossTrackPercentForLog
+                crossTrackPercentForLog,
+                rabbitVel                                         // Rabbit velocity (variable speed)
               );
               fout << outbuf;
             }

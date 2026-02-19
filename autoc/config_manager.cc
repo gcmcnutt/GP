@@ -117,6 +117,13 @@ GPConfigVarInformation* ConfigManager::createConfigArray() {
         {"EntryPitchSigma", DATADOUBLE, &extraConfig->entryPitchSigma},
         {"EntrySpeedSigma", DATADOUBLE, &extraConfig->entrySpeedSigma},
         {"WindDirectionSigma", DATADOUBLE, &extraConfig->windDirectionSigma},
+        // Variable rabbit speed (see specs/VARIABLE_RABBIT.md)
+        {"RabbitSpeedNominal", DATADOUBLE, &extraConfig->rabbitSpeedNominal},
+        {"RabbitSpeedSigma", DATADOUBLE, &extraConfig->rabbitSpeedSigma},
+        {"RabbitSpeedMin", DATADOUBLE, &extraConfig->rabbitSpeedMin},
+        {"RabbitSpeedMax", DATADOUBLE, &extraConfig->rabbitSpeedMax},
+        {"RabbitSpeedCycleMin", DATADOUBLE, &extraConfig->rabbitSpeedCycleMin},
+        {"RabbitSpeedCycleMax", DATADOUBLE, &extraConfig->rabbitSpeedCycleMax},
         {"", DATAINT, NULL}
     };
     return configArray;

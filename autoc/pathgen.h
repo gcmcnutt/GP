@@ -71,7 +71,7 @@ class GenerateRandom : public GeneratorMethod {
     bool first = true;
 
     for (size_t i = 1; i < controlPoints.size() - 3; ++i) {
-      for (gp_scalar t = 0; t <= 1; t += static_cast<gp_scalar>(0.05f)) {
+      for (gp_scalar t = 0; t <= 1; t += static_cast<gp_scalar>(0.02f)) {
         gp_vec3 interpolatedPoint = cubicInterpolate(controlPoints[i - 1], controlPoints[i], controlPoints[i + 1], controlPoints[i + 2], t);
         gp_vec3 newDirection;
 
@@ -149,7 +149,7 @@ class GenerateClassic : public GeneratorMethod {
     bool first = true;
 
     for (size_t i = 1; i < controlPoints.size() - 3; ++i) {
-      for (gp_scalar t = 0; t <= 1; t += static_cast<gp_scalar>(0.05f)) {
+      for (gp_scalar t = 0; t <= 1; t += static_cast<gp_scalar>(0.02f)) {
         gp_vec3 interpolatedPoint = cubicInterpolate(controlPoints[i - 1], controlPoints[i], controlPoints[i + 1], controlPoints[i + 2], t);
         gp_vec3 newDirection;
 
@@ -543,7 +543,7 @@ public:
         bool first = true;
 
         for (size_t i = 1; i < controlPoints.size() - 3; ++i) {
-          for (gp_scalar t = 0; t <= 1; t += static_cast<gp_scalar>(0.05f)) {
+          for (gp_scalar t = 0; t <= 1; t += static_cast<gp_scalar>(0.02f)) {
             gp_vec3 interpolatedPoint = cubicInterpolate(controlPoints[i - 1], controlPoints[i],
                                                          controlPoints[i + 1], controlPoints[i + 2], t);
             if (!first) {
@@ -580,7 +580,7 @@ public:
 private:
   void addStraightSegment(std::vector<Path>& path, const gp_vec3& start, const gp_vec3& direction,
                           gp_scalar distance, gp_scalar& totalDistance) {
-    const gp_scalar step = 1.0f;  // 1m spacing (baseline from horizontal 8 analysis)
+    const gp_scalar step = 0.4f;  // 0.4m spacing (ensures ≥20Hz at min rabbit speed 8m/s)
     gp_vec3 dir = direction.normalized();
 
     // Start from step if path is not empty to avoid duplicating the last point
@@ -599,7 +599,7 @@ private:
 
   void addHorizontalTurn(std::vector<Path>& path, const gp_vec3& start, gp_scalar radius,
                          gp_scalar angleRadians, bool clockwise, gp_scalar& totalDistance) {
-    const gp_scalar step = 0.05f;  // 0.05 rad (~3°) spacing - baseline from horizontal 8
+    const gp_scalar step = 0.02f;  // 0.02 rad (~1°) spacing for finer temporal resolution
 
     // Determine initial heading from last two points if possible
     gp_vec3 heading(-1.0f, 0.0f, 0.0f); // default south
@@ -639,7 +639,7 @@ private:
 
   void addSpiralTurn(std::vector<Path>& path, const gp_vec3& start, gp_scalar radius,
                      gp_scalar angleRadians, bool clockwise, gp_scalar totalClimb, gp_scalar& totalDistance) {
-    const gp_scalar step = 0.05f;  // 0.05 rad (~3°) spacing - baseline from horizontal 8
+    const gp_scalar step = 0.02f;  // 0.02 rad (~1°) spacing for finer temporal resolution
 
     gp_vec3 heading(-1.0f, 0.0f, 0.0f);
     if (path.size() >= 2) {
@@ -677,7 +677,7 @@ private:
 
   void addHorizontalLoop(std::vector<Path>& path, const gp_vec3& loopOrigin, gp_scalar loopRadius,
                          bool clockwise, gp_scalar& totalDistance) {
-    const gp_scalar step = 0.05f;  // 0.05 rad (~3°) spacing - baseline from horizontal 8
+    const gp_scalar step = 0.02f;  // 0.02 rad (~1°) spacing for finer temporal resolution
     gp_scalar sign = clockwise ? -1.0f : 1.0f; // inverted for consistency
 
     for (gp_scalar turn = 0; turn < static_cast<gp_scalar>(M_PI * 2.0); turn += step) {
@@ -697,7 +697,7 @@ private:
                         gp_scalar loopRadius, gp_scalar& totalDistance) {
     // Pitch-down loop: 180° loop in the vertical plane perpendicular to current heading
     // This is a Split-S maneuver - half loop downward (toward +z) that reverses course
-    const gp_scalar step = 0.05f;  // 0.05 rad (~3°) spacing - baseline from horizontal 8
+    const gp_scalar step = 0.02f;  // 0.02 rad (~1°) spacing for finer temporal resolution
 
     // Heading should be normalized (only xy components matter for horizontal heading)
     gp_vec3 headingNorm = heading.normalized();
@@ -830,7 +830,7 @@ public:
 private:
   void addStraightSegment(std::vector<Path>& path, const gp_vec3& start, const gp_vec3& direction,
                           gp_scalar distance, gp_scalar& totalDistance) {
-    const gp_scalar step = 1.0f;
+    const gp_scalar step = 0.4f;  // 0.4m spacing (ensures ≥20Hz at min rabbit speed 8m/s)
     gp_vec3 dir = direction.normalized();
     gp_scalar startD = path.empty() ? 0.0f : step;
 
@@ -847,7 +847,7 @@ private:
 
   void addHorizontalTurn(std::vector<Path>& path, const gp_vec3& start, gp_scalar radius,
                          gp_scalar angleRadians, bool clockwise, gp_scalar& totalDistance) {
-    const gp_scalar step = 0.05f;
+    const gp_scalar step = 0.02f;  // 0.02 rad (~1°) spacing for finer temporal resolution
 
     gp_vec3 heading(-1.0f, 0.0f, 0.0f);
     if (path.size() >= 2) {
@@ -875,7 +875,7 @@ private:
 
   void addSpiralTurn(std::vector<Path>& path, const gp_vec3& start, gp_scalar radius,
                      gp_scalar angleRadians, bool clockwise, gp_scalar totalClimb, gp_scalar& totalDistance) {
-    const gp_scalar step = 0.05f;
+    const gp_scalar step = 0.02f;  // 0.02 rad (~1°) spacing for finer temporal resolution
 
     gp_vec3 heading(-1.0f, 0.0f, 0.0f);
     if (path.size() >= 2) {
@@ -904,7 +904,7 @@ private:
 
   void addHorizontalLoop(std::vector<Path>& path, const gp_vec3& loopOrigin, gp_scalar loopRadius,
                          bool clockwise, gp_scalar& totalDistance) {
-    const gp_scalar step = 0.05f;
+    const gp_scalar step = 0.02f;  // 0.02 rad (~1°) spacing for finer temporal resolution
     gp_scalar sign = clockwise ? -1.0f : 1.0f;
 
     for (gp_scalar turn = 0; turn < static_cast<gp_scalar>(M_PI * 2.0); turn += step) {
@@ -922,7 +922,7 @@ private:
 
   void addPitchDownLoop(std::vector<Path>& path, const gp_vec3& start, const gp_vec3& heading,
                         gp_scalar loopRadius, gp_scalar& totalDistance) {
-    const gp_scalar step = 0.05f;
+    const gp_scalar step = 0.02f;  // 0.02 rad (~1°) spacing for finer temporal resolution
     gp_vec3 headingNorm = heading.normalized();
     gp_vec3 center = start + gp_vec3(0.0f, 0.0f, loopRadius);
 
@@ -956,7 +956,7 @@ private:
     gp_vec3 p2 = to;
     gp_vec3 p3 = to + endHeading.normalized() * tangentScale;  // Control point after end
 
-    const gp_scalar step = 0.05f;
+    const gp_scalar step = 0.02f;  // 0.02 rad (~1°) spacing for finer temporal resolution
     for (gp_scalar t = step; t <= 1.0f; t += step) {
       gp_vec3 point = cubicInterpolate(p0, p1, p2, p3, t);
 

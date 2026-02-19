@@ -87,6 +87,15 @@ public:
   double entrySpeedSigma = 0.1;
   double windDirectionSigma = 45.0;
 
+  // Variable rabbit speed (see specs/VARIABLE_RABBIT.md)
+  // Set rabbitSpeedSigma=0 for constant speed at rabbitSpeedNominal
+  double rabbitSpeedNominal = 16.0;   // m/s - center of distribution (default matches SIM_RABBIT_VELOCITY)
+  double rabbitSpeedSigma = 0.0;      // m/s - 1σ deviation (0 = constant speed)
+  double rabbitSpeedMin = 8.0;        // m/s - hard floor
+  double rabbitSpeedMax = 25.0;       // m/s - hard ceiling
+  double rabbitSpeedCycleMin = 0.5;   // seconds - min variation cycle duration
+  double rabbitSpeedCycleMax = 5.0;   // seconds - max variation cycle duration
+
   // // Custom implementation of the << operator for the extraCfg type
   // std::ostream& operator << (std::ostream& os) {
   //   os << "simNumPathsPerGen: " + simNumPathsPerGen;

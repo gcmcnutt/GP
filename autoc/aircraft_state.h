@@ -174,7 +174,8 @@ public:
 struct AircraftState;
 
 // Portable helper function for GP path indexing
-// Extracted from generated GP code to remove boost dependencies
+// Uses pure time-domain lookahead: N steps = N * SIM_TIME_STEP_MSEC ahead/behind
+// This is cleaner than distance-based and works correctly with variable rabbit speed
 inline int getPathIndex(PathProvider& pathProvider, AircraftState& aircraftState, gp_scalar arg) {
     if (std::isnan(arg)) {
         return pathProvider.getCurrentIndex();
@@ -183,21 +184,23 @@ inline int getPathIndex(PathProvider& pathProvider, AircraftState& aircraftState
     int steps = CLAMP_DEF((int)arg, -5, 5);
     // Clamp current index defensively
     int currentStep = CLAMP_DEF(pathProvider.getCurrentIndex(), 0, pathProvider.getPathSize() - 1);
-    const gp_scalar distanceSoFar = pathProvider.getPath(currentStep).distanceFromStart;
-    const gp_scalar distanceGoal = distanceSoFar + steps * SIM_RABBIT_VELOCITY * (SIM_TIME_STEP_MSEC / 1000.0f);
 
-    // Use a small epsilon to avoid off-by-one flip-flops when distanceGoal is
+    // Time-based lookahead: N steps = N * 100ms
+    const gp_scalar currentTimeMsec = pathProvider.getPath(currentStep).simTimeMsec;
+    const gp_scalar timeGoalMsec = currentTimeMsec + steps * SIM_TIME_STEP_MSEC;
+
+    // Use a small epsilon to avoid off-by-one flip-flops when timeGoalMsec is
     // very close to a waypoint boundary.
-    constexpr gp_scalar kEps = static_cast<gp_scalar>(1e-6f);
+    constexpr gp_scalar kEps = static_cast<gp_scalar>(0.1f);  // 0.1ms epsilon
 
     if (steps > 0) {
         while (currentStep < pathProvider.getPathSize() - 1 &&
-               pathProvider.getPath(currentStep).distanceFromStart + kEps < distanceGoal) {
+               pathProvider.getPath(currentStep).simTimeMsec + kEps < timeGoalMsec) {
             currentStep++;
         }
     } else if (steps < 0) {
         while (currentStep > 0 &&
-               pathProvider.getPath(currentStep).distanceFromStart - kEps > distanceGoal) {
+               pathProvider.getPath(currentStep).simTimeMsec - kEps > timeGoalMsec) {
             currentStep--;
         }
     }
