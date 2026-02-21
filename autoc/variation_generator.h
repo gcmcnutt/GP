@@ -222,4 +222,110 @@ inline double getSpeedAtTime(const std::vector<RabbitSpeedPoint>& profile, doubl
     return s0 + frac * (s1 - s0);
 }
 
+// ============================================================================
+// GPrand-based generators for single PRNG architecture
+// These consume from GPrand() instead of using a local LCG
+// ============================================================================
+
+/**
+ * Generate all variations by consuming from GPrand().
+ * Used during pre-fetch at startup to ensure deterministic PRNG sequence.
+ *
+ * @param sigmas     Gaussian sigma values for each variation dimension
+ * @return           Computed variation offsets
+ */
+inline VariationOffsets generateVariationsFromGPrand(const VariationSigmas& sigmas) {
+    VariationOffsets v;
+
+    // GPrand-based uniform [0, 1)
+    auto nextDouble = []() -> double {
+        return static_cast<double>(GPrand()) / static_cast<double>(RAND_MAX);
+    };
+
+    // Box-Muller transform for Gaussian sampling
+    auto gaussian = [&nextDouble](double sigma) -> double {
+        double u1 = nextDouble() * 0.999 + 0.001;  // avoid log(0)
+        double u2 = nextDouble();
+        double z = sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
+        return z * sigma;
+    };
+
+    // Generate Gaussian-distributed offsets
+    v.entryHeadingOffset = gaussian(sigmas.headingSigma);
+    v.entryRollOffset = gaussian(sigmas.rollSigma);
+    v.entryPitchOffset = gaussian(sigmas.pitchSigma);
+    v.entrySpeedFactor = 1.0 + gaussian(sigmas.speedSigma);
+    v.windDirectionOffset = gaussian(sigmas.windDirectionSigma);
+
+    return v;
+}
+
+/**
+ * Generate a speed profile by consuming from GPrand().
+ * Used during pre-fetch at startup.
+ *
+ * @param cfg               Speed configuration parameters
+ * @param totalDurationSec  Total path duration in seconds
+ * @return                  Vector of time-tagged speed points
+ */
+inline std::vector<RabbitSpeedPoint> generateSpeedProfileFromGPrand(
+    const RabbitSpeedConfig& cfg,
+    double totalDurationSec
+) {
+    std::vector<RabbitSpeedPoint> profile;
+
+    // Constant speed mode - just return two points at nominal speed
+    if (cfg.sigma <= 0.0) {
+        profile.push_back({0.0, cfg.nominal});
+        profile.push_back({totalDurationSec, cfg.nominal});
+        return profile;
+    }
+
+    // GPrand-based uniform [0, 1)
+    auto nextDouble = []() -> double {
+        return static_cast<double>(GPrand()) / static_cast<double>(RAND_MAX);
+    };
+
+    // Box-Muller for Gaussian sampling
+    auto gaussian = [&nextDouble](double mean, double sigma) -> double {
+        double u1 = nextDouble() * 0.999 + 0.001;  // avoid log(0)
+        double u2 = nextDouble();
+        double z = sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
+        return mean + z * sigma;
+    };
+
+    // Clamp speed to valid range
+    auto clampSpeed = [&cfg](double s) -> double {
+        return (s < cfg.minSpeed) ? cfg.minSpeed :
+               (s > cfg.maxSpeed) ? cfg.maxSpeed : s;
+    };
+
+    double t = 0.0;
+    double currentSpeed = clampSpeed(gaussian(cfg.nominal, cfg.sigma));
+    profile.push_back({t, currentSpeed});
+
+    while (t < totalDurationSec) {
+        // Random cycle duration
+        double cycleDuration = cfg.cycleMin + nextDouble() * (cfg.cycleMax - cfg.cycleMin);
+        double targetSpeed = clampSpeed(gaussian(cfg.nominal, cfg.sigma));
+
+        // Cosine-eased interpolation points (~10Hz resolution)
+        int numSteps = static_cast<int>(cycleDuration / 0.1);
+        if (numSteps < 2) numSteps = 2;
+
+        for (int i = 1; i <= numSteps && (t + i * cycleDuration / numSteps) <= totalDurationSec; i++) {
+            double frac = static_cast<double>(i) / numSteps;
+            double easedFrac = 0.5 * (1.0 - cos(M_PI * frac));  // Cosine ease-in-out
+            double interpTime = t + frac * cycleDuration;
+            double interpSpeed = currentSpeed + easedFrac * (targetSpeed - currentSpeed);
+            profile.push_back({interpTime, interpSpeed});
+        }
+
+        t += cycleDuration;
+        currentSpeed = targetSpeed;
+    }
+
+    return profile;
+}
+
 #endif // VARIATION_GENERATOR_H

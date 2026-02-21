@@ -100,34 +100,142 @@ static bool gVariationsEnabled = false;
 // Variable rabbit speed: Global config, initialized at startup from config
 static RabbitSpeedConfig gRabbitSpeedConfig = RabbitSpeedConfig::defaultConfig();
 
-// Helper to populate variation offsets in ScenarioMetadata
+// ============================================================================
+// Single PRNG Architecture: Pre-fetched scenario variations
+// See specs/SINGLE_PRNG.md for design
+// ============================================================================
+
+/**
+ * Pre-computed variations for a single scenario (wind variant).
+ * Generated from GPrand() at startup, reused every generation.
+ */
+struct ScenarioVariations {
+    unsigned int windSeed;                      // Seed for crrcsim CRRC_Random
+    VariationOffsets entryOffsets;              // Heading, roll, pitch, speed, windDir
+    std::vector<RabbitSpeedPoint> rabbitProfile;// Time-tagged speeds
+};
+
+// Global pre-computed table (indexed by wind scenario index 0..N-1)
+static std::vector<ScenarioVariations> gScenarioVariations;
+static unsigned int gPathSeed = 0;        // Derived from GPrand() or RandomPathSeedB override
+static bool gPathSeedFromOverride = false;// True if RandomPathSeedB was used
+
+/**
+ * Pre-fetch all scenario variations from GPrand() at startup.
+ * Called once after GPInit(), before any GP evolution.
+ *
+ * @param numScenarios   Number of wind scenarios (windScenarioCount from config)
+ * @param sigmas         Variation sigma parameters
+ * @param rabbitCfg      Rabbit speed configuration
+ * @param randomPathSeedB Override path seed (-1 = derive from GPrand)
+ */
+static void prefetchAllVariations(int numScenarios, const VariationSigmas& sigmas,
+                                   const RabbitSpeedConfig& rabbitCfg, int randomPathSeedB) {
+    gScenarioVariations.clear();
+    gScenarioVariations.reserve(numScenarios);
+
+    // Derive pathSeed (unless overridden by config)
+    if (randomPathSeedB == -1) {
+        gPathSeed = static_cast<unsigned int>(GPrand());
+        gPathSeedFromOverride = false;
+    } else {
+        gPathSeed = static_cast<unsigned int>(randomPathSeedB);
+        gPathSeedFromOverride = true;
+    }
+
+    double totalDurationSec = SIM_TOTAL_TIME_MSEC / 1000.0;
+
+    for (int i = 0; i < numScenarios; i++) {
+        ScenarioVariations sv;
+
+        // Wind seed for crrcsim
+        sv.windSeed = static_cast<unsigned int>(GPrand());
+
+        // Entry variations (consume ~10 GPrand values)
+        sv.entryOffsets = generateVariationsFromGPrand(sigmas);
+
+        // Rabbit speed profile (consume ~50-200 GPrand values)
+        sv.rabbitProfile = generateSpeedProfileFromGPrand(rabbitCfg, totalDurationSec);
+
+        gScenarioVariations.push_back(std::move(sv));
+    }
+}
+
+/**
+ * Log pre-fetched variations at startup for verification.
+ * Format matches spec in SINGLE_PRNG.md.
+ */
+static void logPrefetchedVariations(int numScenarios, long gpSeed) {
+    *logger.info() << endl;
+    *logger.info() << "=== Pre-fetched Scenario Variations (GPSeed=" << gpSeed << ") ===" << endl;
+    *logger.info() << "PathSeed: " << gPathSeed
+                   << " (override: " << (gPathSeedFromOverride ? "yes" : "no")
+                   << ")" << endl;
+    *logger.info() << "Scenarios: " << numScenarios << endl;
+    *logger.info() << endl;
+
+    *logger.info() << "Scenario  WindSeed    Heading°   Roll°   Pitch°  Speed%  WindDir°  RabbitSpd" << endl;
+    *logger.info() << "--------  ----------  --------  ------  ------  ------  --------  ---------" << endl;
+
+    for (int i = 0; i < numScenarios; i++) {
+        const auto& sv = gScenarioVariations[i];
+
+        // Compute rabbit speed stats
+        double minSpd = sv.rabbitProfile.empty() ? 0 : sv.rabbitProfile[0].speed;
+        double maxSpd = minSpd, sumSpd = 0;
+        for (const auto& pt : sv.rabbitProfile) {
+            if (pt.speed < minSpd) minSpd = pt.speed;
+            if (pt.speed > maxSpd) maxSpd = pt.speed;
+            sumSpd += pt.speed;
+        }
+        double avgSpd = sv.rabbitProfile.empty() ? 0 : sumSpd / sv.rabbitProfile.size();
+
+        std::ostringstream line;
+        line << std::setw(4) << i << "      "
+             << "0x" << std::hex << std::setw(8) << std::setfill('0') << sv.windSeed
+             << std::dec << std::setfill(' ')
+             << "  " << std::setw(7) << std::fixed << std::setprecision(2) << radToDeg(sv.entryOffsets.entryHeadingOffset)
+             << "  " << std::setw(6) << radToDeg(sv.entryOffsets.entryRollOffset)
+             << "  " << std::setw(6) << radToDeg(sv.entryOffsets.entryPitchOffset)
+             << "  " << std::setw(5) << std::setprecision(1) << ((sv.entryOffsets.entrySpeedFactor - 1.0) * 100) << "%"
+             << "  " << std::setw(7) << std::setprecision(2) << radToDeg(sv.entryOffsets.windDirectionOffset)
+             << "  " << std::setprecision(1) << minSpd << "/" << avgSpd << "/" << maxSpd;
+        *logger.info() << line.str() << endl;
+    }
+    *logger.info() << endl;
+}
+
+// Helper to populate variation offsets in ScenarioMetadata from pre-fetched table
 static void populateVariationOffsets(ScenarioMetadata& meta) {
   if (!gVariationsEnabled) {
     // Leave defaults (0.0, 1.0 for speed)
     return;
   }
-  VariationOffsets v = generateVariations(meta.windSeed, gVariationSigmas);
-  meta.entryHeadingOffset = v.entryHeadingOffset;
-  meta.entryRollOffset = v.entryRollOffset;
-  meta.entryPitchOffset = v.entryPitchOffset;
-  meta.entrySpeedFactor = v.entrySpeedFactor;
-  meta.windDirectionOffset = v.windDirectionOffset;
+
+  // Use pre-fetched variations (single PRNG architecture)
+  int windIdx = meta.windVariantIndex;
+  if (windIdx >= 0 && windIdx < static_cast<int>(gScenarioVariations.size())) {
+    const auto& v = gScenarioVariations[windIdx].entryOffsets;
+    meta.entryHeadingOffset = v.entryHeadingOffset;
+    meta.entryRollOffset = v.entryRollOffset;
+    meta.entryPitchOffset = v.entryPitchOffset;
+    meta.entrySpeedFactor = v.entrySpeedFactor;
+    meta.windDirectionOffset = v.windDirectionOffset;
+  }
+  // If windIdx out of range, leave defaults (shouldn't happen)
 }
 
-// Helper to apply variable rabbit speed to a path
+// Helper to apply variable rabbit speed to a path using pre-fetched profile
 // Recomputes simTimeMsec for each path point based on the speed profile
-static void applySpeedProfileToPath(std::vector<Path>& path, unsigned int windSeed) {
+static void applySpeedProfileToPath(std::vector<Path>& path, int windVariantIndex) {
   if (path.empty()) return;
   if (gRabbitSpeedConfig.sigma <= 0.0) return;  // Constant speed mode, no changes needed
 
-  // Continue PRNG sequence after generateVariations would have consumed it
-  // This ensures consistent behavior whether or not entry variations are enabled
-  unsigned int seed = windSeed;
-  generateVariations(seed, gVariationSigmas);  // Advance PRNG state
-
-  // Generate speed profile
-  double totalDurationSec = SIM_TOTAL_TIME_MSEC / 1000.0;
-  auto speedProfile = generateSpeedProfile(seed, gRabbitSpeedConfig, totalDurationSec);
+  // Use pre-fetched speed profile (single PRNG architecture)
+  if (windVariantIndex < 0 || windVariantIndex >= static_cast<int>(gScenarioVariations.size())) {
+    return;  // Out of range, leave path unchanged
+  }
+  const auto& speedProfile = gScenarioVariations[windVariantIndex].rabbitProfile;
 
   // Recompute simTimeMsec for each path point based on variable speed profile
   gp_scalar simTimeMsec = 0.0f;
@@ -220,15 +328,22 @@ void rebuildGenerationScenarios(const std::vector<std::vector<Path>>& basePaths)
 
   const ExtraConfig& extraCfg = ConfigManager::getExtraConfig();
   int windScenarioCount = std::max(extraCfg.windScenarioCount, 1);
-  unsigned int seedBase = static_cast<unsigned int>(extraCfg.windSeedBase);
-  unsigned int seedStride = sanitizeStride(extraCfg.windSeedStride);
+
+  // Use pre-fetched windSeeds from gScenarioVariations (single PRNG architecture)
+  // Fallback to 0 if pre-fetch hasn't run yet (shouldn't happen in normal flow)
+  auto getWindSeed = [&](int windIdx) -> unsigned int {
+    if (windIdx < static_cast<int>(gScenarioVariations.size())) {
+      return gScenarioVariations[windIdx].windSeed;
+    }
+    return 0;  // Fallback (shouldn't happen)
+  };
 
   if (basePaths.empty()) {
     ScenarioDescriptor scenario;
     scenario.pathList = basePaths;
     scenario.windVariantIndex = 0;
-    scenario.windSeed = seedBase;
-    scenario.windScenarios.push_back({seedBase, 0});
+    scenario.windSeed = getWindSeed(0);
+    scenario.windScenarios.push_back({getWindSeed(0), 0});
     generationScenarios.push_back(std::move(scenario));
     return;
   }
@@ -246,7 +361,7 @@ void rebuildGenerationScenarios(const std::vector<std::vector<Path>>& basePaths)
       for (int windIdx = 0; windIdx < windScenarioCount; ++windIdx) {
         scenario.pathList.push_back(basePaths[pathIdx]);
         WindScenarioConfig windScenario;
-        windScenario.windSeed = seedBase + seedStride * static_cast<unsigned int>(windIdx);
+        windScenario.windSeed = getWindSeed(windIdx);
         windScenario.windVariantIndex = windIdx;
         scenario.windScenarios.push_back(windScenario);
       }
@@ -254,7 +369,7 @@ void rebuildGenerationScenarios(const std::vector<std::vector<Path>>& basePaths)
         scenario.windSeed = scenario.windScenarios.front().windSeed;
         scenario.windVariantIndex = scenario.windScenarios.front().windVariantIndex;
       } else {
-        scenario.windSeed = seedBase;
+        scenario.windSeed = getWindSeed(0);
         scenario.windVariantIndex = 0;
       }
       generationScenarios.push_back(std::move(scenario));
@@ -267,7 +382,7 @@ void rebuildGenerationScenarios(const std::vector<std::vector<Path>>& basePaths)
     // Build wind scenarios list first
     for (int windIdx = 0; windIdx < windScenarioCount; ++windIdx) {
       WindScenarioConfig windScenario;
-      windScenario.windSeed = seedBase + seedStride * static_cast<unsigned int>(windIdx);
+      windScenario.windSeed = getWindSeed(windIdx);
       windScenario.windVariantIndex = windIdx;
       scenario.windScenarios.push_back(windScenario);
     }
@@ -283,7 +398,7 @@ void rebuildGenerationScenarios(const std::vector<std::vector<Path>>& basePaths)
       scenario.windSeed = scenario.windScenarios.front().windSeed;
       scenario.windVariantIndex = scenario.windScenarios.front().windVariantIndex;
     } else {
-      scenario.windSeed = seedBase;
+      scenario.windSeed = getWindSeed(0);
       scenario.windVariantIndex = 0;
     }
     generationScenarios.push_back(std::move(scenario));
@@ -292,9 +407,9 @@ void rebuildGenerationScenarios(const std::vector<std::vector<Path>>& basePaths)
   if (generationScenarios.empty()) {
     ScenarioDescriptor scenario;
     scenario.windVariantIndex = 0;
-    scenario.windSeed = seedBase;
+    scenario.windSeed = getWindSeed(0);
     scenario.pathList = basePaths;
-    scenario.windScenarios.push_back({seedBase, 0});
+    scenario.windScenarios.push_back({getWindSeed(0), 0});
     generationScenarios.push_back(std::move(scenario));
   }
 
@@ -624,11 +739,11 @@ public:
             gp_scalar migProb = std::clamp(static_cast<gp_scalar>(gpCfg.DemeticMigProbability) / static_cast<gp_scalar>(100.0f),
                                            static_cast<gp_scalar>(0.0f),
                                            static_cast<gp_scalar>(1.0f));
-            std::uniform_real_distribution<gp_scalar> dist(static_cast<gp_scalar>(0.0f), static_cast<gp_scalar>(1.0f));
-            static thread_local std::mt19937 rng(std::random_device{}());
 
             for (int demeStart = 0; demeStart < containerSize(); demeStart += demeSize) {
-              if (dist(rng) > migProb) {
+              // Use GPrand() for deterministic migration decisions (single PRNG architecture)
+              gp_scalar randVal = static_cast<gp_scalar>(GPrand()) / static_cast<gp_scalar>(RAND_MAX);
+              if (randVal > migProb) {
                 continue;
               }
 
@@ -819,8 +934,8 @@ void MyGP::evalTask(WorkerContext& context)
     // VARIATIONS1: Populate entry/wind variation offsets from windSeed
     populateVariationOffsets(meta);
 
-    // Variable rabbit speed: Apply speed profile to path timing
-    applySpeedProfileToPath(evalData.pathList[idx], meta.windSeed);
+    // Variable rabbit speed: Apply speed profile to path timing (uses pre-fetched profile)
+    applySpeedProfileToPath(evalData.pathList[idx], meta.windVariantIndex);
 
     evalData.scenarioList.push_back(meta);
   }
@@ -1300,8 +1415,6 @@ int main(int argc, char** argv)
   *logger.info() << "MinisimPortOverride: " << ConfigManager::getExtraConfig().minisimPortOverride << endl;
   *logger.info() << "EvaluateMode: " << ConfigManager::getExtraConfig().evaluateMode << endl;
   *logger.info() << "WindScenarios: " << ConfigManager::getExtraConfig().windScenarioCount << endl;
-  *logger.info() << "WindSeedBase: " << ConfigManager::getExtraConfig().windSeedBase << endl;
-  *logger.info() << "WindSeedStride: " << ConfigManager::getExtraConfig().windSeedStride << endl;
   *logger.info() << "GPSeed: " << ConfigManager::getExtraConfig().gpSeed << endl;
   *logger.info() << "RandomPathSeedB: " << ConfigManager::getExtraConfig().randomPathSeedB << endl;
 
@@ -1337,37 +1450,19 @@ int main(int argc, char** argv)
                  << " cycles=[" << extraCfg.rabbitSpeedCycleMin << ", " << extraCfg.rabbitSpeedCycleMax << "] s"
                  << (extraCfg.rabbitSpeedSigma > 0 ? " (VARIABLE)" : " (CONSTANT)") << endl;
 
-  // Log scenario variation table (computed values for each windSeed)
-  if (extraCfg.enableEntryVariations || extraCfg.enableWindVariations) {
-    *logger.info() << endl;
-    *logger.info() << "SCENARIO VARIATIONS (base=" << extraCfg.windSeedBase
-                   << " stride=" << extraCfg.windSeedStride
-                   << " count=" << extraCfg.windScenarioCount << ")" << endl;
-    *logger.info() << "Sigmas: heading=" << extraCfg.entryHeadingSigma << "° "
-                   << "roll=" << extraCfg.entryRollSigma << "° "
-                   << "pitch=" << extraCfg.entryPitchSigma << "° "
-                   << "speed=" << (extraCfg.entrySpeedSigma * 100) << "% "
-                   << "wind=" << extraCfg.windDirectionSigma << "°" << endl;
-    *logger.info() << "# Idx    Seed   Heading    Roll   Pitch   Speed  WindDir" << endl;
+  // SINGLE PRNG ARCHITECTURE: Pre-fetch all scenario variations from GPrand()
+  // This consumes from GPrand() BEFORE GP evolution, ensuring deterministic sequence
+  int windScenarioCount = std::max(extraCfg.windScenarioCount, 1);
+  prefetchAllVariations(windScenarioCount, gVariationSigmas, gRabbitSpeedConfig,
+                        extraCfg.randomPathSeedB);
 
-    for (int i = 0; i < extraCfg.windScenarioCount; i++) {
-      unsigned int seed = static_cast<unsigned int>(extraCfg.windSeedBase + i * extraCfg.windSeedStride);
-      VariationOffsets v = generateVariations(seed, gVariationSigmas);
-
-      // Format with fixed width for alignment
-      std::ostringstream line;
-      line << std::fixed << std::setprecision(1)
-           << std::setw(4) << i << "  "
-           << std::setw(6) << seed << "  "
-           << std::setw(7) << radToDeg(v.entryHeadingOffset) << "°  "
-           << std::setw(6) << radToDeg(v.entryRollOffset) << "°  "
-           << std::setw(5) << radToDeg(v.entryPitchOffset) << "°  "
-           << std::setw(5) << std::setprecision(2) << v.entrySpeedFactor << "x  "
-           << std::setw(7) << std::setprecision(1) << radToDeg(v.windDirectionOffset) << "°";
-      *logger.info() << line.str() << endl;
-    }
-    *logger.info() << endl;
-  }
+  // Log pre-fetched variations for verification
+  *logger.info() << "Sigmas: heading=" << extraCfg.entryHeadingSigma << "° "
+                 << "roll=" << extraCfg.entryRollSigma << "° "
+                 << "pitch=" << extraCfg.entryPitchSigma << "° "
+                 << "speed=" << (extraCfg.entrySpeedSigma * 100) << "% "
+                 << "wind=" << extraCfg.windDirectionSigma << "°" << endl;
+  logPrefetchedVariations(windScenarioCount, gpSeed);
 
   // Set training node mask before creating node set
   setTrainingNodesMask(ConfigManager::getExtraConfig().trainingNodes);
@@ -1422,24 +1517,15 @@ int main(int argc, char** argv)
     lastSimRunCount = currentRuns;
   };
 
-  // prime the paths?
-  // Handle -1 as time-based seed for path generation
-  unsigned int pathSeed;
-  if (ConfigManager::getExtraConfig().randomPathSeedB == -1) {
-    pathSeed = static_cast<unsigned int>(time(NULL));
-    *logger.info() << "RandomPathSeedB: -1 (auto) -> " << pathSeed << endl;
-  } else {
-    pathSeed = static_cast<unsigned int>(ConfigManager::getExtraConfig().randomPathSeedB);
-  }
-
+  // Generate initial paths using pre-fetched gPathSeed (single PRNG architecture)
   generationPaths = generateSmoothPaths(ConfigManager::getExtraConfig().generatorMethod,
                                         ConfigManager::getExtraConfig().simNumPathsPerGen,
                                         SIM_PATH_BOUNDS, SIM_PATH_BOUNDS,
-                                        pathSeed);
+                                        gPathSeed);
 
   // DEBUG: Log segment counts for each path
   std::cout << "\n=== Path Segment Counts (method=" << ConfigManager::getExtraConfig().generatorMethod
-            << ", seed=" << pathSeed << ") ===" << std::endl;
+            << ", seed=" << gPathSeed << ") ===" << std::endl;
   int maxSegments = 0;
   for (size_t i = 0; i < generationPaths.size(); i++) {
     int segCount = generationPaths[i].size();
@@ -1541,11 +1627,11 @@ int main(int argc, char** argv)
               meta.windSeed = scenario.windSeed;
             }
           }
-          // VARIATIONS1: Populate entry/wind variation offsets from windSeed
+          // VARIATIONS1: Populate entry/wind variation offsets (uses pre-fetched values)
           populateVariationOffsets(meta);
 
-          // Variable rabbit speed: Apply speed profile to path timing
-          applySpeedProfileToPath(evalData.pathList[idx], meta.windSeed);
+          // Variable rabbit speed: Apply speed profile to path timing (uses pre-fetched profile)
+          applySpeedProfileToPath(evalData.pathList[idx], meta.windVariantIndex);
 
           evalData.scenarioList.push_back(meta);
         }
@@ -1976,22 +2062,12 @@ int main(int argc, char** argv)
 
     for (int gen = 1; gen <= ConfigManager::getGPConfig().NumberOfGenerations; gen++)
     {
-      // For this generation, build a smooth path goal
-      // Handle -1 as time-based seed for path generation
-      unsigned int genPathSeed;
-      if (ConfigManager::getExtraConfig().randomPathSeedB == -1) {
-        genPathSeed = static_cast<unsigned int>(time(NULL));
-        if (gen == 1) {
-          *logger.info() << "RandomPathSeedB: -1 (auto) -> " << genPathSeed << " (gen 1)" << endl;
-        }
-      } else {
-        genPathSeed = static_cast<unsigned int>(ConfigManager::getExtraConfig().randomPathSeedB);
-      }
-
+      // For this generation, build a smooth path goal using pre-fetched gPathSeed
+      // (single PRNG architecture: consistent paths derived from GPSeed)
       generationPaths = generateSmoothPaths(ConfigManager::getExtraConfig().generatorMethod,
                                             ConfigManager::getExtraConfig().simNumPathsPerGen,
                                             SIM_PATH_BOUNDS, SIM_PATH_BOUNDS,
-                                            genPathSeed);
+                                            gPathSeed);
       rebuildGenerationScenarios(generationPaths);
       warnIfScenarioMismatch();
 

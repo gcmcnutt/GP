@@ -104,8 +104,6 @@ GPConfigVarInformation* ConfigManager::createConfigArray() {
         {"EvaluateMode", DATAINT, &extraConfig->evaluateMode},
         {"BytecodeFile", DATASTRING, &extraConfig->bytecodeFile},
         {"WindScenarios", DATAINT, &extraConfig->windScenarioCount},
-        {"WindSeedBase", DATAINT, &extraConfig->windSeedBase},
-        {"WindSeedStride", DATAINT, &extraConfig->windSeedStride},
         {"RandomPathSeedB", DATAINT, &extraConfig->randomPathSeedB},
         {"GPSeed", DATAINT, &extraConfig->gpSeed},
         {"TrainingNodes", DATASTRING, &extraConfig->trainingNodes},

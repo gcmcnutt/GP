@@ -71,9 +71,8 @@ public:
   int evaluateMode = 0;  // 0=normal GP evolution, 1=bytecode verification
   char* bytecodeFile = "gp_program.dat";  // Bytecode file for verification mode
   int windScenarioCount = 1;
-  int windSeedBase = 1337;
-  int windSeedStride = 1;
-  int randomPathSeedB = 67890;  // Seed for SeededRandomB path generation (-1 = use time-based seed)
+  // windSeedBase and windSeedStride removed - wind seeds now derived from GPrand() (single PRNG architecture)
+  int randomPathSeedB = 67890;  // Seed for path generation (-1 = derive from GPrand())
   int gpSeed = -1;  // Seed for GP initialization (-1 = use time-based seed)
   char* trainingNodes = "";  // Comma-separated list of node names for training (empty = all nodes)
 
