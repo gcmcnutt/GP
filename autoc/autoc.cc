@@ -1055,15 +1055,19 @@ void MyGP::evalTask(WorkerContext& context)
       }
     }
 
-    // compute this path fitness (use gp_fitness/double for accumulation precision)
+    // ========================================================================
+    // SIMPLIFIED FITNESS (v3): Two objectives - distance + attitude delta
+    // See specs/FITNESS_SIMPLIFY_20260221.md
+    // ========================================================================
     gp_fitness localFitness = 0.0;
-    int stepIndex = 0; // where are we on the flight path?
+    int stepIndex = 0;
 
-    // Per-step fitness accumulator (weights applied per sample, then summed)
-    gp_fitness step_fitness_sum = 0.0;
+    // Accumulate raw values, scale attitude at end using path geometry
+    gp_fitness distance_sum = 0.0;
+    gp_fitness attitude_sum = 0.0;
     int simulation_steps = 0;
 
-    // Attitude delta tracking: penalize excessive rotation per step
+    // Attitude delta tracking
     gp_fitness prev_roll = 0.0, prev_pitch = 0.0;
     bool first_attitude_sample = true;
 
@@ -1073,15 +1077,12 @@ void MyGP::evalTask(WorkerContext& context)
       int rawPathIndex = stepAircraftState.getThisPathIndex();
       int pathIndex = std::clamp(rawPathIndex, 0, static_cast<int>(path.size()) - 1);
       const Path& currentPathPoint = path.at(pathIndex);
-      PathFrame frame = computePathFrame(path, pathIndex);
-      int nextIndex = std::min(pathIndex + 1, static_cast<int>(path.size()) - 1);
 
       gp_vec3 aircraftPosition = stepAircraftState.getPosition();
       gp_quat craftOrientation = stepAircraftState.getOrientation();
-      gp_vec3 aircraftUp = craftOrientation * gp_vec3::UnitZ();
 
       // ====================================================================
-      // ATTITUDE DELTA: Per-step roll/pitch change penalty
+      // ATTITUDE DELTA: Per-step roll/pitch change (radians)
       // ====================================================================
       gp_fitness qw = craftOrientation.w();
       gp_fitness qx = craftOrientation.x();
@@ -1102,106 +1103,26 @@ void MyGP::evalTask(WorkerContext& context)
         prev_pitch = pitch;
         first_attitude_sample = false;
       } else {
-        attitude_delta = (fabs(roll - prev_roll) + fabs(pitch - prev_pitch)) * ATTITUDE_DELTA_SCALE;
+        attitude_delta = fabs(roll - prev_roll) + fabs(pitch - prev_pitch);
         prev_roll = roll;
         prev_pitch = pitch;
       }
 
       // ====================================================================
-      // METRIC 1: Waypoint distance (meters, raw)
-      // Asymmetric power based on position relative to rabbit's velocity vector
+      // DISTANCE: 3D distance to rabbit (meters)
       // ====================================================================
       gp_vec3 craftOffset = aircraftPosition - currentPathPoint.start;
-      gp_scalar waypointDistance = craftOffset.norm();
+      gp_scalar distance = craftOffset.norm();
 
-      // Project craft offset onto rabbit's path tangent to determine ahead/behind
-      // Positive = craft is ahead of rabbit (overshooting), Negative = behind (following)
-      gp_scalar alongTrack = craftOffset.dot(frame.tangent);
-      gp_scalar waypoint_power = (alongTrack > 0)
-          ? WAYPOINT_AHEAD_POWER    // Ahead of rabbit: harsher penalty
-          : WAYPOINT_BEHIND_POWER;  // Behind rabbit: lighter penalty
-
-      // ====================================================================
-      // METRIC 2: Movement direction alignment (scaled to ~meter equivalent)
-      // ====================================================================
-      gp_scalar movementDirectionError = 0.0f;
-      if (stepIndex > 1) {
-        gp_vec3 aircraft_movement = stepAircraftState.getPosition() - aircraftState.at(stepIndex-1).getPosition();
-        gp_scalar aircraft_distance = aircraft_movement.norm();
-
-        if (aircraft_distance > static_cast<gp_scalar>(0.1f)) {
-          gp_scalar direction_alignment = aircraft_movement.normalized().dot(frame.tangent);
-          direction_alignment = std::clamp(direction_alignment, static_cast<gp_scalar>(-1.0f), static_cast<gp_scalar>(1.0f));
-          // Range 0 (aligned) to 2 (opposite), scaled by DIRECTION_SCALE to ~meter equivalent
-          movementDirectionError = (static_cast<gp_scalar>(1.0f) - direction_alignment) * DIRECTION_SCALE;
-        }
-      }
-
-      // ====================================================================
-      // METRIC 3: Energy deviation (J/kg = m^2/s^2, raw)
-      // ====================================================================
-      // E = 0.5*v^2 + g*h  (specific energy, mass cancels)
-      // In NED: h = -z (altitude increases as z decreases)
-      gp_scalar craft_speed = stepAircraftState.getVelocity().norm();
-      gp_scalar craft_altitude = -aircraftPosition.z();  // NED: -z = altitude
-
-      constexpr gp_scalar g = static_cast<gp_scalar>(9.81f);
-      gp_scalar craft_energy = static_cast<gp_scalar>(0.5f) * craft_speed * craft_speed + g * craft_altitude;
-
-      gp_scalar rabbit_speed = SIM_RABBIT_VELOCITY;
-      gp_scalar rabbit_altitude = -currentPathPoint.start.z();
-      gp_scalar rabbit_energy = static_cast<gp_scalar>(0.5f) * rabbit_speed * rabbit_speed + g * rabbit_altitude;
-
-      // Raw energy deviation in J/kg
-      gp_scalar energy_deviation = std::abs(craft_energy - rabbit_energy);
-
-      // Asymmetric power based on altitude (NED: craft_alt < rabbit_alt means BELOW)
-      gp_scalar altitude_power = (craft_altitude < rabbit_altitude)
-          ? ALTITUDE_LOW_POWER    // Below target: harsher penalty
-          : ALTITUDE_HIGH_POWER;  // Above target: lighter penalty
-
-      // ====================================================================
-      // PER-STEP FITNESS: Raw units with power-law weighting
-      // Attitude delta is linear (already scaled), others use power-law
-      // ====================================================================
-      gp_fitness step_fitness = pow(waypointDistance, waypoint_power) +
-                                pow(movementDirectionError, MOVEMENT_DIRECTION_WEIGHT) +
-                                pow(energy_deviation, altitude_power) +
-                                attitude_delta;
-
-      step_fitness_sum += step_fitness * STEP_TIME_WEIGHT;
-
-      // ====================================================================
-      // Logging variables for compatibility (not used in fitness)
-      // ====================================================================
-      gp_scalar distanceFromGoal = (currentPathPoint.start - aircraftPosition).norm();
-      distanceFromGoal = distanceFromGoal * static_cast<gp_scalar>(100.0f) / (static_cast<gp_scalar>(2.0f) * SIM_PATH_RADIUS_LIMIT);
-
-      gp_vec3 target_direction = path.at(nextIndex).start - currentPathPoint.start;
-      if (target_direction.norm() < static_cast<gp_scalar>(1e-5)) {
-        target_direction = frame.tangent;
-      }
-      gp_vec3 aircraft_to_target = currentPathPoint.start - aircraftPosition;
-      gp_scalar angle_rad = 0.0f;
-      gp_scalar angle_denom = target_direction.norm() * aircraft_to_target.norm();
-      if (angle_denom > static_cast<gp_scalar>(1e-5)) {
-        angle_rad = std::acos(std::clamp(target_direction.dot(aircraft_to_target) / angle_denom, -1.0f, 1.0f));
-      }
-      angle_rad = angle_rad * static_cast<gp_scalar>(100.0f) / static_cast<gp_scalar>(M_PI);
-
-      // Cross-track for logging only (not used in fitness)
-      // craftOffset already computed above for waypoint distance
-      gp_vec3 lateral = craftOffset - frame.tangent * craftOffset.dot(frame.tangent);
-      gp_scalar crossTrackPercentForLog = (lateral.norm() * static_cast<gp_scalar>(100.0f)) / SIM_PATH_RADIUS_LIMIT;
-      gp_scalar movement_efficiency = movementDirectionError;
-
+      // Accumulate with nonlinear penalty (small excursions still expensive)
+      distance_sum += pow(distance, DISTANCE_POWER);
+      attitude_sum += attitude_delta;
       simulation_steps++;
 
-      // use the ugly global to communicate best of gen
+      // Per-step logging to data.dat
       if (printEval) {
-
         if (printHeader) {
-          fout << "Scn    Bake   Pth/Wnd:Step:   Time Idx  totDist   pathX    pathY    pathZ        X        Y        Z       dr       dp       dy   relVel     roll    pitch    power    distP   angleP  movEffP      qw      qx      qy      qz   vxBody   vyBody   vzBody    alpha     beta   dtheta    dphi   dhome   xtrkP  rabVel\n";
+          fout << "Scn    Bake   Pth/Wnd:Step:   Time Idx  totDist   pathX    pathY    pathZ        X        Y        Z       dr       dp       dy   relVel     roll    pitch    power      qw      qx      qy      qz   vxBody   vyBody   vzBody    alpha     beta   dtheta    dphi   dhome     dist   attDlt  rabVel\n";
           printHeader = false;
         }
 
@@ -1213,7 +1134,6 @@ void MyGP::evalTask(WorkerContext& context)
         gp_vec3 currPathPos = path.at(pathIndex).start;
         long currPathTime = path.at(pathIndex).simTimeMsec;
         if (simulation_steps == 1) {
-          // Reset at start of each eval
           firstStep = true;
         }
         if (!firstStep && currPathTime > prevPathTime) {
@@ -1225,58 +1145,46 @@ void MyGP::evalTask(WorkerContext& context)
         prevPathTime = currPathTime;
         firstStep = false;
 
-        // convert aircraft_orientaton to euler
+        // Convert orientation to euler angles
         Eigen::Matrix3f rotMatrix = craftOrientation.toRotationMatrix();
-
-        // Extract Euler angles
-        // Note: atan2 returns angle in range [-pi, pi]
         gp_vec3 euler;
-
-        // Handle special case near pitch = ±90° (gimbal lock)
         if (std::abs(rotMatrix(2, 0)) > static_cast<gp_scalar>(0.99999f)) {
-          // Gimbal lock case
-          euler[0] = 0; // Roll becomes undefined, set to zero
-
-          // Determine pitch based on r31 sign
+          euler[0] = 0;
           if (rotMatrix(2, 0) > 0) {
             euler[1] = -static_cast<gp_scalar>(M_PI / 2.0);
-            euler[2] = -atan2(rotMatrix(1, 2), rotMatrix(0, 2)); // yaw
-          }
-          else {
+            euler[2] = -atan2(rotMatrix(1, 2), rotMatrix(0, 2));
+          } else {
             euler[1] = static_cast<gp_scalar>(M_PI / 2.0);
-            euler[2] = atan2(rotMatrix(1, 2), rotMatrix(0, 2)); // yaw
+            euler[2] = atan2(rotMatrix(1, 2), rotMatrix(0, 2));
           }
-        }
-        else {
-          // Normal case
-          euler[0] = atan2(rotMatrix(2, 1), rotMatrix(2, 2)); // roll (phi)
-          euler[1] = -asin(rotMatrix(2, 0));                 // pitch (theta)
-          euler[2] = atan2(rotMatrix(1, 0), rotMatrix(0, 0)); // yaw (psi)
+        } else {
+          euler[0] = atan2(rotMatrix(2, 1), rotMatrix(2, 2));
+          euler[1] = -asin(rotMatrix(2, 0));
+          euler[2] = atan2(rotMatrix(1, 0), rotMatrix(0, 0));
         }
 
-        // Calculate body-frame velocity for GP operators
+        // Body-frame velocity
         gp_vec3 velocity_body = stepAircraftState.getOrientation().inverse() *
-                                 stepAircraftState.getVelocity();
+                                stepAircraftState.getVelocity();
 
-        // Calculate GP operator values (matching GP/autoc/gp_operators.h)
-        gp_scalar alpha_deg = atan2(-velocity_body.z(), velocity_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);  // GETALPHA
-        gp_scalar beta_deg = atan2(velocity_body.y(), velocity_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);    // GETBETA
+        // GP operator values
+        gp_scalar alpha_deg = atan2(-velocity_body.z(), velocity_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);
+        gp_scalar beta_deg = atan2(velocity_body.y(), velocity_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);
 
-        // Calculate angle to target in body frame (GETDTHETA, GETDPHI)
+        // Angle to target in body frame
         gp_vec3 craftToTarget = path.at(pathIndex).start - stepAircraftState.getPosition();
         gp_vec3 target_body = stepAircraftState.getOrientation().inverse() * craftToTarget;
-        gp_scalar dtheta_deg = atan2(-target_body.z(), target_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);    // GETDTHETA
-        gp_scalar dphi_deg = atan2(target_body.y(), -target_body.z()) * static_cast<gp_scalar>(180.0 / M_PI);      // GETDPHI (YZ plane, matches evaluator)
+        gp_scalar dtheta_deg = atan2(-target_body.z(), target_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);
+        gp_scalar dphi_deg = atan2(target_body.y(), -target_body.z()) * static_cast<gp_scalar>(180.0 / M_PI);
 
-        // Distance to home (GETDHOME)
+        // Distance to home
         gp_vec3 home(0, 0, SIM_INITIAL_ALTITUDE);
         gp_scalar dhome = (home - stepAircraftState.getPosition()).norm();
 
-        // Get raw quaternion
         gp_quat q = craftOrientation;
 
-        char outbuf[1600]; // XXX use c++20
-        sprintf(outbuf, "%06llu %06llu %03d/%02d:%04d: %06ld %3d % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.4f % 7.4f % 7.4f % 7.4f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.2f % 6.1f\n",
+        char outbuf[1600];
+        sprintf(outbuf, "%06llu %06llu %03d/%02d:%04d: %06ld %3d % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.4f % 7.4f % 7.4f % 7.4f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.3f % 6.4f % 6.1f\n",
           static_cast<unsigned long long>(scenarioSequence),
           static_cast<unsigned long long>(bakeoffSequence),
           pathVariantIndex, windVariantIndex, simulation_steps,
@@ -1288,37 +1196,37 @@ void MyGP::evalTask(WorkerContext& context)
           stepAircraftState.getPosition()[0],
           stepAircraftState.getPosition()[1],
           stepAircraftState.getPosition()[2],
-          euler[2],
-          euler[1],
-          euler[0],
+          euler[2], euler[1], euler[0],
           stepAircraftState.getRelVel(),
           stepAircraftState.getRollCommand(),
           stepAircraftState.getPitchCommand(),
           stepAircraftState.getThrottleCommand(),
-          distanceFromGoal,
-          angle_rad,
-          movement_efficiency,
-          q.w(), q.x(), q.y(), q.z(),                       // Quaternion
-          velocity_body.x(), velocity_body.y(), velocity_body.z(),  // Body velocity
-          alpha_deg, beta_deg,                              // GETALPHA, GETBETA
-          dtheta_deg, dphi_deg,                             // GETDTHETA, GETDPHI
-          dhome,                                            // GETDHOME
-          crossTrackPercentForLog,
-          rabbitVel                                         // Rabbit velocity (variable speed)
+          q.w(), q.x(), q.y(), q.z(),
+          velocity_body.x(), velocity_body.y(), velocity_body.z(),
+          alpha_deg, beta_deg,
+          dtheta_deg, dphi_deg,
+          dhome,
+          distance,        // New: distance to rabbit
+          attitude_delta,  // New: attitude change this step
+          rabbitVel
         );
         fout << outbuf;
       }
     }
 
-    localFitness = step_fitness_sum;
+    // Scale attitude by path geometry so 1 rad excess ≈ (path_dist/path_turn) meters
+    gp_scalar path_distance = path.back().distanceFromStart;
+    gp_scalar path_turn_rad = path.back().radiansFromStart;
+    // Fallback for straight paths: treat as one full rotation worth
+    gp_scalar attitude_scale = path_distance / std::max(path_turn_rad, static_cast<gp_scalar>(2.0 * M_PI));
+
+    localFitness = distance_sum + attitude_sum * attitude_scale;
 
     if (isnan(localFitness)) {
       nanDetector++;
     }
 
     // Crash penalty: soft lexicographic - completion dominates, quality provides gradient
-    // This ensures "how far you got" is the primary selection criterion (safety first),
-    // while flight quality (position, alignment, energy) differentiates within similar completion levels.
     if (crashReason != CrashReason::None) {
       gp_fitness total_path_distance = path.back().distanceFromStart;
       gp_fitness fraction_completed =
@@ -1703,14 +1611,19 @@ int main(int argc, char** argv)
             windSeed = context.evalResults.scenarioList.at(i).windSeed;
           }
 
+          // ========================================================================
+          // SIMPLIFIED FITNESS (v3): Two objectives - distance + attitude delta
+          // See specs/FITNESS_SIMPLIFY_20260221.md
+          // ========================================================================
           gp_fitness localFitness = 0.0;
           int stepIndex = 0;
 
-          // Per-step fitness accumulator (weights applied per sample, then summed)
-          gp_fitness step_fitness_sum = 0.0;
+          // Accumulate raw values, scale attitude at end using path geometry
+          gp_fitness distance_sum = 0.0;
+          gp_fitness attitude_sum = 0.0;
           int simulation_steps = 0;
 
-          // Attitude delta tracking: penalize excessive rotation per step
+          // Attitude delta tracking
           gp_fitness prev_roll = 0.0, prev_pitch = 0.0;
           bool first_attitude_sample = true;
 
@@ -1719,14 +1632,13 @@ int main(int argc, char** argv)
             int rawPathIndex = stepAircraftState.getThisPathIndex();
             int pathIndex = std::clamp(rawPathIndex, 0, static_cast<int>(path.size()) - 1);
             const Path& currentPathPoint = path.at(pathIndex);
-            PathFrame frame = computePathFrame(path, pathIndex);
-            int nextIndex = std::min(pathIndex + 1, static_cast<int>(path.size()) - 1);
 
             gp_vec3 aircraftPosition = stepAircraftState.getPosition();
             gp_quat craftOrientation = stepAircraftState.getOrientation();
-            gp_vec3 aircraftUp = craftOrientation * gp_vec3::UnitZ();
 
-            // Attitude delta: per-step roll/pitch change penalty
+            // ====================================================================
+            // ATTITUDE DELTA: Per-step roll/pitch change (radians)
+            // ====================================================================
             gp_fitness qw = craftOrientation.w();
             gp_fitness qx = craftOrientation.x();
             gp_fitness qy = craftOrientation.y();
@@ -1746,95 +1658,28 @@ int main(int argc, char** argv)
               prev_pitch = pitch;
               first_attitude_sample = false;
             } else {
-              attitude_delta = (fabs(roll - prev_roll) + fabs(pitch - prev_pitch)) * ATTITUDE_DELTA_SCALE;
+              attitude_delta = fabs(roll - prev_roll) + fabs(pitch - prev_pitch);
               prev_roll = roll;
               prev_pitch = pitch;
             }
 
-            // Waypoint distance (meters, raw)
-            // Asymmetric power based on position relative to rabbit's velocity vector
+            // ====================================================================
+            // DISTANCE: 3D distance to rabbit (meters)
+            // ====================================================================
             gp_vec3 craftOffset = aircraftPosition - currentPathPoint.start;
-            gp_scalar waypointDistance = craftOffset.norm();
+            gp_scalar distance = craftOffset.norm();
 
-            // Project craft offset onto rabbit's path tangent to determine ahead/behind
-            // Positive = craft is ahead of rabbit (overshooting), Negative = behind (following)
-            gp_scalar alongTrack = craftOffset.dot(frame.tangent);
-            gp_scalar waypoint_power = (alongTrack > 0)
-                ? WAYPOINT_AHEAD_POWER    // Ahead of rabbit: harsher penalty
-                : WAYPOINT_BEHIND_POWER;  // Behind rabbit: lighter penalty
-
-            // Movement direction alignment (scaled to ~meter equivalent)
-            gp_scalar movementDirectionError = 0.0f;
-            if (stepIndex > 1) {
-              gp_vec3 aircraft_movement = stepAircraftState.getPosition() - aircraftState.at(stepIndex-1).getPosition();
-              gp_scalar aircraft_distance = aircraft_movement.norm();
-              if (aircraft_distance > static_cast<gp_scalar>(0.1f)) {
-                gp_scalar direction_alignment = aircraft_movement.normalized().dot(frame.tangent);
-                direction_alignment = std::clamp(direction_alignment, static_cast<gp_scalar>(-1.0f), static_cast<gp_scalar>(1.0f));
-                movementDirectionError = (static_cast<gp_scalar>(1.0f) - direction_alignment) * DIRECTION_SCALE;
-              }
-            }
-
-            // Energy deviation (J/kg = m^2/s^2, raw)
-            gp_scalar craft_speed = stepAircraftState.getVelocity().norm();
-            gp_scalar craft_altitude = -aircraftPosition.z();  // NED: -z = altitude
-
-            constexpr gp_scalar g = static_cast<gp_scalar>(9.81f);
-            gp_scalar craft_energy = static_cast<gp_scalar>(0.5f) * craft_speed * craft_speed + g * craft_altitude;
-
-            gp_scalar rabbit_speed = SIM_RABBIT_VELOCITY;
-            gp_scalar rabbit_altitude = -currentPathPoint.start.z();
-            gp_scalar rabbit_energy = static_cast<gp_scalar>(0.5f) * rabbit_speed * rabbit_speed + g * rabbit_altitude;
-
-            // Raw energy deviation in J/kg
-            gp_scalar energy_deviation = std::abs(craft_energy - rabbit_energy);
-
-            // Asymmetric power based on altitude (NED: craft_alt < rabbit_alt means BELOW)
-            gp_scalar altitude_power = (craft_altitude < rabbit_altitude)
-                ? ALTITUDE_LOW_POWER    // Below target: harsher penalty
-                : ALTITUDE_HIGH_POWER;  // Above target: lighter penalty
-
-            // Per-step fitness: raw units with power-law weighting
-            // Attitude delta is linear (already scaled), others use power-law
-            gp_fitness step_fitness = pow(waypointDistance, waypoint_power) +
-                                      pow(movementDirectionError, MOVEMENT_DIRECTION_WEIGHT) +
-                                      pow(energy_deviation, altitude_power) +
-                                      attitude_delta;
-
-            step_fitness_sum += step_fitness * STEP_TIME_WEIGHT;
-
-            // Logging variables for compatibility (not used in fitness)
-            gp_scalar distanceFromGoal = (currentPathPoint.start - aircraftPosition).norm();
-            distanceFromGoal = distanceFromGoal * static_cast<gp_scalar>(100.0f) / (static_cast<gp_scalar>(2.0f) * SIM_PATH_RADIUS_LIMIT);
-
-            gp_vec3 target_direction = path.at(nextIndex).start - currentPathPoint.start;
-            if (target_direction.norm() < static_cast<gp_scalar>(1e-5f)) {
-              target_direction = frame.tangent;
-            }
-            gp_vec3 aircraft_to_target = currentPathPoint.start - aircraftPosition;
-            gp_scalar angle_rad = 0.0f;
-            gp_scalar angle_denom = target_direction.norm() * aircraft_to_target.norm();
-            if (angle_denom > static_cast<gp_scalar>(1e-5f)) {
-              angle_rad = static_cast<gp_scalar>(
-                std::acos(std::clamp(target_direction.dot(aircraft_to_target) / angle_denom,
-                                     static_cast<gp_scalar>(-1.0f),
-                                     static_cast<gp_scalar>(1.0f))));
-            }
-            angle_rad = angle_rad * static_cast<gp_scalar>(100.0f) / static_cast<gp_scalar>(M_PI);
-
-            // Cross-track for logging only (not used in fitness)
-            // craftOffset already computed above for waypoint distance
-            gp_vec3 lateral = craftOffset - frame.tangent * craftOffset.dot(frame.tangent);
-            gp_scalar crossTrackPercentForLog = (lateral.norm() * static_cast<gp_scalar>(100.0f)) / SIM_PATH_RADIUS_LIMIT;
-            gp_scalar movement_efficiency = movementDirectionError;
-
+            // Accumulate with nonlinear penalty (small excursions still expensive)
+            distance_sum += pow(distance, DISTANCE_POWER);
+            attitude_sum += attitude_delta;
             simulation_steps++;
-            
+
+            // Per-step logging
             if (printEval) {
               bestOfEvalResults = context.evalResults;
 
               if (stepIndex == 1) {
-                fout << "Pth:Step:   Time Idx  totDist   pathX    pathY    pathZ        X        Y        Z       dr       dp       dy   relVel     roll    pitch    power    distP   angleP  movEffP      qw      qx      qy      qz   vxBody   vyBody   vzBody    alpha     beta   dtheta    dphi   dhome   xtrkP  rabVel\n";
+                fout << "Pth:Step:   Time Idx  totDist   pathX    pathY    pathZ        X        Y        Z       dr       dp       dy   relVel     roll    pitch    power      qw      qx      qy      qz   vxBody   vyBody   vzBody    alpha     beta   dtheta    dphi   dhome     dist   attDlt  rabVel\n";
               }
 
               // Compute rabbit velocity from path position delta
@@ -1855,10 +1700,10 @@ int main(int argc, char** argv)
               prevPathPos2 = currPathPos;
               prevPathTime2 = currPathTime;
               firstStep2 = false;
-              
+
+              // Convert orientation to euler angles
               Eigen::Matrix3f rotMatrix = craftOrientation.toRotationMatrix();
               gp_vec3 euler;
-              
               if (std::abs(rotMatrix(2, 0)) > static_cast<gp_scalar>(0.99999f)) {
                 euler[0] = 0;
                 if (rotMatrix(2, 0) > 0) {
@@ -1874,29 +1719,28 @@ int main(int argc, char** argv)
                 euler[2] = atan2(rotMatrix(1, 0), rotMatrix(0, 0));
               }
 
-              // Calculate body-frame velocity for GP operators
+              // Body-frame velocity
               gp_vec3 velocity_body = stepAircraftState.getOrientation().inverse() *
-                                       stepAircraftState.getVelocity();
+                                      stepAircraftState.getVelocity();
 
-              // Calculate GP operator values (matching GP/autoc/gp_operators.h)
-              gp_scalar alpha_deg = atan2(-velocity_body.z(), velocity_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);  // GETALPHA
-              gp_scalar beta_deg = atan2(velocity_body.y(), velocity_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);    // GETBETA
+              // GP operator values
+              gp_scalar alpha_deg = atan2(-velocity_body.z(), velocity_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);
+              gp_scalar beta_deg = atan2(velocity_body.y(), velocity_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);
 
-              // Calculate angle to target in body frame (GETDTHETA, GETDPHI)
+              // Angle to target in body frame
               gp_vec3 craftToTarget = path.at(pathIndex).start - stepAircraftState.getPosition();
               gp_vec3 target_body = stepAircraftState.getOrientation().inverse() * craftToTarget;
-              gp_scalar dtheta_deg = atan2(-target_body.z(), target_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);    // GETDTHETA
-              gp_scalar dphi_deg = atan2(target_body.y(), -target_body.z()) * static_cast<gp_scalar>(180.0 / M_PI);      // GETDPHI (YZ plane, matches evaluator)
+              gp_scalar dtheta_deg = atan2(-target_body.z(), target_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);
+              gp_scalar dphi_deg = atan2(target_body.y(), -target_body.z()) * static_cast<gp_scalar>(180.0 / M_PI);
 
-              // Distance to home (GETDHOME)
+              // Distance to home
               gp_vec3 home(0, 0, SIM_INITIAL_ALTITUDE);
               gp_scalar dhome = (home - stepAircraftState.getPosition()).norm();
 
-              // Get raw quaternion
               gp_quat q = craftOrientation;
 
               char outbuf[1500];
-              sprintf(outbuf, "%03d:%04d: %06ld %3d % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.4f % 7.4f % 7.4f % 7.4f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.2f % 6.1f\n",
+              sprintf(outbuf, "%03d:%04d: %06ld %3d % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.4f % 7.4f % 7.4f % 7.4f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.3f % 6.4f % 6.1f\n",
                 pathVariantIndex, simulation_steps,
                 stepAircraftState.getSimTimeMsec(), pathIndex,
                 path.at(pathIndex).distanceFromStart,
@@ -1906,29 +1750,31 @@ int main(int argc, char** argv)
                 stepAircraftState.getPosition()[0],
                 stepAircraftState.getPosition()[1],
                 stepAircraftState.getPosition()[2],
-                euler[2],
-                euler[1],
-                euler[0],
+                euler[2], euler[1], euler[0],
                 stepAircraftState.getRelVel(),
                 stepAircraftState.getRollCommand(),
                 stepAircraftState.getPitchCommand(),
                 stepAircraftState.getThrottleCommand(),
-                distanceFromGoal,
-                angle_rad,
-                movement_efficiency,
-                q.w(), q.x(), q.y(), q.z(),                       // Quaternion
-                velocity_body.x(), velocity_body.y(), velocity_body.z(),  // Body velocity
-                alpha_deg, beta_deg,                              // GETALPHA, GETBETA
-                dtheta_deg, dphi_deg,                             // GETDTHETA, GETDPHI
-                dhome,                                            // GETDHOME
-                crossTrackPercentForLog,
-                rabbitVel                                         // Rabbit velocity (variable speed)
+                q.w(), q.x(), q.y(), q.z(),
+                velocity_body.x(), velocity_body.y(), velocity_body.z(),
+                alpha_deg, beta_deg,
+                dtheta_deg, dphi_deg,
+                dhome,
+                distance,        // New: distance to rabbit
+                attitude_delta,  // New: attitude change this step
+                rabbitVel
               );
               fout << outbuf;
             }
           }
-          
-          localFitness = step_fitness_sum;
+
+          // Scale attitude by path geometry so 1 rad excess ≈ (path_dist/path_turn) meters
+          gp_scalar path_distance = path.back().distanceFromStart;
+          gp_scalar path_turn_rad = path.back().radiansFromStart;
+          // Fallback for straight paths: treat as one full rotation worth
+          gp_scalar attitude_scale = path_distance / std::max(path_turn_rad, static_cast<gp_scalar>(2.0 * M_PI));
+
+          localFitness = distance_sum + attitude_sum * attitude_scale;
 
           if (isnan(localFitness)) {
             nanDetector++;

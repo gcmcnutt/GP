@@ -10,37 +10,16 @@
 struct WorkerContext;
 
 // ========================================================================
-// SIMPLIFIED FITNESS FUNCTION (v2 - raw units, no percentage scaling)
-// Goal: Smooth control to intercept and track path with minimum energy
-// All metrics in raw units (meters, J/kg) with power-law weighting
-// Step fitness normalized by time (per-second basis at 10Hz sampling)
+// SIMPLIFIED FITNESS FUNCTION (v3 - two objectives, path-relative scaling)
+// Goal: Stay close to rabbit, fly smooth. Strategy belongs in higher layers.
+// See specs/FITNESS_SIMPLIFY_20260221.md for rationale.
 // ========================================================================
 
-// Time normalization: scale step fitness to per-second basis
-// At 10Hz (100ms steps), each step contributes 0.1 seconds worth of error
-#define STEP_TIME_WEIGHT (SIM_TIME_STEP_MSEC / 1000.0)  // 0.1 at 10Hz
+// Distance penalty: nonlinear to keep small excursions expensive
+#define DISTANCE_POWER 1.2
 
-// Primary objective: Reach waypoints on time (meters)
-// Asymmetric based on position relative to rabbit's velocity vector
-// Ahead (in front of rabbit's path tangent): harsher penalty (overshooting)
-// Behind (trailing rabbit): lighter penalty (following correctly)
-#define WAYPOINT_AHEAD_POWER 1.8            // Power when ahead of rabbit (worse)
-#define WAYPOINT_BEHIND_POWER 1.2           // Power when behind rabbit (acceptable)
-
-// Secondary objective: Move efficiently along path
-#define MOVEMENT_DIRECTION_WEIGHT 1.3       // Power for direction alignment
-#define DIRECTION_SCALE 20.0                // Scale 0-2 direction error to ~meter equivalent
-
-// Tertiary objective: Match rabbit's energy state (kinetic + potential)
-// Energy deviation in J/kg (= m^2/s^2), asymmetric by altitude
-// NED coords: altitude = -z, so craft_alt < rabbit_alt means craft is BELOW
-#define ALTITUDE_LOW_POWER 1.5              // Power when below target (harder to recover)
-#define ALTITUDE_HIGH_POWER 1.0             // Power when above target (easy to correct)
-
-// Attitude delta penalty: penalize excessive rotation over flight
-// Sum of absolute roll + pitch changes (radians) accumulated over entire flight
-// Rewards smooth, stable flight; penalizes spiraling or oscillation
-#define ATTITUDE_DELTA_SCALE 1.0            // Scale factor for attitude penalty (radians to fitness)
+// Attitude scaling: computed per-path from path geometry (no manual tuning)
+// attitude_scale = path_distance / path_turn_rad (meters per radian)
 
 // Crash penalty: soft lexicographic multiplier
 // Completion dominates (1e6 scale), quality provides gradient within similar completion levels
