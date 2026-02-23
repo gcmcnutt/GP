@@ -1,4 +1,15 @@
 
+BLE DOWNLOAD PIPELINING - PRN-STYLE (ABANDONED)
+  - Baseline: 1.77 KB/s with simple request-response (reliable)
+  - Attempted: Nordic DFU PRN-style pipelining (browser-driven)
+  - Result: 2.52 KB/s on 17.9KB file (1.42x), but 171KB wedges frequently
+  - Root cause: ArduinoBLE written() doesn't queue - rapid writeValueWithoutResponse
+    calls overwrite each other. Falling back to writeValue negates pipelining benefit.
+  - Complexity: state tracking (outstanding/pending/drain/crc flags) has race conditions
+  - Conclusion: 1.42x gain doesn't justify complexity/reliability issues
+  - Reference: specs/FLASH_SPEEDUP.md "Phase 3: PRN-Style Pipelining - Experimental Results"
+  - Future options: compression (Heatshrink), larger MTU, different BLE stack
+
 * EXPORT RC COMMANDS TO XIAO LOG OUTSIDE TEST SPANS
   - Currently: GP Output (rc=[...]) only logged during autoc=Y test spans
   - Need: Log RC commands throughout entire flight for full playback visualization
