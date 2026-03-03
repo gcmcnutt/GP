@@ -95,7 +95,9 @@ std::vector<ScenarioDescriptor> generationScenarios;
 
 // VARIATIONS1: Global sigma parameters, initialized at startup from config
 static VariationSigmas gVariationSigmas = {0.0, 0.0, 0.0, 0.0, 0.0};
-static bool gVariationsEnabled = false;
+// Individual variation enable flags (from config)
+static bool gEnableEntryVariations = false;
+static bool gEnableWindVariations = false;
 
 // Variable rabbit speed: Global config, initialized at startup from config
 static RabbitSpeedConfig gRabbitSpeedConfig = RabbitSpeedConfig::defaultConfig();
@@ -124,13 +126,20 @@ static bool gPathSeedFromOverride = false;// True if RandomPathSeedB was used
  * Pre-fetch all scenario variations from GPrand() at startup.
  * Called once after GPInit(), before any GP evolution.
  *
- * @param numScenarios   Number of wind scenarios (windScenarioCount from config)
- * @param sigmas         Variation sigma parameters
- * @param rabbitCfg      Rabbit speed configuration
- * @param randomPathSeedB Override path seed (-1 = derive from GPrand)
+ * When a variation type is disabled, we still consume GPrand values to maintain
+ * deterministic PRNG sequence, but store defaults in the table instead.
+ * This way the table contains the actual values to send to sims - no filtering needed.
+ *
+ * @param numScenarios       Number of wind scenarios (windScenarioCount from config)
+ * @param sigmas             Variation sigma parameters
+ * @param rabbitCfg          Rabbit speed configuration
+ * @param randomPathSeedB    Override path seed (-1 = derive from GPrand)
+ * @param enableEntry        If false, store default entry offsets (0.0, 1.0 for speed)
+ * @param enableWind         If false, store default wind offset (0.0)
  */
 static void prefetchAllVariations(int numScenarios, const VariationSigmas& sigmas,
-                                   const RabbitSpeedConfig& rabbitCfg, int randomPathSeedB) {
+                                   const RabbitSpeedConfig& rabbitCfg, int randomPathSeedB,
+                                   bool enableEntry, bool enableWind) {
     gScenarioVariations.clear();
     gScenarioVariations.reserve(numScenarios);
 
@@ -145,14 +154,46 @@ static void prefetchAllVariations(int numScenarios, const VariationSigmas& sigma
 
     double totalDurationSec = SIM_TOTAL_TIME_MSEC / 1000.0;
 
+    // When wind variations disabled, use same seed for all scenarios (identical thermals/gusts)
+    // Still consume GPrand to maintain deterministic sequence
+    unsigned int baseWindSeed = static_cast<unsigned int>(GPrand());
+
     for (int i = 0; i < numScenarios; i++) {
         ScenarioVariations sv;
 
-        // Wind seed for crrcsim
-        sv.windSeed = static_cast<unsigned int>(GPrand());
+        // Wind seed for crrcsim: unique per scenario if enabled, same for all if disabled
+        if (enableWind) {
+            sv.windSeed = (i == 0) ? baseWindSeed : static_cast<unsigned int>(GPrand());
+        } else {
+            // Disabled: all scenarios use same seed (identical thermals/gusts)
+            // Still consume GPrand to keep PRNG sequence deterministic
+            if (i > 0) { (void)GPrand(); }
+            sv.windSeed = baseWindSeed;
+        }
 
-        // Entry variations (consume ~10 GPrand values)
-        sv.entryOffsets = generateVariationsFromGPrand(sigmas);
+        // Entry/wind variations: always consume GPrand to maintain deterministic sequence,
+        // but store defaults if that variation type is disabled
+        VariationOffsets generated = generateVariationsFromGPrand(sigmas);
+
+        if (enableEntry) {
+            sv.entryOffsets.entryHeadingOffset = generated.entryHeadingOffset;
+            sv.entryOffsets.entryRollOffset = generated.entryRollOffset;
+            sv.entryOffsets.entryPitchOffset = generated.entryPitchOffset;
+            sv.entryOffsets.entrySpeedFactor = generated.entrySpeedFactor;
+        } else {
+            // Defaults: no offset
+            sv.entryOffsets.entryHeadingOffset = 0.0;
+            sv.entryOffsets.entryRollOffset = 0.0;
+            sv.entryOffsets.entryPitchOffset = 0.0;
+            sv.entryOffsets.entrySpeedFactor = 1.0;
+        }
+
+        if (enableWind) {
+            sv.entryOffsets.windDirectionOffset = generated.windDirectionOffset;
+        } else {
+            // Default: no offset
+            sv.entryOffsets.windDirectionOffset = 0.0;
+        }
 
         // Rabbit speed profile (consume ~50-200 GPrand values)
         sv.rabbitProfile = generateSpeedProfileFromGPrand(rabbitCfg, totalDurationSec);
@@ -206,13 +247,9 @@ static void logPrefetchedVariations(int numScenarios, long gpSeed) {
 }
 
 // Helper to populate variation offsets in ScenarioMetadata from pre-fetched table
+// Table already contains correct values: defaults when disabled, variations when enabled
+// (filtering is done at prefetch time, not here)
 static void populateVariationOffsets(ScenarioMetadata& meta) {
-  if (!gVariationsEnabled) {
-    // Leave defaults (0.0, 1.0 for speed)
-    return;
-  }
-
-  // Use pre-fetched variations (single PRNG architecture)
   int windIdx = meta.windVariantIndex;
   if (windIdx >= 0 && windIdx < static_cast<int>(gScenarioVariations.size())) {
     const auto& v = gScenarioVariations[windIdx].entryOffsets;
@@ -1332,7 +1369,9 @@ int main(int argc, char** argv)
   *logger.info() << "EnableWindVariations: " << extraCfg.enableWindVariations << endl;
 
   // Initialize global variation parameters from config (degrees -> radians)
-  gVariationsEnabled = (extraCfg.enableEntryVariations || extraCfg.enableWindVariations);
+  // Store individual flags for selective application in populateVariationOffsets()
+  gEnableEntryVariations = (extraCfg.enableEntryVariations != 0);
+  gEnableWindVariations = (extraCfg.enableWindVariations != 0);
   gVariationSigmas = VariationSigmas::fromDegrees(
       extraCfg.entryHeadingSigma,
       extraCfg.entryRollSigma,
@@ -1360,9 +1399,11 @@ int main(int argc, char** argv)
 
   // SINGLE PRNG ARCHITECTURE: Pre-fetch all scenario variations from GPrand()
   // This consumes from GPrand() BEFORE GP evolution, ensuring deterministic sequence
+  // When a variation type is disabled, defaults are stored in the table (not filtered later)
   int windScenarioCount = std::max(extraCfg.windScenarioCount, 1);
   prefetchAllVariations(windScenarioCount, gVariationSigmas, gRabbitSpeedConfig,
-                        extraCfg.randomPathSeedB);
+                        extraCfg.randomPathSeedB,
+                        gEnableEntryVariations, gEnableWindVariations);
 
   // Log pre-fetched variations for verification
   *logger.info() << "Sigmas: heading=" << extraCfg.entryHeadingSigma << "° "
