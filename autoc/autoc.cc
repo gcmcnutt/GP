@@ -102,6 +102,29 @@ static bool gEnableWindVariations = false;
 // Variable rabbit speed: Global config, initialized at startup from config
 static RabbitSpeedConfig gRabbitSpeedConfig = RabbitSpeedConfig::defaultConfig();
 
+// RAMP_LANDSCAPE: Gradual variation scaling (see specs/RAMP_LANDSCAPE.md)
+static int gCurrentGeneration = 0;      // Updated at start of each generation
+static int gTotalGenerations = 1;       // Set from config at startup
+static int gVariationRampStep = 0;      // Set from config at startup (0 = disabled)
+
+/**
+ * Compute variation scale for current generation.
+ * Scale ramps from 0.0 to 1.0 over the course of training.
+ *
+ * @return Scale factor to apply to variation offsets (0.0 to 1.0)
+ */
+static double computeVariationScale() {
+    if (gVariationRampStep <= 0) return 1.0;  // Disabled - full variations
+    if (gTotalGenerations <= 0) return 1.0;   // Safety check
+
+    // Stepped: quantize to step boundaries
+    int stepIndex = gCurrentGeneration / gVariationRampStep;
+    int totalSteps = gTotalGenerations / gVariationRampStep;
+    if (totalSteps <= 0) return 1.0;
+
+    return std::min(1.0, static_cast<double>(stepIndex) / static_cast<double>(totalSteps));
+}
+
 // ============================================================================
 // Single PRNG Architecture: Pre-fetched scenario variations
 // See specs/SINGLE_PRNG.md for design
@@ -249,15 +272,24 @@ static void logPrefetchedVariations(int numScenarios, long gpSeed) {
 // Helper to populate variation offsets in ScenarioMetadata from pre-fetched table
 // Table already contains correct values: defaults when disabled, variations when enabled
 // (filtering is done at prefetch time, not here)
+// RAMP_LANDSCAPE: Offsets are scaled by computeVariationScale() for gradual introduction
 static void populateVariationOffsets(ScenarioMetadata& meta) {
   int windIdx = meta.windVariantIndex;
   if (windIdx >= 0 && windIdx < static_cast<int>(gScenarioVariations.size())) {
     const auto& v = gScenarioVariations[windIdx].entryOffsets;
-    meta.entryHeadingOffset = v.entryHeadingOffset;
-    meta.entryRollOffset = v.entryRollOffset;
-    meta.entryPitchOffset = v.entryPitchOffset;
-    meta.entrySpeedFactor = v.entrySpeedFactor;
-    meta.windDirectionOffset = v.windDirectionOffset;
+
+    // Get current scale (0.0 to 1.0 over training)
+    double scale = computeVariationScale();
+
+    // Angular offsets: scale toward 0
+    meta.entryHeadingOffset = v.entryHeadingOffset * scale;
+    meta.entryRollOffset = v.entryRollOffset * scale;
+    meta.entryPitchOffset = v.entryPitchOffset * scale;
+    meta.windDirectionOffset = v.windDirectionOffset * scale;
+
+    // Speed factor: interpolate from 1.0 toward pre-computed value
+    // At scale=0: factor=1.0 (nominal), at scale=1: factor=pre-computed
+    meta.entrySpeedFactor = 1.0 + scale * (v.entrySpeedFactor - 1.0);
   }
   // If windIdx out of range, leave defaults (shouldn't happen)
 }
@@ -274,13 +306,19 @@ static void applySpeedProfileToPath(std::vector<Path>& path, int windVariantInde
   }
   const auto& speedProfile = gScenarioVariations[windVariantIndex].rabbitProfile;
 
+  // RAMP_LANDSCAPE: Get scale for rabbit speed variation
+  double scale = computeVariationScale();
+  double nominal = gRabbitSpeedConfig.nominal;
+
   // Recompute simTimeMsec for each path point based on variable speed profile
   gp_scalar simTimeMsec = 0.0f;
   path[0].simTimeMsec = 0.0f;
 
   for (size_t i = 1; i < path.size(); i++) {
     gp_scalar segmentDistance = path[i].distanceFromStart - path[i-1].distanceFromStart;
-    double speed = getSpeedAtTime(speedProfile, static_cast<double>(simTimeMsec) / 1000.0);
+    double profileSpeed = getSpeedAtTime(speedProfile, static_cast<double>(simTimeMsec) / 1000.0);
+    // Scale speed toward nominal: at scale=0 use nominal, at scale=1 use profileSpeed
+    double speed = nominal + scale * (profileSpeed - nominal);
     gp_scalar dt = (segmentDistance / static_cast<gp_scalar>(speed)) * 1000.0f;
     simTimeMsec += dt;
     path[i].simTimeMsec = simTimeMsec;
@@ -1397,6 +1435,18 @@ int main(int argc, char** argv)
                  << " cycles=[" << extraCfg.rabbitSpeedCycleMin << ", " << extraCfg.rabbitSpeedCycleMax << "] s"
                  << (extraCfg.rabbitSpeedSigma > 0 ? " (VARIABLE)" : " (CONSTANT)") << endl;
 
+  // RAMP_LANDSCAPE: Initialize variation ramp globals
+  gTotalGenerations = ConfigManager::getGPConfig().NumberOfGenerations;
+  gVariationRampStep = extraCfg.variationRampStep;
+  gCurrentGeneration = 0;
+  if (gVariationRampStep > 0) {
+    int totalSteps = gTotalGenerations / gVariationRampStep;
+    *logger.info() << "VariationRamp: step=" << gVariationRampStep
+                   << " gens, " << totalSteps << " steps over " << gTotalGenerations
+                   << " gens (scale +=" << std::fixed << std::setprecision(1)
+                   << (100.0 / totalSteps) << "% per step)" << endl;
+  }
+
   // SINGLE PRNG ARCHITECTURE: Pre-fetch all scenario variations from GPrand()
   // This consumes from GPrand() BEFORE GP evolution, ensuring deterministic sequence
   // When a variation type is disabled, defaults are stored in the table (not filtered later)
@@ -1949,6 +1999,22 @@ int main(int argc, char** argv)
 
     for (int gen = 1; gen <= ConfigManager::getGPConfig().NumberOfGenerations; gen++)
     {
+      // RAMP_LANDSCAPE: Update current generation for variation scaling
+      int prevGen = gCurrentGeneration;
+      gCurrentGeneration = gen;
+
+      // Log when scale changes (at step boundaries)
+      if (gVariationRampStep > 0) {
+        int prevStep = prevGen / gVariationRampStep;
+        int currStep = gen / gVariationRampStep;
+        if (currStep != prevStep || gen == 1) {
+          double scale = computeVariationScale();
+          int totalSteps = gTotalGenerations / gVariationRampStep;
+          *logger.info() << "VariationScale: " << std::fixed << std::setprecision(2)
+                         << (scale * 100.0) << "% (step " << currStep << "/" << totalSteps << ")" << endl;
+        }
+      }
+
       // For this generation, build a smooth path goal using pre-fetched gPathSeed
       // (single PRNG architecture: consistent paths derived from GPSeed)
       generationPaths = generateSmoothPaths(ConfigManager::getExtraConfig().generatorMethod,

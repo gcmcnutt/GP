@@ -65,6 +65,11 @@ public:
   double entrySpeedSigma = 0.1;
   double windDirectionSigma = 45.0;
 
+  // Variation landscape ramp (see specs/RAMP_LANDSCAPE.md)
+  // Scale variation sigmas from 0 to 1 over training
+  // 0 = disabled (full sigmas from start), >0 = generations per step
+  int variationRampStep = 0;
+
   // Variable rabbit speed (see specs/VARIABLE_RABBIT.md)
   // Set rabbitSpeedSigma=0 for constant speed at rabbitSpeedNominal
   double rabbitSpeedNominal = 16.0;   // m/s - center of distribution (default matches SIM_RABBIT_VELOCITY)
