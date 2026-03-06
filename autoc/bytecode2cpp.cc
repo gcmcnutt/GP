@@ -34,6 +34,7 @@ private:
                 case GETDHOME: case GETALPHA: case GETBETA:
                 case GETVELX: case GETVELY: case GETVELZ:
                 case GETROLL_RAD: case GETPITCH_RAD:
+                case GETDPHI_RATE: case GETDTHETA_RATE:
                     currentStack += 1;
                     break;
                     
@@ -41,6 +42,7 @@ private:
                 case SIN: case COS: case ABS: case SQRT:
                 case SETPITCH: case SETROLL: case SETTHROTTLE:
                 case GETDPHI: case GETDTHETA: case GETDTARGET:
+                case GETDPHI_PREV: case GETDTHETA_PREV:
                     // net 0
                     break;
                     
@@ -105,6 +107,10 @@ private:
             case GETVELZ: return "GETVELZ";
             case GETROLL_RAD: return "GETROLL_RAD";
             case GETPITCH_RAD: return "GETPITCH_RAD";
+            case GETDPHI_PREV: return "GETDPHI_PREV";
+            case GETDTHETA_PREV: return "GETDTHETA_PREV";
+            case GETDPHI_RATE: return "GETDPHI_RATE";
+            case GETDTHETA_RATE: return "GETDTHETA_RATE";
             case CLAMP: return "CLAMP";
             case ATAN2: return "ATAN2";
             case ABS: return "ABS";
@@ -140,6 +146,7 @@ private:
             case SIN: case COS: case ABS: case SQRT:
             case SETPITCH: case SETROLL: case SETTHROTTLE:
             case GETDPHI: case GETDTHETA: case GETDTARGET:
+            case GETDPHI_PREV: case GETDTHETA_PREV:
                 code << "    // " << opName << "\n";
                 code << "    {\n";
                 code << "        gp_scalar args[1] = {stack[sp-1]};\n";
@@ -207,8 +214,12 @@ public:
         }
         
         code << "\n    return applyRangeLimit(stack[0]);\n";
-        code << "}\n";
-        
+        code << "}\n\n";
+
+        // Generate source identifier string
+        code << "// GP program source identifier for logging\n";
+        code << "const char* generatedGPProgramSource = \"" << std::string(header.s3_key) << "\";\n";
+
         return code.str();
     }
     
@@ -255,8 +266,12 @@ public:
         code << "gp_scalar " << functionName << "(PathProvider& pathProvider, AircraftState& aircraftState, gp_scalar arg) {\n";
         code << "    // Use portable bytecode evaluator for consistent behavior\n";
         code << "    return evaluateBytecodePortable(embedded_gp_bytecode, embedded_gp_bytecode_size, pathProvider, aircraftState, arg);\n";
-        code << "}\n";
-        
+        code << "}\n\n";
+
+        // Generate source identifier string
+        code << "// GP program source identifier for logging\n";
+        code << "const char* generatedGPProgramSource = \"" << std::string(header.s3_key) << "\";\n";
+
         return code.str();
     }
     

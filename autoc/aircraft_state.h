@@ -4,6 +4,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <stdexcept>
+#include <string>
 #include "gp_types.h"
 
 #ifdef GP_BUILD
@@ -37,9 +40,9 @@
 #define SIM_INITIAL_THROTTLE static_cast<gp_scalar>(0.0f)
 #define SIM_INITIAL_LOCATION_DITHER static_cast<gp_scalar>(30.0f)
 #define SIM_PATH_BOUNDS static_cast<gp_scalar>(40.0f)
-#define SIM_PATH_RADIUS_LIMIT static_cast<gp_scalar>(60.0f)
+#define SIM_PATH_RADIUS_LIMIT static_cast<gp_scalar>(70.0f)
 #define SIM_MIN_ELEVATION static_cast<gp_scalar>(-7.0f)
-#define SIM_MAX_ELEVATION static_cast<gp_scalar>(-110.0f)
+#define SIM_MAX_ELEVATION static_cast<gp_scalar>(-120.0f)
 
 #define SIM_TOTAL_TIME_MSEC (100 * 1000)
 #define SIM_TIME_STEP_MSEC (100)
@@ -171,28 +174,37 @@ public:
 struct AircraftState;
 
 // Portable helper function for GP path indexing
-// Extracted from generated GP code to remove boost dependencies
+// Uses pure time-domain lookahead: N steps = N * SIM_TIME_STEP_MSEC ahead/behind
+// This is cleaner than distance-based and works correctly with variable rabbit speed
 inline int getPathIndex(PathProvider& pathProvider, AircraftState& aircraftState, gp_scalar arg) {
     if (std::isnan(arg)) {
         return pathProvider.getCurrentIndex();
     }
-    
+
     int steps = CLAMP_DEF((int)arg, -5, 5);
-    gp_scalar distanceSoFar = pathProvider.getPath(pathProvider.getCurrentIndex()).distanceFromStart;
-    gp_scalar distanceGoal = distanceSoFar + steps * SIM_RABBIT_VELOCITY * (SIM_TIME_STEP_MSEC / 1000.0f);
-    int currentStep = pathProvider.getCurrentIndex();
-    
+    // Clamp current index defensively
+    int currentStep = CLAMP_DEF(pathProvider.getCurrentIndex(), 0, pathProvider.getPathSize() - 1);
+
+    // Time-based lookahead: N steps = N * 100ms
+    const gp_scalar currentTimeMsec = pathProvider.getPath(currentStep).simTimeMsec;
+    const gp_scalar timeGoalMsec = currentTimeMsec + steps * SIM_TIME_STEP_MSEC;
+
+    // Use a small epsilon to avoid off-by-one flip-flops when timeGoalMsec is
+    // very close to a waypoint boundary.
+    constexpr gp_scalar kEps = static_cast<gp_scalar>(0.1f);  // 0.1ms epsilon
+
     if (steps > 0) {
-        while (pathProvider.getPath(currentStep).distanceFromStart < distanceGoal && 
-               currentStep < pathProvider.getPathSize() - 1) {
+        while (currentStep < pathProvider.getPathSize() - 1 &&
+               pathProvider.getPath(currentStep).simTimeMsec + kEps < timeGoalMsec) {
             currentStep++;
         }
-    } else {
-        while (pathProvider.getPath(currentStep).distanceFromStart > distanceGoal && 
-               currentStep > 0) {
+    } else if (steps < 0) {
+        while (currentStep > 0 &&
+               pathProvider.getPath(currentStep).simTimeMsec - kEps > timeGoalMsec) {
             currentStep--;
         }
     }
+
     return currentStep;
 }
 
@@ -202,12 +214,23 @@ inline int getPathIndex(PathProvider& pathProvider, AircraftState& aircraftState
 struct AircraftState {
   public:
 
-    AircraftState() {}
+    AircraftState()
+      : thisPathIndex(0),
+        dRelVel(0.0f),
+        velocity(gp_vec3::Zero()),
+        aircraft_orientation(gp_quat::Identity()),
+        position(gp_vec3::Zero()),
+        simTimeMsec(0),
+        pitchCommand(0.0f),
+        rollCommand(0.0f),
+        throttleCommand(0.0f),
+        wind_velocity(gp_vec3::Zero()) {}
     AircraftState(int thisPathIndex, gp_scalar relVel, gp_vec3 vel, gp_quat orientation,
       gp_vec3 pos, gp_scalar pc, gp_scalar rc, gp_scalar tc,
       unsigned long int timeMsec)
       : thisPathIndex(thisPathIndex), dRelVel(relVel), velocity(vel), aircraft_orientation(orientation), position(pos), simTimeMsec(timeMsec),
-      pitchCommand(pc), rollCommand(rc), throttleCommand(tc) {
+      pitchCommand(pc), rollCommand(rc), throttleCommand(tc),
+      wind_velocity(gp_vec3::Zero()) {
     }
 
     // Casting ctor for external Eigen scalar types while migrating callers to float
@@ -223,7 +246,8 @@ struct AircraftState {
         simTimeMsec(timeMsec),
         pitchCommand(static_cast<gp_scalar>(pc)),
         rollCommand(static_cast<gp_scalar>(rc)),
-        throttleCommand(static_cast<gp_scalar>(tc)) {}
+        throttleCommand(static_cast<gp_scalar>(tc)),
+        wind_velocity(gp_vec3::Zero()) {}
 
     // generate setters and getters
     int getThisPathIndex() const { return thisPathIndex; }
@@ -250,6 +274,53 @@ struct AircraftState {
     gp_scalar setRollCommand(gp_scalar roll) { return (rollCommand = CLAMP_DEF(roll, -1.0f, 1.0f)); }
     gp_scalar getThrottleCommand() const { return throttleCommand; }
     gp_scalar setThrottleCommand(gp_scalar throttle) { return (throttleCommand = CLAMP_DEF(throttle, -1.0f, 1.0f)); }
+
+    gp_vec3 getWindVelocity() const { return wind_velocity; }
+    void setWindVelocity(const gp_vec3& wind) { wind_velocity = wind; }
+
+    // =========================================================================
+    // Temporal history for GP nodes - see specs/TEMPORAL_STATE.md
+    // =========================================================================
+    static constexpr int HISTORY_SIZE = 10;  // 1 sec at 10Hz
+
+    // Record current errors to history (call before GP eval each tick)
+    void recordErrorHistory(gp_scalar dPhi, gp_scalar dTheta, unsigned long timeMs) {
+      dPhiHistory_[historyIndex_] = dPhi;
+      dThetaHistory_[historyIndex_] = dTheta;
+      timeHistory_[historyIndex_] = timeMs;
+      historyIndex_ = (historyIndex_ + 1) % HISTORY_SIZE;
+      if (historyCount_ < HISTORY_SIZE) historyCount_++;
+    }
+
+    // Get historical dPhi (n=0 is most recent, n=1 is one tick ago, etc.)
+    // Returns 0.0f if history not available. Uses CLAMP_DEF for portability.
+    gp_scalar getHistoricalDPhi(int n) const {
+      if (historyCount_ == 0) return static_cast<gp_scalar>(0.0f);
+      n = CLAMP_DEF(n, 0, historyCount_ - 1);
+      int idx = (historyIndex_ - 1 - n + HISTORY_SIZE) % HISTORY_SIZE;
+      return dPhiHistory_[idx];
+    }
+
+    gp_scalar getHistoricalDTheta(int n) const {
+      if (historyCount_ == 0) return static_cast<gp_scalar>(0.0f);
+      n = CLAMP_DEF(n, 0, historyCount_ - 1);
+      int idx = (historyIndex_ - 1 - n + HISTORY_SIZE) % HISTORY_SIZE;
+      return dThetaHistory_[idx];
+    }
+
+    unsigned long getHistoricalTime(int n) const {
+      if (historyCount_ == 0) return 0;
+      n = CLAMP_DEF(n, 0, historyCount_ - 1);
+      int idx = (historyIndex_ - 1 - n + HISTORY_SIZE) % HISTORY_SIZE;
+      return timeHistory_[idx];
+    }
+
+    int getHistoryCount() const { return historyCount_; }
+
+    void clearHistory() {
+      historyIndex_ = 0;
+      historyCount_ = 0;
+    }
 
     void minisimAdvanceState(gp_scalar dt) {
       gp_scalar dtSec = dt / 1000.0f;
@@ -301,6 +372,16 @@ struct AircraftState {
     gp_scalar rollCommand;
     gp_scalar throttleCommand;
 
+    // Wind diagnostic fields (for debugging non-determinism)
+    gp_vec3 wind_velocity;  // Wind vector (north, east, down) from calculate_wind()
+
+    // Temporal history for GP nodes - see specs/TEMPORAL_STATE.md
+    gp_scalar dPhiHistory_[HISTORY_SIZE] = {0};
+    gp_scalar dThetaHistory_[HISTORY_SIZE] = {0};
+    unsigned long timeHistory_[HISTORY_SIZE] = {0};
+    int historyIndex_ = 0;   // Next write position (ring buffer)
+    int historyCount_ = 0;   // Valid samples (0 to HISTORY_SIZE)
+
 #ifdef GP_BUILD
     friend class boost::serialization::access;
 
@@ -315,11 +396,107 @@ struct AircraftState {
       ar& rollCommand;
       ar& throttleCommand;
       ar& simTimeMsec;
+      ar& wind_velocity;
     }
 #endif
 };
 #ifdef GP_BUILD
-BOOST_CLASS_VERSION(AircraftState, 1)
+BOOST_CLASS_VERSION(AircraftState, 2)
 #endif
+
+// Physics trace entry - captures complete FDM state at a single timestep
+// Uses crrcsim native types for bit-exact copying (SCALAR = double)
+// WARNING: Do NOT introduce type conversions - causes rounding errors!
+struct PhysicsTraceEntry {
+  // Simulation metadata
+  uint32_t step;          // Timestep number
+  double simTimeMsec;     // Simulation time in milliseconds (native: double)
+  double dtSec;           // Timestep delta in seconds (SCALAR)
+
+  // Worker identity (for multi-process determinism debugging)
+  int32_t workerId;       // Worker ID (0-7 typically)
+  int32_t workerPid;      // Worker process ID
+  int32_t evalCounter;    // Evaluation counter on this worker
+
+  // Position, velocity, acceleration (world frame) - all SCALAR (double)
+  double pos[3];          // Position [x, y, z]
+  double vel[3];          // Velocity [x, y, z]
+  double acc[3];          // Acceleration [x, y, z]
+  double accPast[3];      // Previous acceleration
+
+  // Orientation and rotation - all SCALAR (double)
+  double quat[4];         // Quaternion [x, y, z, w]
+  double quatDotPast[4];  // Previous quaternion derivative
+  double omegaBody[3];    // Angular velocity in body frame
+  double omegaDotBody[3]; // Angular acceleration
+  double rate[3];         // Rate (may alias omegaBody)
+  double ratePast[3];     // Previous rate
+
+  // Aerodynamic state - all SCALAR (double)
+  double alpha;           // Angle of attack (rad)
+  double beta;            // Sideslip angle (rad)
+  double vRelWind;        // Airspeed magnitude
+  double velRelGround[3]; // Velocity relative to ground
+  double velRelAir[3];    // Velocity relative to air
+  double vLocal[3];       // Local velocity
+  double vLocalDot[3];    // Local velocity derivative
+
+  // Aero calculation details - all SCALAR (double)
+  double cosAlpha, sinAlpha, cosBeta;     // Trig values
+  double CL, CD;                          // Lift and drag coefficients
+  double CL_left, CL_cent, CL_right;     // Spanwise lift distribution
+  double CL_wing;                         // Wing lift coefficient
+  double Cl, Cm, Cn;                      // Moment coefficients
+  double QS;                              // Dynamic pressure × ref area
+
+  // Forces and moments (body frame) - all SCALAR (double)
+  double forceBody[3];    // Total force
+  double momentBody[3];   // Total moment
+
+  // Environment - all SCALAR (double)
+  double wind[3];         // Wind velocity
+  double localAirmass[3]; // Local airmass velocity
+  double gustBody[6];     // Gust in body frame: [v_V_gust_body (3), v_R_omega_gust_body (3)]
+  double density;         // Air density
+  double gravity;         // Gravity magnitude
+  double geocentricLat, geocentricLon, geocentricR;  // Geocentric position
+
+  // Control inputs - all SCALAR (double) from TSimInputs
+  double pitchCommand;    // GP pitch command
+  double rollCommand;     // GP roll command
+  double throttleCommand; // GP throttle command
+  double elevator;        // Sim elevator input
+  double aileron;         // Sim aileron input
+  double rudder;          // Sim rudder input
+  double throttle;        // Sim throttle input
+
+  // RNG state - exact integer types
+  uint16_t rngState16;    // 16-bit RNG state
+  uint32_t rngState32;    // 32-bit RNG state
+
+  // Path tracking
+  int32_t pathIndex;      // Current path index
+
+  PhysicsTraceEntry() { memset(this, 0, sizeof(*this)); }
+
+#ifdef GP_BUILD
+  template <class Archive>
+  void serialize(Archive& ar, const unsigned int version) {
+    ar& step & simTimeMsec & dtSec;
+    ar& workerId & workerPid & evalCounter;
+    ar& pos & vel & acc & accPast;
+    ar& quat & quatDotPast & omegaBody & omegaDotBody & rate & ratePast;
+    ar& alpha & beta & vRelWind & velRelGround & velRelAir & vLocal & vLocalDot;
+    ar& cosAlpha & sinAlpha & cosBeta;
+    ar& CL & CD & CL_left & CL_cent & CL_right & CL_wing & Cl & Cm & Cn & QS;
+    ar& forceBody & momentBody;
+    ar& wind & localAirmass & gustBody & density & gravity;
+    ar& geocentricLat & geocentricLon & geocentricR;
+    ar& pitchCommand & rollCommand & throttleCommand;
+    ar& elevator & aileron & rudder & throttle;
+    ar& rngState16 & rngState32 & pathIndex;
+  }
+#endif
+};
 
 #endif

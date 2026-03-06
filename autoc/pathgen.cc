@@ -52,6 +52,9 @@ std::vector<std::vector<Path>> generateSmoothPaths(char* method, int numPaths, g
   else if (strcmp(method, "line") == 0) {
     generatorMethod = new GenerateLine();
   }
+  else if (strcmp(method, "progressiveDistance") == 0) {
+    generatorMethod = new GenerateProgressiveDistance();
+  }
   else {
     std::cerr << "Unknown path generation method: " << method << std::endl;
     assert(false);

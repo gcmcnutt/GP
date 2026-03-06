@@ -104,9 +104,26 @@ GPConfigVarInformation* ConfigManager::createConfigArray() {
         {"EvaluateMode", DATAINT, &extraConfig->evaluateMode},
         {"BytecodeFile", DATASTRING, &extraConfig->bytecodeFile},
         {"WindScenarios", DATAINT, &extraConfig->windScenarioCount},
-        {"WindSeedBase", DATAINT, &extraConfig->windSeedBase},
-        {"WindSeedStride", DATAINT, &extraConfig->windSeedStride},
         {"RandomPathSeedB", DATAINT, &extraConfig->randomPathSeedB},
+        {"GPSeed", DATAINT, &extraConfig->gpSeed},
+        {"TrainingNodes", DATASTRING, &extraConfig->trainingNodes},
+        // VARIATIONS1: Entry and wind direction variations
+        {"EnableEntryVariations", DATAINT, &extraConfig->enableEntryVariations},
+        {"EnableWindVariations", DATAINT, &extraConfig->enableWindVariations},
+        {"EntryHeadingSigma", DATADOUBLE, &extraConfig->entryHeadingSigma},
+        {"EntryRollSigma", DATADOUBLE, &extraConfig->entryRollSigma},
+        {"EntryPitchSigma", DATADOUBLE, &extraConfig->entryPitchSigma},
+        {"EntrySpeedSigma", DATADOUBLE, &extraConfig->entrySpeedSigma},
+        {"WindDirectionSigma", DATADOUBLE, &extraConfig->windDirectionSigma},
+        // Variation landscape ramp (see specs/RAMP_LANDSCAPE.md)
+        {"VariationRampStep", DATAINT, &extraConfig->variationRampStep},
+        // Variable rabbit speed (see specs/VARIABLE_RABBIT.md)
+        {"RabbitSpeedNominal", DATADOUBLE, &extraConfig->rabbitSpeedNominal},
+        {"RabbitSpeedSigma", DATADOUBLE, &extraConfig->rabbitSpeedSigma},
+        {"RabbitSpeedMin", DATADOUBLE, &extraConfig->rabbitSpeedMin},
+        {"RabbitSpeedMax", DATADOUBLE, &extraConfig->rabbitSpeedMax},
+        {"RabbitSpeedCycleMin", DATADOUBLE, &extraConfig->rabbitSpeedCycleMin},
+        {"RabbitSpeedCycleMax", DATADOUBLE, &extraConfig->rabbitSpeedCycleMax},
         {"", DATAINT, NULL}
     };
     return configArray;

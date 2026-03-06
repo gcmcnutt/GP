@@ -15,7 +15,7 @@
 #include <aws/core/auth/AWSCredentialsProvider.h>
 #include <aws/core/client/ClientConfiguration.h>
 
-#include <boost/archive/text_iarchive.hpp>
+#include <boost/archive/binary_iarchive.hpp>
 #include <boost/serialization/vector.hpp>
 
 #include "../include/gp.h"
@@ -159,6 +159,8 @@ void generateBytecode(MyGene* gene, std::vector<GPBytecode>& program) {
     case GETDPHI:
     case GETDTHETA:
     case GETDTARGET:
+    case GETDPHI_PREV:
+    case GETDTHETA_PREV:
       if (gene->containerSize() >= 1) {
         generateBytecode(gene->NthMyChild(0), program);
       }
@@ -181,6 +183,8 @@ void generateBytecode(MyGene* gene, std::vector<GPBytecode>& program) {
     case GETVELZ:
     case GETROLL_RAD:
     case GETPITCH_RAD:
+    case GETDPHI_RATE:
+    case GETDTHETA_RATE:
       // No children to process
       break;
       
@@ -422,8 +426,8 @@ int main(int argc, char** argv) {
   std::string retrievedData = oss.str();
 
   try {
-    std::istringstream iss(retrievedData);
-    boost::archive::text_iarchive ia(iss);
+    std::istringstream iss(retrievedData, std::ios::binary);
+    boost::archive::binary_iarchive ia(iss);
     ia >> evalResults;
   }
   catch (const std::exception& e) {

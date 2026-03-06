@@ -1,6 +1,5 @@
 /* test sim for aircraft */
 #include <boost/asio.hpp>
-#include <boost/archive/text_iarchive.hpp>
 #include <boost/archive/binary_iarchive.hpp>
 #include <vector>
 #include <stdlib.h>
@@ -13,6 +12,7 @@
 #include <iostream>
 #include <cmath>
 #include <array>
+#include <unistd.h>
 
 #include "gp.h"
 #include "minisim.h"
@@ -64,19 +64,36 @@ public:
     tcp::resolver resolver(io_context);
     auto endpoints = resolver.resolve("localhost", std::to_string(port));
     boost::asio::connect(socket_, endpoints);
+    workerPid = static_cast<int>(getpid());
+    workerId = 0; // single-worker context uses index 0
   }
 
   void run() {
     while (true) { // TODO have reply have a controlled loop exit
       EvalResults evalResults;
+      evalResults.workerPid = workerPid;
+      evalResults.workerId = workerId;
+      evalResults.workerEvalCounter = ++evalCounter;
 
       // ok what does main say to do
       EvalData evalData = receiveRPC<EvalData>(socket_);
+
+      const uint64_t localGpHash = hashByteVector(evalData.gp);
+      if (evalData.gpHash == 0) {
+        evalData.gpHash = localGpHash;
+      } else if (evalData.gpHash != localGpHash) {
+        std::cerr << "[AUTOC_GP_HASH_MISMATCH] workerId=" << workerId
+                  << " expected=0x" << std::hex << evalData.gpHash
+                  << " got=0x" << localGpHash << std::dec
+                  << " size=" << evalData.gp.size()
+                  << std::endl;
+      }
 
       ensureScenarioMetadata(evalData);
 
       // flip this back for return trip
       evalResults.gp = evalData.gp;
+      evalResults.gpHash = localGpHash;
       if (!evalData.scenarioList.empty()) {
         evalResults.scenario = evalData.scenarioList.front();
       } else {
@@ -128,6 +145,34 @@ public:
         } catch (const std::exception& e) {
           std::cerr << "Error loading GP tree data: " << e.what() << std::endl;
           continue;
+        }
+      }
+
+      // Always log GP program while debugging
+      static const bool logGpStrings = true;
+      if (logGpStrings) {
+        if (isGPTreeData) {
+          std::ostringstream oss;
+          gp.printOn(oss);
+          std::string treeStr = oss.str();
+          const size_t maxLen = 800;
+          if (treeStr.size() > maxLen) {
+            treeStr.resize(maxLen);
+            treeStr.append("...<truncated>");
+          }
+          std::cerr << "[AUTOC_GP_STRING] worker=" << workerId
+                    << " eval=" << evalCounter
+                    << " hash=0x" << std::hex << evalData.gpHash << std::dec
+                    << " bytes=" << evalData.gp.size()
+                    << " tree=\"" << treeStr << "\""
+                    << std::endl;
+        } else if (isBytecodeData) {
+          std::cerr << "[AUTOC_GP_STRING] worker=" << workerId
+                    << " eval=" << evalCounter
+                    << " hash=0x" << std::hex << evalData.gpHash << std::dec
+                    << " bytecode_bytes=" << evalData.gp.size()
+                    << " (bytecode)"
+                    << std::endl;
         }
       }
       
@@ -258,6 +303,9 @@ public:
 
 private:
   tcp::socket socket_;
+  int workerPid = 0;
+  int workerId = 0;
+  int evalCounter = 0;
 };
 
 int main(int argc, char* argv[]) {

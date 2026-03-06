@@ -1,6 +1,4 @@
 #include <gtest/gtest.h>
-#define GP_TEST
-#define GP_BUILD
 #include "../gp_evaluator_portable.h"
 
 namespace {

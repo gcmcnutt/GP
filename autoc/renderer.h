@@ -69,6 +69,9 @@ enum {
 // CustomInteractorStyle forward declaration
 class CustomInteractorStyle;
 
+// Extern declaration for xiao-only mode flag (defined in renderer.cc)
+extern bool inXiaoOnlyMode;
+
 // Forward declarations for timestamped structures (defined in renderer.cc)
 struct TimestampedVec;
 
@@ -80,12 +83,13 @@ struct TestSpan {
   unsigned long endTime;
   gp_vec3 origin;  // Test origin for xiao mode
   std::vector<TimestampedVec> vecPoints;  // Vec arrows for this span
+  int pathIndex;  // Path index from GP State (0-5)
 
-  TestSpan() : startIndex(0), endIndex(0), startTime(0), endTime(0), origin(0.0f, 0.0f, 0.0f) {}
+  TestSpan() : startIndex(0), endIndex(0), startTime(0), endTime(0), origin(0.0f, 0.0f, 0.0f), pathIndex(-1) {}
   TestSpan(size_t start, size_t end, unsigned long stime, unsigned long etime)
-    : startIndex(start), endIndex(end), startTime(stime), endTime(etime), origin(0.0f, 0.0f, 0.0f) {}
+    : startIndex(start), endIndex(end), startTime(stime), endTime(etime), origin(0.0f, 0.0f, 0.0f), pathIndex(-1) {}
   TestSpan(size_t start, size_t end, unsigned long stime, unsigned long etime, gp_vec3 orig)
-    : startIndex(start), endIndex(end), startTime(stime), endTime(etime), origin(orig) {}
+    : startIndex(start), endIndex(end), startTime(stime), endTime(etime), origin(orig), pathIndex(-1) {}
 };
 
 class Renderer {
@@ -93,7 +97,7 @@ public:
   void initialize();
   bool isRunning();
   bool updateGenerationDisplay(int genNumber);
-  void updateTextDisplay(int generation, gp_scalar fitness);
+  void updateTextDisplay(int generation, gp_fitness fitness);
   void jumpToNewestGeneration();
   void jumpToOldestGeneration();
   void nextTest();
@@ -118,7 +122,7 @@ public:
   
   // Store current generation and fitness for resize updates
   int currentGeneration = 0;
-  gp_scalar currentFitness = 0.0f;
+  gp_fitness currentFitness = 0.0;
   
   // Test span navigation state
   std::vector<TestSpan> testSpans;
@@ -201,7 +205,7 @@ private:
   std::vector<gp_vec3> pathToVector(const std::vector<Path> path);
   std::vector<gp_vec3> stateToVector(const std::vector<AircraftState> path);
   std::vector<gp_vec3> stateToOrientation(const std::vector<AircraftState> state);
-  gp_scalar extractFitnessFromGP(const std::vector<char>& gpData);
+  gp_fitness extractFitnessFromGP(const std::vector<char>& gpData);
   void createHighlightedFlightTapes(gp_vec3 offset);
   void createStopwatch();
   void updateStopwatch(gp_scalar currentTime);
@@ -227,16 +231,24 @@ protected:
     std::string key = rwi->GetKeySym();
 
     if (key == "n") {
-      this->InvokeEvent(NextModelEvent, nullptr);
+      if (!inXiaoOnlyMode) {  // Skip generation nav in xiao-only mode
+        this->InvokeEvent(NextModelEvent, nullptr);
+      }
     }
     else if (key == "N") {
-      this->InvokeEvent(NewestModelEvent, nullptr);
+      if (!inXiaoOnlyMode) {
+        this->InvokeEvent(NewestModelEvent, nullptr);
+      }
     }
     else if (key == "p") {
-      this->InvokeEvent(PreviousModelEvent, nullptr);
+      if (!inXiaoOnlyMode) {
+        this->InvokeEvent(PreviousModelEvent, nullptr);
+      }
     }
     else if (key == "P") {
-      this->InvokeEvent(OldestModelEvent, nullptr);
+      if (!inXiaoOnlyMode) {
+        this->InvokeEvent(OldestModelEvent, nullptr);
+      }
     }
     else if (key == "t") {
       this->InvokeEvent(NextTestEvent, nullptr);

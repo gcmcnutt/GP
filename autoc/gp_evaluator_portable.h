@@ -11,6 +11,7 @@ struct GPBytecode;
 #endif
 
 // Local operators/bytecode definitions for test/embedded builds
+// NOTE: Must stay in sync with autoc.h - new operators go at END before _END
 #if !defined(GP_BUILD) || defined(GP_TEST)
 enum Operators {
   ADD = 0, SUB, MUL, DIV,
@@ -22,7 +23,11 @@ enum Operators {
   GETALPHA, GETBETA, GETVELX, GETVELY, GETVELZ,
   GETROLL_RAD, GETPITCH_RAD,
   CLAMP, ATAN2, ABS, SQRT, MIN, MAX,
-  OP_PI, ZERO, ONE, TWO, PROGN, _END  // Renamed PI to OP_PI to avoid Arduino macro conflict
+  OP_PI, ZERO, ONE, TWO, PROGN,
+  // Temporal state terminals (added 2026-02)
+  GETDPHI_PREV, GETDTHETA_PREV,
+  GETDPHI_RATE, GETDTHETA_RATE,
+  _END  // Renamed PI to OP_PI to avoid Arduino macro conflict
 };
 
 struct GPBytecode {
@@ -45,6 +50,12 @@ gp_scalar executeGetDPhi(PathProvider& pathProvider, AircraftState& aircraftStat
 gp_scalar executeGetDTheta(PathProvider& pathProvider, AircraftState& aircraftState, gp_scalar arg);
 gp_scalar executeGetDTarget(PathProvider& pathProvider, AircraftState& aircraftState, gp_scalar arg);
 gp_scalar executeGetDHome(AircraftState& aircraftState);
+
+// Temporal terminals - PREV takes history index, RATE is nullary
+gp_scalar executeGetDPhiPrev(AircraftState& aircraftState, gp_scalar arg);
+gp_scalar executeGetDThetaPrev(AircraftState& aircraftState, gp_scalar arg);
+gp_scalar executeGetDPhiRate(AircraftState& aircraftState);
+gp_scalar executeGetDThetaRate(AircraftState& aircraftState);
 
 // Range limiting - identical across platforms
 inline gp_scalar applyRangeLimit(gp_scalar value) {

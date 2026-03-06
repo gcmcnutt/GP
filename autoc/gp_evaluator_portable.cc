@@ -152,10 +152,24 @@ gp_scalar evaluateGPOperator(int opcode, PathProvider& pathProvider,
         case GETDTARGET: 
             result = executeGetDTarget(pathProvider, aircraftState, args ? args[0] : contextArg); 
             break;
-        case GETDHOME: 
-            result = executeGetDHome(aircraftState); 
+        case GETDHOME:
+            result = executeGetDHome(aircraftState);
             break;
-        
+
+        // Temporal terminals - history lookback and error rates
+        case GETDPHI_PREV:
+            result = executeGetDPhiPrev(aircraftState, args ? args[0] : contextArg);
+            break;
+        case GETDTHETA_PREV:
+            result = executeGetDThetaPrev(aircraftState, args ? args[0] : contextArg);
+            break;
+        case GETDPHI_RATE:
+            result = executeGetDPhiRate(aircraftState);
+            break;
+        case GETDTHETA_RATE:
+            result = executeGetDThetaRate(aircraftState);
+            break;
+
         // Trigonometry - use C math library (available on all platforms)
         case SIN: 
             result = fastSin(args[0]); 
@@ -302,6 +316,48 @@ gp_scalar executeGetDHome(AircraftState& aircraftState) {
     return (gp_vec3(0.0f, 0.0f, SIM_INITIAL_ALTITUDE) - aircraftState.getPosition()).norm();
 }
 
+// Temporal terminals - see specs/TEMPORAL_STATE.md
+gp_scalar executeGetDPhiPrev(AircraftState& aircraftState, gp_scalar arg) {
+    // arg is gp_scalar, convert to int history index
+    int n = CLAMP_DEF(static_cast<int>(arg), 0, AircraftState::HISTORY_SIZE - 1);
+    return aircraftState.getHistoricalDPhi(n);
+}
+
+gp_scalar executeGetDThetaPrev(AircraftState& aircraftState, gp_scalar arg) {
+    int n = CLAMP_DEF(static_cast<int>(arg), 0, AircraftState::HISTORY_SIZE - 1);
+    return aircraftState.getHistoricalDTheta(n);
+}
+
+gp_scalar executeGetDPhiRate(AircraftState& aircraftState) {
+    // Rate = (current - previous) / dt
+    gp_scalar current = aircraftState.getHistoricalDPhi(0);   // This tick
+    gp_scalar previous = aircraftState.getHistoricalDPhi(1);  // Last tick
+
+    // Time delta from history timestamps
+    unsigned long t0 = aircraftState.getHistoricalTime(0);
+    unsigned long t1 = aircraftState.getHistoricalTime(1);
+    gp_scalar dt = (t0 > t1) ? static_cast<gp_scalar>(t0 - t1) / 1000.0f : 0.1f;
+
+    if (dt < 0.001f) dt = 0.1f;  // Prevent divide by zero, default 100ms
+
+    gp_scalar rate = (current - previous) / dt;
+    return CLAMP_DEF(rate, -10.0f, 10.0f);  // Clamp to reasonable range (rad/sec)
+}
+
+gp_scalar executeGetDThetaRate(AircraftState& aircraftState) {
+    gp_scalar current = aircraftState.getHistoricalDTheta(0);
+    gp_scalar previous = aircraftState.getHistoricalDTheta(1);
+
+    unsigned long t0 = aircraftState.getHistoricalTime(0);
+    unsigned long t1 = aircraftState.getHistoricalTime(1);
+    gp_scalar dt = (t0 > t1) ? static_cast<gp_scalar>(t0 - t1) / 1000.0f : 0.1f;
+
+    if (dt < 0.001f) dt = 0.1f;
+
+    gp_scalar rate = (current - previous) / dt;
+    return CLAMP_DEF(rate, -10.0f, 10.0f);
+}
+
 // Portable bytecode evaluation implementation - works on all platforms
 gp_scalar evaluateBytecodePortable(const struct GPBytecode* program, int program_size, 
                                PathProvider& pathProvider, AircraftState& aircraftState, 
@@ -342,7 +398,9 @@ gp_scalar evaluateBytecodePortable(const struct GPBytecode* program, int program
             case SQRT:
             case GETDPHI:
             case GETDTHETA:
-            case GETDTARGET: {
+            case GETDTARGET:
+            case GETDPHI_PREV:
+            case GETDTHETA_PREV: {
                 if (stack_ptr < 1) return 0.0f;
                 gp_scalar args[1] = {stack[stack_ptr-1]};
                 stack_ptr -= 1;

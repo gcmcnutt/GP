@@ -14,6 +14,7 @@ From skeleton/skeleton.cc
 #include <new>
 #include <fstream>
 #include <algorithm>
+#include <numeric>
 #include <sstream>
 #include <thread>
 #include <chrono>
@@ -22,6 +23,9 @@ From skeleton/skeleton.cc
 #include <limits>
 #include <iomanip>
 #include <random>
+#include <unistd.h>
+#include <cstring>
+#include <mutex>
 
 #include "gp.h"
 #include "gp_bytecode.h"
@@ -32,6 +36,7 @@ From skeleton/skeleton.cc
 #include "logger.h"
 #include "pathgen.h"
 #include "config_manager.h"
+#include "variation_generator.h"
 
 #include <aws/core/Aws.h>
 #include <aws/s3/S3Client.h>
@@ -50,7 +55,6 @@ From skeleton/skeleton.cc
 #include <boost/log/support/date_time.hpp>
 #include <boost/iostreams/stream.hpp>
 #include <boost/iostreams/device/back_inserter.hpp>
-#include <boost/archive/text_oarchive.hpp>
 #include <boost/archive/binary_oarchive.hpp>
 
 using namespace std;
@@ -58,28 +62,330 @@ namespace logging = boost::log;
 
 Logger logger;
 std::atomic_bool printEval = false; // verbose (used for rendering best of population)
+std::atomic_bool enableDeterministicTestLogging = false; // enable detailed logging during determinism test
+
+// FNV-1a hash for verification (same as dtest_tracker)
+static uint64_t hashData(const void* data, size_t len) {
+    const uint8_t* bytes = static_cast<const uint8_t*>(data);
+    uint64_t hash = 0xcbf29ce484222325ULL;
+    for (size_t i = 0; i < len; i++) {
+        hash ^= bytes[i];
+        hash *= 0x100000001b3ULL;
+    }
+    return hash;
+}
+
+// Hash serialized AircraftState vector to avoid padding issues
+static uint64_t hashAircraftStateVector(const std::vector<AircraftState>& vec) {
+    std::ostringstream oss(std::ios::binary);
+    boost::archive::binary_oarchive oa(oss);
+    oa << vec;
+    std::string serialized = oss.str();
+    return hashData(serialized.data(), serialized.size());
+}
 std::vector<MyGP*> tasks = std::vector<MyGP*>();
 
 // Forward declarations for global variables
-extern std::vector<std::vector<Path>> generationPaths;
-extern EvalResults bestOfEvalResults;
 extern std::ofstream fout;
 extern std::ofstream bout;
 extern std::atomic_ulong nanDetector;
 
 std::vector<std::vector<Path>> generationPaths;
 std::vector<ScenarioDescriptor> generationScenarios;
+
+// VARIATIONS1: Global sigma parameters, initialized at startup from config
+static VariationSigmas gVariationSigmas = {0.0, 0.0, 0.0, 0.0, 0.0};
+// Individual variation enable flags (from config)
+static bool gEnableEntryVariations = false;
+static bool gEnableWindVariations = false;
+
+// Variable rabbit speed: Global config, initialized at startup from config
+static RabbitSpeedConfig gRabbitSpeedConfig = RabbitSpeedConfig::defaultConfig();
+
+// RAMP_LANDSCAPE: Gradual variation scaling (see specs/RAMP_LANDSCAPE.md)
+static int gCurrentGeneration = 0;      // Updated at start of each generation
+static int gTotalGenerations = 1;       // Set from config at startup
+static int gVariationRampStep = 0;      // Set from config at startup (0 = disabled)
+
+/**
+ * Compute variation scale for current generation.
+ * Scale ramps from 0.0 to 1.0 over the course of training.
+ *
+ * @return Scale factor to apply to variation offsets (0.0 to 1.0)
+ */
+static double computeVariationScale() {
+    if (gVariationRampStep <= 0) return 1.0;  // Disabled - full variations
+    if (gTotalGenerations <= 0) return 1.0;   // Safety check
+
+    // Stepped: quantize to step boundaries
+    int stepIndex = gCurrentGeneration / gVariationRampStep;
+    int totalSteps = gTotalGenerations / gVariationRampStep;
+    if (totalSteps <= 0) return 1.0;
+
+    return std::min(1.0, static_cast<double>(stepIndex) / static_cast<double>(totalSteps));
+}
+
+// ============================================================================
+// Single PRNG Architecture: Pre-fetched scenario variations
+// See specs/SINGLE_PRNG.md for design
+// ============================================================================
+
+/**
+ * Pre-computed variations for a single scenario (wind variant).
+ * Generated from GPrand() at startup, reused every generation.
+ */
+struct ScenarioVariations {
+    unsigned int windSeed;                      // Seed for crrcsim CRRC_Random
+    VariationOffsets entryOffsets;              // Heading, roll, pitch, speed, windDir
+    std::vector<RabbitSpeedPoint> rabbitProfile;// Time-tagged speeds
+};
+
+// Global pre-computed table (indexed by wind scenario index 0..N-1)
+static std::vector<ScenarioVariations> gScenarioVariations;
+static unsigned int gPathSeed = 0;        // Derived from GPrand() or RandomPathSeedB override
+static bool gPathSeedFromOverride = false;// True if RandomPathSeedB was used
+
+/**
+ * Pre-fetch all scenario variations from GPrand() at startup.
+ * Called once after GPInit(), before any GP evolution.
+ *
+ * When a variation type is disabled, we still consume GPrand values to maintain
+ * deterministic PRNG sequence, but store defaults in the table instead.
+ * This way the table contains the actual values to send to sims - no filtering needed.
+ *
+ * @param numScenarios       Number of wind scenarios (windScenarioCount from config)
+ * @param sigmas             Variation sigma parameters
+ * @param rabbitCfg          Rabbit speed configuration
+ * @param randomPathSeedB    Override path seed (-1 = derive from GPrand)
+ * @param enableEntry        If false, store default entry offsets (0.0, 1.0 for speed)
+ * @param enableWind         If false, store default wind offset (0.0)
+ */
+static void prefetchAllVariations(int numScenarios, const VariationSigmas& sigmas,
+                                   const RabbitSpeedConfig& rabbitCfg, int randomPathSeedB,
+                                   bool enableEntry, bool enableWind) {
+    gScenarioVariations.clear();
+    gScenarioVariations.reserve(numScenarios);
+
+    // Derive pathSeed (unless overridden by config)
+    if (randomPathSeedB == -1) {
+        gPathSeed = static_cast<unsigned int>(GPrand());
+        gPathSeedFromOverride = false;
+    } else {
+        gPathSeed = static_cast<unsigned int>(randomPathSeedB);
+        gPathSeedFromOverride = true;
+    }
+
+    double totalDurationSec = SIM_TOTAL_TIME_MSEC / 1000.0;
+
+    // When wind variations disabled, use same seed for all scenarios (identical thermals/gusts)
+    // Still consume GPrand to maintain deterministic sequence
+    unsigned int baseWindSeed = static_cast<unsigned int>(GPrand());
+
+    for (int i = 0; i < numScenarios; i++) {
+        ScenarioVariations sv;
+
+        // Wind seed for crrcsim: unique per scenario if enabled, same for all if disabled
+        if (enableWind) {
+            sv.windSeed = (i == 0) ? baseWindSeed : static_cast<unsigned int>(GPrand());
+        } else {
+            // Disabled: all scenarios use same seed (identical thermals/gusts)
+            // Still consume GPrand to keep PRNG sequence deterministic
+            if (i > 0) { (void)GPrand(); }
+            sv.windSeed = baseWindSeed;
+        }
+
+        // Entry/wind variations: always consume GPrand to maintain deterministic sequence,
+        // but store defaults if that variation type is disabled
+        VariationOffsets generated = generateVariationsFromGPrand(sigmas);
+
+        if (enableEntry) {
+            sv.entryOffsets.entryHeadingOffset = generated.entryHeadingOffset;
+            sv.entryOffsets.entryRollOffset = generated.entryRollOffset;
+            sv.entryOffsets.entryPitchOffset = generated.entryPitchOffset;
+            sv.entryOffsets.entrySpeedFactor = generated.entrySpeedFactor;
+        } else {
+            // Defaults: no offset
+            sv.entryOffsets.entryHeadingOffset = 0.0;
+            sv.entryOffsets.entryRollOffset = 0.0;
+            sv.entryOffsets.entryPitchOffset = 0.0;
+            sv.entryOffsets.entrySpeedFactor = 1.0;
+        }
+
+        if (enableWind) {
+            sv.entryOffsets.windDirectionOffset = generated.windDirectionOffset;
+        } else {
+            // Default: no offset
+            sv.entryOffsets.windDirectionOffset = 0.0;
+        }
+
+        // Rabbit speed profile (consume ~50-200 GPrand values)
+        sv.rabbitProfile = generateSpeedProfileFromGPrand(rabbitCfg, totalDurationSec);
+
+        gScenarioVariations.push_back(std::move(sv));
+    }
+}
+
+/**
+ * Log pre-fetched variations at startup for verification.
+ * Format matches spec in SINGLE_PRNG.md.
+ */
+static void logPrefetchedVariations(int numScenarios, long gpSeed) {
+    *logger.info() << endl;
+    *logger.info() << "=== Pre-fetched Scenario Variations (GPSeed=" << gpSeed << ") ===" << endl;
+    *logger.info() << "PathSeed: " << gPathSeed
+                   << " (override: " << (gPathSeedFromOverride ? "yes" : "no")
+                   << ")" << endl;
+    *logger.info() << "Scenarios: " << numScenarios << endl;
+    *logger.info() << endl;
+
+    *logger.info() << "Scenario  WindSeed    Heading°   Roll°   Pitch°  Speed%  WindDir°  RabbitSpd" << endl;
+    *logger.info() << "--------  ----------  --------  ------  ------  ------  --------  ---------" << endl;
+
+    for (int i = 0; i < numScenarios; i++) {
+        const auto& sv = gScenarioVariations[i];
+
+        // Compute rabbit speed stats
+        double minSpd = sv.rabbitProfile.empty() ? 0 : sv.rabbitProfile[0].speed;
+        double maxSpd = minSpd, sumSpd = 0;
+        for (const auto& pt : sv.rabbitProfile) {
+            if (pt.speed < minSpd) minSpd = pt.speed;
+            if (pt.speed > maxSpd) maxSpd = pt.speed;
+            sumSpd += pt.speed;
+        }
+        double avgSpd = sv.rabbitProfile.empty() ? 0 : sumSpd / sv.rabbitProfile.size();
+
+        std::ostringstream line;
+        line << std::setw(4) << i << "      "
+             << "0x" << std::hex << std::setw(8) << std::setfill('0') << sv.windSeed
+             << std::dec << std::setfill(' ')
+             << "  " << std::setw(7) << std::fixed << std::setprecision(2) << radToDeg(sv.entryOffsets.entryHeadingOffset)
+             << "  " << std::setw(6) << radToDeg(sv.entryOffsets.entryRollOffset)
+             << "  " << std::setw(6) << radToDeg(sv.entryOffsets.entryPitchOffset)
+             << "  " << std::setw(5) << std::setprecision(1) << ((sv.entryOffsets.entrySpeedFactor - 1.0) * 100) << "%"
+             << "  " << std::setw(7) << std::setprecision(2) << radToDeg(sv.entryOffsets.windDirectionOffset)
+             << "  " << std::setprecision(1) << minSpd << "/" << avgSpd << "/" << maxSpd;
+        *logger.info() << line.str() << endl;
+    }
+    *logger.info() << endl;
+}
+
+// Helper to populate variation offsets in ScenarioMetadata from pre-fetched table
+// Table already contains correct values: defaults when disabled, variations when enabled
+// (filtering is done at prefetch time, not here)
+// RAMP_LANDSCAPE: Offsets are scaled by computeVariationScale() for gradual introduction
+static void populateVariationOffsets(ScenarioMetadata& meta) {
+  int windIdx = meta.windVariantIndex;
+  if (windIdx >= 0 && windIdx < static_cast<int>(gScenarioVariations.size())) {
+    const auto& v = gScenarioVariations[windIdx].entryOffsets;
+
+    // Get current scale (0.0 to 1.0 over training)
+    double scale = computeVariationScale();
+
+    // Angular offsets: scale toward 0
+    meta.entryHeadingOffset = v.entryHeadingOffset * scale;
+    meta.entryRollOffset = v.entryRollOffset * scale;
+    meta.entryPitchOffset = v.entryPitchOffset * scale;
+    meta.windDirectionOffset = v.windDirectionOffset * scale;
+
+    // Speed factor: interpolate from 1.0 toward pre-computed value
+    // At scale=0: factor=1.0 (nominal), at scale=1: factor=pre-computed
+    meta.entrySpeedFactor = 1.0 + scale * (v.entrySpeedFactor - 1.0);
+  }
+  // If windIdx out of range, leave defaults (shouldn't happen)
+}
+
+// Helper to apply variable rabbit speed to a path using pre-fetched profile
+// Recomputes simTimeMsec for each path point based on the speed profile
+static void applySpeedProfileToPath(std::vector<Path>& path, int windVariantIndex) {
+  if (path.empty()) return;
+  if (gRabbitSpeedConfig.sigma <= 0.0) return;  // Constant speed mode, no changes needed
+
+  // Use pre-fetched speed profile (single PRNG architecture)
+  if (windVariantIndex < 0 || windVariantIndex >= static_cast<int>(gScenarioVariations.size())) {
+    return;  // Out of range, leave path unchanged
+  }
+  const auto& speedProfile = gScenarioVariations[windVariantIndex].rabbitProfile;
+
+  // RAMP_LANDSCAPE: Get scale for rabbit speed variation
+  double scale = computeVariationScale();
+  double nominal = gRabbitSpeedConfig.nominal;
+
+  // Recompute simTimeMsec for each path point based on variable speed profile
+  gp_scalar simTimeMsec = 0.0f;
+  path[0].simTimeMsec = 0.0f;
+
+  for (size_t i = 1; i < path.size(); i++) {
+    gp_scalar segmentDistance = path[i].distanceFromStart - path[i-1].distanceFromStart;
+    double profileSpeed = getSpeedAtTime(speedProfile, static_cast<double>(simTimeMsec) / 1000.0);
+    // Scale speed toward nominal: at scale=0 use nominal, at scale=1 use profileSpeed
+    double speed = nominal + scale * (profileSpeed - nominal);
+    gp_scalar dt = (segmentDistance / static_cast<gp_scalar>(speed)) * 1000.0f;
+    simTimeMsec += dt;
+    path[i].simTimeMsec = simTimeMsec;
+  }
+}
 std::atomic_ulong nanDetector = 0;
 std::ofstream fout;
 std::ofstream bout;
 EvalResults bestOfEvalResults;
 EvalResults aggregatedEvalResults;
 EvalResults* activeEvalCollector = nullptr;
+boost::mutex evalCollectorMutex;  // Protects activeEvalCollector and aggregatedEvalResults
 std::atomic<uint64_t> evaluationProgress{0};
 std::atomic<uint64_t> globalScenarioCounter{0};
 std::atomic<uint64_t> bakeoffPathCounter{0};
 std::atomic<uint64_t> globalSimRunCounter{0};
 
+// Global elite tracking across generations (dispatcher-side)
+// Detect divergence when same gpHash + scenarios evaluates to different fitness
+static gp_fitness gLastEliteFitness = std::numeric_limits<gp_fitness>::infinity();
+static uint64_t gLastEliteGpHash = 0;
+static int gLastEliteLength = 0;
+static int gLastEliteDepth = 0;
+static size_t gLastEliteNumPaths = 0;  // Number of paths in elite evaluation
+static uint64_t gLastEliteScenarioHash = 0;  // Hash of scenario metadata
+static int gEliteDivergenceCount = 0;  // Count of reevals where fitness differed (non-determinism)
+static int gEliteReevalCount = 0;      // Count of times elite was re-evaluated (same gpHash across generations)
+static EvalResults gLastEliteEvalResults;  // Full results including physics trace for divergence analysis
+static EvalResults gPendingEliteEvalResults;  // Current gen's elite trace (moved to gLastEliteEvalResults at end of gen)
+
+// Runtime flag to enable physics trace collection for elite reeval divergence analysis.
+// When true, crrcsim will return detailed physics traces for elite reevals only.
+// TODO: Consider adding to config system later.
+static bool gEliteTraceEnabled = true;
+// Flag to ensure we only flag ONE individual as elite reeval per generation
+// (multiple individuals may have same hash due to cloning/crossover)
+static bool gEliteReevalFlaggedThisGen = false;
+
+static bool bitwiseEqual(double a, double b) {
+  return std::memcmp(&a, &b, sizeof(double)) == 0;
+}
+
+static uint64_t computeGpHash(const EvalResults& res) {
+  if (res.gpHash != 0) {
+    return res.gpHash;
+  }
+  // gpHash must be populated; fallback only to maintain runtime safety in debug.
+  if (!res.gp.empty()) {
+    return hashByteVector(res.gp);
+  }
+  return 0;
+}
+
+// Hash scenario metadata to detect if path set changed
+static uint64_t computeScenarioHash(const std::vector<ScenarioMetadata>& scenarios) {
+  uint64_t hash = 0xcbf29ce484222325ULL; // FNV-1a offset basis
+  for (const auto& s : scenarios) {
+    // Hash: pathVariantIndex, windVariantIndex, windSeed
+    hash ^= s.pathVariantIndex;
+    hash *= 0x100000001b3ULL;
+    hash ^= s.windVariantIndex;
+    hash *= 0x100000001b3ULL;
+    hash ^= s.windSeed;
+    hash *= 0x100000001b3ULL;
+  }
+  return hash;
+}
 
 
 ThreadPool* threadPool;
@@ -97,38 +403,77 @@ void rebuildGenerationScenarios(const std::vector<std::vector<Path>>& basePaths)
 
   const ExtraConfig& extraCfg = ConfigManager::getExtraConfig();
   int windScenarioCount = std::max(extraCfg.windScenarioCount, 1);
-  unsigned int seedBase = static_cast<unsigned int>(extraCfg.windSeedBase);
-  unsigned int seedStride = sanitizeStride(extraCfg.windSeedStride);
+
+  // Use pre-fetched windSeeds from gScenarioVariations (single PRNG architecture)
+  // Fallback to 0 if pre-fetch hasn't run yet (shouldn't happen in normal flow)
+  auto getWindSeed = [&](int windIdx) -> unsigned int {
+    if (windIdx < static_cast<int>(gScenarioVariations.size())) {
+      return gScenarioVariations[windIdx].windSeed;
+    }
+    return 0;  // Fallback (shouldn't happen)
+  };
 
   if (basePaths.empty()) {
     ScenarioDescriptor scenario;
     scenario.pathList = basePaths;
-    scenario.pathVariantIndex = -1;
     scenario.windVariantIndex = 0;
-    scenario.windSeed = seedBase;
-    scenario.windScenarios.push_back({seedBase, 0});
+    scenario.windSeed = getWindSeed(0);
+    scenario.windScenarios.push_back({getWindSeed(0), 0});
     generationScenarios.push_back(std::move(scenario));
     return;
   }
 
-  // Create one scenario per path. Each scenario contains ONE path evaluated
-  // across ALL wind conditions. This allows demes to specialize on specific
-  // path geometries while being robust to wind variations.
-  for (size_t pathIdx = 0; pathIdx < basePaths.size(); ++pathIdx) {
+  const GPVariables& gpCfg = ConfigManager::getGPConfig();
+
+  if (gpCfg.DemeticGrouping && gpCfg.DemeSize > 0) {
+    // DEMETIC MODE: Create one scenario per path variant.
+    // Each scenario contains ONE path geometry evaluated across ALL wind conditions.
+    // This allows demes to specialize on specific path geometries while being
+    // robust to wind variations.
+    for (size_t pathIdx = 0; pathIdx < basePaths.size(); ++pathIdx) {
+      ScenarioDescriptor scenario;
+      scenario.pathVariantIndex = static_cast<int>(pathIdx);
+      for (int windIdx = 0; windIdx < windScenarioCount; ++windIdx) {
+        scenario.pathList.push_back(basePaths[pathIdx]);
+        WindScenarioConfig windScenario;
+        windScenario.windSeed = getWindSeed(windIdx);
+        windScenario.windVariantIndex = windIdx;
+        scenario.windScenarios.push_back(windScenario);
+      }
+      if (!scenario.windScenarios.empty()) {
+        scenario.windSeed = scenario.windScenarios.front().windSeed;
+        scenario.windVariantIndex = scenario.windScenarios.front().windVariantIndex;
+      } else {
+        scenario.windSeed = getWindSeed(0);
+        scenario.windVariantIndex = 0;
+      }
+      generationScenarios.push_back(std::move(scenario));
+    }
+  } else {
+    // NON-DEMETIC MODE: Create ONE scenario containing ALL path variants × ALL winds.
+    // Each individual evaluates on the same complete test suite for fair comparison.
     ScenarioDescriptor scenario;
-    scenario.pathVariantIndex = static_cast<int>(pathIdx);
+
+    // Build wind scenarios list first
     for (int windIdx = 0; windIdx < windScenarioCount; ++windIdx) {
-      scenario.pathList.push_back(basePaths[pathIdx]);
       WindScenarioConfig windScenario;
-      windScenario.windSeed = seedBase + seedStride * static_cast<unsigned int>(windIdx);
+      windScenario.windSeed = getWindSeed(windIdx);
       windScenario.windVariantIndex = windIdx;
       scenario.windScenarios.push_back(windScenario);
     }
+
+    // Add path×wind combinations in PATH-MAJOR order: [p0w0, p0w1, ..., p0w5, p1w0, ...]
+    for (size_t pathIdx = 0; pathIdx < basePaths.size(); ++pathIdx) {
+      for (int windIdx = 0; windIdx < windScenarioCount; ++windIdx) {
+        scenario.pathList.push_back(basePaths[pathIdx]);
+      }
+    }
+
     if (!scenario.windScenarios.empty()) {
       scenario.windSeed = scenario.windScenarios.front().windSeed;
       scenario.windVariantIndex = scenario.windScenarios.front().windVariantIndex;
     } else {
-      scenario.windSeed = seedBase;
+      scenario.windSeed = getWindSeed(0);
       scenario.windVariantIndex = 0;
     }
     generationScenarios.push_back(std::move(scenario));
@@ -136,12 +481,32 @@ void rebuildGenerationScenarios(const std::vector<std::vector<Path>>& basePaths)
 
   if (generationScenarios.empty()) {
     ScenarioDescriptor scenario;
-    scenario.pathVariantIndex = -1;
     scenario.windVariantIndex = 0;
-    scenario.windSeed = seedBase;
+    scenario.windSeed = getWindSeed(0);
     scenario.pathList = basePaths;
-    scenario.windScenarios.push_back({seedBase, 0});
+    scenario.windScenarios.push_back({getWindSeed(0), 0});
     generationScenarios.push_back(std::move(scenario));
+  }
+
+  // Log scenario structure for verification (only once, not every generation)
+  static bool logged = false;
+  if (!logged) {
+    logged = true;
+    *logger.info() << "Scenario structure: " << generationScenarios.size() << " scenario(s)" << endl;
+    for (size_t i = 0; i < generationScenarios.size(); ++i) {
+      const auto& scenario = generationScenarios[i];
+      if (scenario.pathVariantIndex == -1) {
+        size_t numWinds = std::max(size_t(1), scenario.windScenarios.size());
+        size_t numPaths = scenario.pathList.size() / numWinds;
+        *logger.info() << "  Scenario " << i << ": ALL path variants"
+                       << " (" << scenario.pathList.size() << " total flights = "
+                       << numPaths << " paths × " << numWinds << " winds)" << endl;
+      } else {
+        *logger.info() << "  Scenario " << i << ": path variant " << scenario.pathVariantIndex
+                       << " (" << scenario.pathList.size() << " flights across "
+                       << scenario.windScenarios.size() << " winds)" << endl;
+      }
+    }
   }
 }
 
@@ -256,23 +621,21 @@ void warnIfScenarioMismatch() {
   }
 }
 
-void clearEvalResults(EvalResults& result) {
-  result.gp.clear();
-  result.crashReasonList.clear();
-  result.pathList.clear();
-  result.aircraftStateList.clear();
-  result.scenario = ScenarioMetadata();
-  result.scenarioList.clear();
-}
-
 void appendEvalResults(EvalResults& dest, const EvalResults& src) {
   if (dest.gp.empty()) {
     dest.gp = src.gp;
+  }
+  // Copy gpHash from first evaluation (should be same for all scenarios of same GP)
+  if (dest.gpHash == 0 && src.gpHash != 0) {
+    dest.gpHash = src.gpHash;
   }
   dest.crashReasonList.insert(dest.crashReasonList.end(), src.crashReasonList.begin(), src.crashReasonList.end());
   dest.pathList.insert(dest.pathList.end(), src.pathList.begin(), src.pathList.end());
   dest.aircraftStateList.insert(dest.aircraftStateList.end(), src.aircraftStateList.begin(), src.aircraftStateList.end());
   dest.scenarioList.insert(dest.scenarioList.end(), src.scenarioList.begin(), src.scenarioList.end());
+  dest.workerId = src.workerId;
+  dest.workerPid = src.workerPid;
+  dest.workerEvalCounter = src.workerEvalCounter;
 }
 
 } // namespace
@@ -347,14 +710,14 @@ public:
         }
         for (int start = 0; start < containerSize(); start += demeSize) {
           int end = std::min(start + demeSize, containerSize());
-          gp_scalar bestFitness = std::numeric_limits<gp_scalar>::infinity();
+          gp_fitness bestFitness = std::numeric_limits<gp_fitness>::infinity();
           int bestIndex = start;
           for (int idx = start; idx < end; ++idx) {
             MyGP* candidate = NthMyGP(idx);
             if (!candidate) {
               continue;
             }
-            gp_scalar fitness = static_cast<gp_scalar>(candidate->getFitness());
+            gp_fitness fitness = candidate->getFitness();
             if (!std::isfinite(fitness)) {
               continue;
             }
@@ -366,15 +729,14 @@ public:
           candidateIndices.push_back(bestIndex);
         }
       } else {
+        // Non-demetic mode: just bakeoff the library's best individual
         candidateIndices.push_back(bestOfPopulation);
       }
 
-      if (candidateIndices.empty()) {
-        candidateIndices.push_back(bestOfPopulation);
-      }
+      assert(!candidateIndices.empty() && "candidateIndices should never be empty after population scan");
 
       MyGP* best = nullptr;
-      gp_scalar bestAggregatedFitness = std::numeric_limits<gp_scalar>::infinity();
+      gp_fitness bestAggregatedFitness = std::numeric_limits<gp_fitness>::infinity();
 
       if (!generationScenarios.empty()) {
         EvalResults* previousCollector = activeEvalCollector;
@@ -385,15 +747,16 @@ public:
             continue;
           }
 
+          // Enable detailed logging only when re-evaluating the previous elite.
+          bool enableLogging = (candidateIndex == bestOfPopulation);
+          bool prevLogging = enableDeterministicTestLogging.exchange(enableLogging, std::memory_order_relaxed);
+
           int originalScenarioIndex = candidate->getScenarioIndex();
           candidate->setBakeoffMode(true);
-          clearEvalResults(aggregatedEvalResults);
-          aggregatedEvalResults.scenario.pathVariantIndex = -1;
-          aggregatedEvalResults.scenario.windVariantIndex = -1;
-          aggregatedEvalResults.scenario.windSeed = 0;
+          aggregatedEvalResults.clear();
           activeEvalCollector = &aggregatedEvalResults;
 
-          gp_scalar cumulativeFitness = 0.0f;
+          gp_fitness cumulativeFitness = 0.0;
           size_t scenariosEvaluated = 0;
 
           for (size_t scenarioIdx = 0; scenarioIdx < generationScenarios.size(); ++scenarioIdx) {
@@ -402,21 +765,25 @@ public:
               candidate->evalTask(context);
             });
             threadPool->wait_for_tasks();
-            cumulativeFitness += static_cast<gp_scalar>(candidate->getFitness());
+            cumulativeFitness += candidate->getFitness();
             ++scenariosEvaluated;
           }
 
           candidate->setScenarioIndex(originalScenarioIndex);
           candidate->setBakeoffMode(false);
 
-          gp_scalar averageFitness = scenariosEvaluated > 0
-            ? cumulativeFitness / static_cast<gp_scalar>(scenariosEvaluated)
-            : std::numeric_limits<gp_scalar>::infinity();
+          gp_fitness averageFitness = scenariosEvaluated > 0
+            ? cumulativeFitness / static_cast<gp_fitness>(scenariosEvaluated)
+            : std::numeric_limits<gp_fitness>::infinity();
+
+          // Restore previous logging state before moving on.
+          enableDeterministicTestLogging.store(prevLogging, std::memory_order_relaxed);
 
           if (averageFitness < bestAggregatedFitness) {
             bestAggregatedFitness = averageFitness;
             bestOfEvalResults = aggregatedEvalResults;
             best = candidate;
+
           }
         }
 
@@ -425,59 +792,52 @@ public:
         // Update the best individual's fitness with the aggregated result
         // and update bestOfPopulation to point to the bakeoff winner
         if (best) {
-          best->setFitness(bestAggregatedFitness);
           // Find the index of the best candidate in the population
+          int bestIndex = -1;
           for (int idx = 0; idx < containerSize(); ++idx) {
             if (NthMyGP(idx) == best) {
-              bestOfPopulation = idx;
+              bestIndex = idx;
               break;
             }
           }
 
-          // Propagate the bakeoff winner to all demes by replacing the worst
-          // individual in each deme. This spreads the generalist's genes across
-          // all path specializations for the next generation.
+          // Set bakeoff winner's fitness to aggregated value
+          // This ensures calculateStatistics() keeps it as best
+          best->setFitness(bestAggregatedFitness);
+          bestOfPopulation = bestIndex;
+
+          // Demetic propagation (only in demetic mode)
           if (gpCfg.DemeticGrouping && gpCfg.DemeSize > 0 &&
               std::isfinite(bestAggregatedFitness)) {
             int demeSize = gpCfg.DemeSize;
             int demesPropagated = 0;
-            // Config is expressed as percent (0..100)
             gp_scalar migProb = std::clamp(static_cast<gp_scalar>(gpCfg.DemeticMigProbability) / static_cast<gp_scalar>(100.0f),
                                            static_cast<gp_scalar>(0.0f),
                                            static_cast<gp_scalar>(1.0f));
-            std::uniform_real_distribution<gp_scalar> dist(static_cast<gp_scalar>(0.0f), static_cast<gp_scalar>(1.0f));
-            static thread_local std::mt19937 rng(std::random_device{}());
 
             for (int demeStart = 0; demeStart < containerSize(); demeStart += demeSize) {
-              // Per-deme coin flip: only migrate if roll is below probability
-              if (dist(rng) > migProb) {
+              // Use GPrand() for deterministic migration decisions (single PRNG architecture)
+              gp_scalar randVal = static_cast<gp_scalar>(GPrand()) / static_cast<gp_scalar>(RAND_MAX);
+              if (randVal > migProb) {
                 continue;
               }
 
               int demeEnd = std::min(demeStart + demeSize, containerSize());
-
-              // Find worst individual in this deme (highest fitness = worst)
               int worstInDeme = demeStart;
-              gp_scalar worstFitness = std::numeric_limits<gp_scalar>::lowest();
+              gp_fitness worstFitness = std::numeric_limits<gp_fitness>::lowest();
 
               for (int idx = demeStart; idx < demeEnd; ++idx) {
                 MyGP* candidate = NthMyGP(idx);
-                if (!candidate) {
-                  continue;
-                }
-                gp_scalar fitness = static_cast<gp_scalar>(candidate->getFitness());
+                if (!candidate) continue;
+                gp_fitness fitness = candidate->getFitness();
                 if (!std::isfinite(fitness) || fitness > worstFitness) {
                   worstFitness = fitness;
                   worstInDeme = idx;
                 }
               }
 
-              // Don't replace the bakeoff winner itself (elitism protection)
               if (worstInDeme != bestOfPopulation) {
-                // Clone the winner and replace the worst
                 MyGP* clone = (MyGP*)&best->duplicate();
-                // The clone will have the same fitness as the winner, but it's
-                // not the elite - it will be re-evaluated next generation
                 put(worstInDeme, *clone);
                 demesPropagated++;
               }
@@ -491,14 +851,16 @@ public:
         }
       }
 
-      if (!best) {
-        best = NthMyGP(bestOfPopulation);
+      // Use bakeoff winner for storage
+      MyGP* eliteForStorage = best;
+      if (!eliteForStorage) {
+        eliteForStorage = NthMyGP(bestOfPopulation);
       }
 
-      // Re-serialize the best GP with updated fitness for storage
+      // Re-serialize the global elite for storage
       std::vector<char> updatedBuffer;
       boost::iostreams::stream<boost::iostreams::back_insert_device<std::vector<char>>> updatedOutStream(updatedBuffer);
-      best->save(updatedOutStream);
+      eliteForStorage->save(updatedOutStream);
       updatedOutStream.flush();
       bestOfEvalResults.gp = updatedBuffer;
       
@@ -509,8 +871,8 @@ public:
       // path name is $base/RunDate/gen$gen.dmp
       request.SetKey(computedKeyName);
 
-      std::ostringstream oss;
-      boost::archive::text_oarchive oa(oss);
+      std::ostringstream oss(std::ios::binary);
+      boost::archive::binary_oarchive oa(oss);
       oa << bestOfEvalResults;
 
       std::shared_ptr<Aws::StringStream> ss = Aws::MakeShared<Aws::StringStream>("");
@@ -537,52 +899,24 @@ void MyPopulation::evaluate() {
   const GPVariables& gpCfg = ConfigManager::getGPConfig();
   int scenarioCount = std::max<int>(generationScenarios.size(), 1);
 
-  // When DemeticGrouping is disabled, evaluate ALL individuals on ALL scenarios
-  // and average their fitness. This ensures fair comparison across the population.
-  if (!gpCfg.DemeticGrouping && scenarioCount > 1) {
-    for (int n = 0; n < containerSize(); ++n) {
-      MyGP* current = NthMyGP(n);
+  // Reset elite reeval flag for this generation (only flag first matching individual)
+  gEliteReevalFlaggedThisGen = false;
+
+  // Assign scenario index to each individual based on demetic grouping
+  for (int n = 0; n < containerSize(); ++n) {
+    MyGP* current = NthMyGP(n);
 #if GPINTERNALCHECK
-      if (!current) {
-        GPExitSystem("MyPopulation::evaluate", "Member of population is NULL");
-      }
-#endif
-
-      gp_scalar cumulativeFitness = 0.0f;
-
-      // Evaluate on each scenario
-      for (int scenarioIdx = 0; scenarioIdx < scenarioCount; ++scenarioIdx) {
-        current->setScenarioIndex(scenarioIdx);
-
-        // Queue evaluation task
-        threadPool->enqueue([current](WorkerContext& context) {
-          current->evalTask(context);
-        });
-        threadPool->wait_for_tasks();
-
-        cumulativeFitness += static_cast<gp_scalar>(current->getFitness());
-      }
-
-      // Set final fitness as average across all scenarios
-      gp_scalar averageFitness = cumulativeFitness / static_cast<gp_scalar>(scenarioCount);
-      current->setFitness(averageFitness);
-
-      // Reset to scenario 0 for consistency
-      current->setScenarioIndex(0);
+    if (!current) {
+      GPExitSystem("MyPopulation::evaluate", "Member of population is NULL");
     }
-  } else {
-    // Demetic mode or single scenario: assign one scenario per individual
-    for (int n = 0; n < containerSize(); ++n) {
-      MyGP* current = NthMyGP(n);
-#if GPINTERNALCHECK
-      if (!current) {
-        GPExitSystem("MyPopulation::evaluate", "Member of population is NULL");
-      }
 #endif
-      current->setScenarioIndex(computeScenarioIndexForIndividual(n));
-    }
-    GPPopulation::evaluate();
+    current->setScenarioIndex(computeScenarioIndexForIndividual(n));
   }
+
+  // Evaluate all individuals using their assigned scenarios
+  // In non-demetic mode: all individuals use scenario 0 (which contains all paths × all winds)
+  // In demetic mode: each deme uses its own scenario (one path variant × all winds)
+  GPPopulation::evaluate();
 }
 
 void MyGP::evaluate()
@@ -605,30 +939,79 @@ void MyGP::evalTask(WorkerContext& context)
   const ScenarioDescriptor& scenario = scenarioForIndex(getScenarioIndex());
   uint64_t scenarioSequence = globalScenarioCounter.fetch_add(1, std::memory_order_relaxed) + 1;
 
+  // Generate Lisp-form string of GP for exact comparison
+  std::ostringstream gpStringStream;
+  printOn(gpStringStream);
+  std::string currentGpString = gpStringStream.str();
+
   EvalData evalData;
   evalData.gp = buffer;
+  // Hash the Lisp string (deterministic) instead of binary serialization
+  evalData.gpHash = hashString(currentGpString);
+  evalData.isEliteReeval = false;  // Can be set by caller for crrcsim detailed logging
   evalData.pathList = scenario.pathList;
   evalData.scenario.scenarioSequence = scenarioSequence;
   evalData.scenario.bakeoffSequence = 0;
   evalData.scenarioList.clear();
   evalData.scenarioList.reserve(scenario.pathList.size());
   bool isBakeoff = bakeoffMode;
+  bool enableLogging = enableDeterministicTestLogging.load(std::memory_order_relaxed);
+
+  const GPVariables& gpCfg = ConfigManager::getGPConfig();
+
+  // Build scenario list FIRST before checking for elite re-eval
   for (size_t idx = 0; idx < scenario.pathList.size(); ++idx) {
     ScenarioMetadata meta;
-    meta.pathVariantIndex = scenario.pathVariantIndex;
     meta.scenarioSequence = scenarioSequence;
+    meta.enableDeterministicLogging = enableLogging;
+
     if (isBakeoff) {
       meta.bakeoffSequence = bakeoffPathCounter.fetch_add(1, std::memory_order_relaxed) + 1;
     } else {
       meta.bakeoffSequence = 0;
     }
-    if (idx < scenario.windScenarios.size()) {
-      meta.windVariantIndex = scenario.windScenarios[idx].windVariantIndex;
-      meta.windSeed = scenario.windScenarios[idx].windSeed;
+
+    if (gpCfg.DemeticGrouping && gpCfg.DemeSize > 0) {
+      // Demetic mode: scenario has one path variant across multiple winds
+      meta.pathVariantIndex = scenario.pathVariantIndex;
+      if (idx < scenario.windScenarios.size()) {
+        meta.windVariantIndex = scenario.windScenarios[idx].windVariantIndex;
+        meta.windSeed = scenario.windScenarios[idx].windSeed;
+      } else {
+        meta.windVariantIndex = scenario.windVariantIndex;
+        meta.windSeed = scenario.windSeed;
+      }
     } else {
-      meta.windVariantIndex = scenario.windVariantIndex;
-      meta.windSeed = scenario.windSeed;
+      // Non-demetic mode: scenario has all paths × all winds
+      // pathList is organized in PATH-MAJOR order: [p0w0, p0w1, ..., p0w5, p1w0, p1w1, ...]
+      size_t numWindScenarios = scenario.windScenarios.size();
+      if (numWindScenarios > 0 && scenario.pathList.size() > 0) {
+        size_t numBasePaths = scenario.pathList.size() / numWindScenarios;
+        size_t pathIdx = idx / numWindScenarios;
+        size_t windIdx = idx % numWindScenarios;
+
+        meta.pathVariantIndex = static_cast<int>(pathIdx);
+        if (windIdx < scenario.windScenarios.size()) {
+          meta.windVariantIndex = scenario.windScenarios[windIdx].windVariantIndex;
+          meta.windSeed = scenario.windScenarios[windIdx].windSeed;
+        } else {
+          meta.windVariantIndex = scenario.windVariantIndex;
+          meta.windSeed = scenario.windSeed;
+        }
+      } else {
+        // Fallback if structure is unexpected
+        meta.pathVariantIndex = static_cast<int>(idx);
+        meta.windVariantIndex = scenario.windVariantIndex;
+        meta.windSeed = scenario.windSeed;
+      }
     }
+
+    // VARIATIONS1: Populate entry/wind variation offsets from windSeed
+    populateVariationOffsets(meta);
+
+    // Variable rabbit speed: Apply speed profile to path timing (uses pre-fetched profile)
+    applySpeedProfileToPath(evalData.pathList[idx], meta.windVariantIndex);
+
     evalData.scenarioList.push_back(meta);
   }
   if (!evalData.scenarioList.empty()) {
@@ -641,10 +1024,36 @@ void MyGP::evalTask(WorkerContext& context)
   }
 
   evalData.sanitizePaths();
+
+  // Check if this is a re-evaluation of the elite from previous generation
+  // If so, flag it for detailed physics trace collection
+  if (gEliteTraceEnabled && evalData.gpHash != 0 && evalData.gpHash == gLastEliteGpHash) {
+    evalData.isEliteReeval = true;
+  }
+
   sendRPC(*context.socket, evalData);
 
   // How did it go?
   context.evalResults = receiveRPC<EvalResults>(*context.socket);
+
+  // Verify GP payload integrity (dispatcher vs worker)
+  if (context.evalResults.gpHash == 0 && !context.evalResults.gp.empty()) {
+    context.evalResults.gpHash = hashByteVector(context.evalResults.gp);
+  }
+  if (evalData.gpHash != 0 && context.evalResults.gpHash != 0 &&
+      evalData.gpHash != context.evalResults.gpHash) {
+    *logger.warn() << "[AUTOC_GP_HASH_MISMATCH] expected=0x"
+                   << std::hex << evalData.gpHash
+                   << " got=0x" << context.evalResults.gpHash
+                   << std::dec
+                   << " workerId=" << context.evalResults.workerId
+                   << " workerPid=" << context.evalResults.workerPid
+                   << " evalCounter=" << context.evalResults.workerEvalCounter
+                   << " size=" << evalData.gp.size()
+                   << endl;
+  }
+
+
   if (context.evalResults.scenario.windSeed == 0 && evalData.scenario.windSeed != 0) {
     context.evalResults.scenario = evalData.scenario;
   }
@@ -658,6 +1067,7 @@ void MyGP::evalTask(WorkerContext& context)
   // context.evalResults.dump(std::cerr);
 
   if (printEval) {
+    boost::unique_lock<boost::mutex> lock(evalCollectorMutex);
     if (activeEvalCollector) {
       *logger.debug() << "Incoming eval results has "
                       << context.evalResults.pathList.size() << " paths" << endl;
@@ -669,7 +1079,23 @@ void MyGP::evalTask(WorkerContext& context)
     }
   }
 
-  // Compute the fitness results for each path
+  // If this was an elite reeval with trace, store for comparison at generation end
+  // (Don't try to preserve in bestOfEvalResults - it gets overwritten by subsequent evals)
+  if (evalData.isEliteReeval && !context.evalResults.physicsTrace.empty()) {
+    boost::unique_lock<boost::mutex> lock(evalCollectorMutex);
+
+    // Store in pending - survives subsequent bestOfEvalResults overwrites
+    // Gets moved to gLastEliteEvalResults at end of generation
+    gPendingEliteEvalResults.physicsTrace = std::move(context.evalResults.physicsTrace);
+    gPendingEliteEvalResults.debugSamples = std::move(context.evalResults.debugSamples);
+    gPendingEliteEvalResults.workerId = context.evalResults.workerId;
+    gPendingEliteEvalResults.workerPid = context.evalResults.workerPid;
+    gPendingEliteEvalResults.workerEvalCounter = context.evalResults.workerEvalCounter;
+  }
+
+  // Compute fitness for each path and sum
+  // Crash penalty (soft lexicographic) applied per-path
+
   for (int i = 0; i < context.evalResults.pathList.size(); i++) {
     bool printHeader = true;
 
@@ -704,16 +1130,21 @@ void MyGP::evalTask(WorkerContext& context)
       }
     }
 
-    // compute this path fitness
-    gp_scalar localFitness = 0.0f;
-    int stepIndex = 0; // where are we on the flight path?
+    // ========================================================================
+    // SIMPLIFIED FITNESS (v3): Two objectives - distance + attitude delta
+    // See specs/FITNESS_SIMPLIFY_20260221.md
+    // ========================================================================
+    gp_fitness localFitness = 0.0;
+    int stepIndex = 0;
 
-    // SIMPLIFIED error accumulators
-    gp_scalar waypoint_distance_sum = 0.0f;        // Distance from current waypoint
-    gp_scalar cross_track_error_sum = 0.0f;        // Lateral deviation from path
-    gp_scalar movement_direction_error_sum = 0.0f; // Move along path tangent
-    gp_scalar throttle_energy_sum = 0.0f;          // Minimize throttle usage
+    // Accumulate raw values, scale attitude at end using path geometry
+    gp_fitness distance_sum = 0.0;
+    gp_fitness attitude_sum = 0.0;
     int simulation_steps = 0;
+
+    // Attitude delta tracking
+    gp_fitness prev_roll = 0.0, prev_pitch = 0.0;
+    bool first_attitude_sample = true;
 
     // now walk next steps of actual path
     while (++stepIndex < aircraftState.size()) {
@@ -721,146 +1152,114 @@ void MyGP::evalTask(WorkerContext& context)
       int rawPathIndex = stepAircraftState.getThisPathIndex();
       int pathIndex = std::clamp(rawPathIndex, 0, static_cast<int>(path.size()) - 1);
       const Path& currentPathPoint = path.at(pathIndex);
-      PathFrame frame = computePathFrame(path, pathIndex);
-      int nextIndex = std::min(pathIndex + 1, static_cast<int>(path.size()) - 1);
 
       gp_vec3 aircraftPosition = stepAircraftState.getPosition();
       gp_quat craftOrientation = stepAircraftState.getOrientation();
-      gp_vec3 aircraftUp = craftOrientation * gp_vec3::UnitZ();
 
       // ====================================================================
-      // METRIC 1: Waypoint distance (reach current target on time)
+      // ATTITUDE DELTA: Per-step roll/pitch change (radians)
       // ====================================================================
-      gp_scalar waypointDistance = (currentPathPoint.start - aircraftPosition).norm();
-      gp_scalar waypointDistancePercent = (waypointDistance * static_cast<gp_scalar>(100.0f)) /
-                                           (static_cast<gp_scalar>(2.0f) * SIM_PATH_RADIUS_LIMIT);
-      waypoint_distance_sum += pow(waypointDistancePercent, WAYPOINT_DISTANCE_WEIGHT);
+      gp_fitness qw = craftOrientation.w();
+      gp_fitness qx = craftOrientation.x();
+      gp_fitness qy = craftOrientation.y();
+      gp_fitness qz = craftOrientation.z();
+
+      // Roll (phi): rotation around X axis
+      gp_fitness roll = atan2(2.0 * (qw * qx + qy * qz),
+                              1.0 - 2.0 * (qx * qx + qy * qy));
+      // Pitch (theta): rotation around Y axis
+      gp_fitness sinp = 2.0 * (qw * qy - qz * qx);
+      sinp = std::clamp(sinp, -1.0, 1.0);
+      gp_fitness pitch = asin(sinp);
+
+      gp_fitness attitude_delta = 0.0;
+      if (first_attitude_sample) {
+        prev_roll = roll;
+        prev_pitch = pitch;
+        first_attitude_sample = false;
+      } else {
+        attitude_delta = fabs(roll - prev_roll) + fabs(pitch - prev_pitch);
+        prev_roll = roll;
+        prev_pitch = pitch;
+      }
 
       // ====================================================================
-      // METRIC 2: Cross-track error (stay near path centerline)
+      // DISTANCE: 3D distance to rabbit (meters)
       // ====================================================================
       gp_vec3 craftOffset = aircraftPosition - currentPathPoint.start;
-      gp_vec3 lateral = craftOffset - frame.tangent * craftOffset.dot(frame.tangent);
-      gp_scalar crossTrackMagnitude = lateral.norm();
-      gp_scalar crossTrackPercent = 0.0f;
-      if (SIM_PATH_RADIUS_LIMIT > 0.0f) {
-        crossTrackPercent = (crossTrackMagnitude * static_cast<gp_scalar>(100.0f)) / SIM_PATH_RADIUS_LIMIT;
-        cross_track_error_sum += pow(crossTrackPercent, CROSS_TRACK_WEIGHT);
-      }
+      gp_scalar distance = craftOffset.norm();
 
-      // ====================================================================
-      // METRIC 2: Movement direction alignment (move along path efficiently)
-      // ====================================================================
-      gp_scalar movementDirectionError = 0.0f;
-      if (stepIndex > 1) {
-        gp_vec3 aircraft_movement = stepAircraftState.getPosition() - aircraftState.at(stepIndex-1).getPosition();
-        gp_scalar aircraft_distance = aircraft_movement.norm();
-
-        if (aircraft_distance > static_cast<gp_scalar>(0.1f)) {
-          // Path direction is the tangent
-          gp_scalar direction_alignment = aircraft_movement.normalized().dot(frame.tangent);
-          // Clamp to valid range to handle floating-point precision errors at boundaries
-          direction_alignment = std::clamp(direction_alignment, static_cast<gp_scalar>(-1.0f), static_cast<gp_scalar>(1.0f));
-          // Convert to 0-100 scale: perfect=0, opposite=100
-          movementDirectionError = (static_cast<gp_scalar>(1.0f) - direction_alignment) * static_cast<gp_scalar>(50.0f);
-          movement_direction_error_sum += pow(movementDirectionError, MOVEMENT_DIRECTION_WEIGHT);
-        }
-      }
-
-      // ====================================================================
-      // METRIC 3: Throttle efficiency (minimize energy consumption)
-      // ====================================================================
-      gp_scalar current_throttle = stepAircraftState.getThrottleCommand();
-      // Throttle is -1 to 1 range, map to 0-1 range for energy (motor off at -1, full power at +1)
-      gp_scalar throttleNormalized = (current_throttle + 1.0f) * 0.5f;  // Maps [-1,1] -> [0,1]
-      gp_scalar throttlePercent = throttleNormalized * static_cast<gp_scalar>(100.0f);
-      throttle_energy_sum += pow(throttlePercent, THROTTLE_EFFICIENCY_WEIGHT);
-
-      // ====================================================================
-      // Logging variables for compatibility (not used in fitness)
-      // ====================================================================
-      gp_scalar distanceFromGoal = (currentPathPoint.start - aircraftPosition).norm();
-      distanceFromGoal = distanceFromGoal * static_cast<gp_scalar>(100.0f) / (static_cast<gp_scalar>(2.0f) * SIM_PATH_RADIUS_LIMIT);
-
-      gp_vec3 target_direction = path.at(nextIndex).start - currentPathPoint.start;
-      if (target_direction.norm() < static_cast<gp_scalar>(1e-5)) {
-        target_direction = frame.tangent;
-      }
-      gp_vec3 aircraft_to_target = currentPathPoint.start - aircraftPosition;
-      gp_scalar angle_rad = 0.0f;
-      gp_scalar angle_denom = target_direction.norm() * aircraft_to_target.norm();
-      if (angle_denom > static_cast<gp_scalar>(1e-5)) {
-        angle_rad = std::acos(std::clamp(target_direction.dot(aircraft_to_target) / angle_denom, -1.0f, 1.0f));
-      }
-      angle_rad = angle_rad * static_cast<gp_scalar>(100.0f) / static_cast<gp_scalar>(M_PI);
-
-      gp_scalar crossTrackPercentForLog = crossTrackPercent;
-      gp_scalar oscillationPercentForLog = 0.0f;  // No longer used
-      gp_scalar orientationPenaltyForLog = 0.0f;  // No longer used
-      gp_scalar movement_efficiency = movementDirectionError;
-
+      // Accumulate with nonlinear penalty (small excursions still expensive)
+      distance_sum += pow(distance, DISTANCE_POWER);
+      attitude_sum += attitude_delta;
       simulation_steps++;
 
-      // use the ugly global to communicate best of gen
+      // Per-step logging to data.dat
       if (printEval) {
-
         if (printHeader) {
-          fout << "Scn    Bake   Pth/Wnd:Step:   Time Idx  totDist   pathX    pathY    pathZ        X        Y        Z       dr       dp       dy   relVel     roll    pitch    power    distP   angleP  movEffP      qw      qx      qy      qz   vxBody   vyBody   vzBody    alpha     beta   dtheta    dphi   dhome   xtrkP   xOscP orientP\n";
+          fout << "Scn    Bake   Pth/Wnd:Step:   Time Idx  totDist   pathX    pathY    pathZ        X        Y        Z       dr       dp       dy   relVel     roll    pitch    power      qw      qx      qy      qz   vxBody   vyBody   vzBody    alpha     beta   dtheta    dphi   dhome     dist   attDlt  rabVel\n";
           printHeader = false;
         }
 
-        // convert aircraft_orientaton to euler
+        // Compute rabbit velocity from path position delta
+        static gp_vec3 prevPathPos(0, 0, 0);
+        static long prevPathTime = 0;
+        static bool firstStep = true;
+        gp_scalar rabbitVel = 0.0f;
+        gp_vec3 currPathPos = path.at(pathIndex).start;
+        long currPathTime = path.at(pathIndex).simTimeMsec;
+        if (simulation_steps == 1) {
+          firstStep = true;
+        }
+        if (!firstStep && currPathTime > prevPathTime) {
+          gp_scalar dist = (currPathPos - prevPathPos).norm();
+          gp_scalar dt = static_cast<gp_scalar>(currPathTime - prevPathTime) / 1000.0f;
+          rabbitVel = dist / dt;
+        }
+        prevPathPos = currPathPos;
+        prevPathTime = currPathTime;
+        firstStep = false;
+
+        // Convert orientation to euler angles
         Eigen::Matrix3f rotMatrix = craftOrientation.toRotationMatrix();
-
-        // Extract Euler angles
-        // Note: atan2 returns angle in range [-pi, pi]
         gp_vec3 euler;
-
-        // Handle special case near pitch = ±90° (gimbal lock)
         if (std::abs(rotMatrix(2, 0)) > static_cast<gp_scalar>(0.99999f)) {
-          // Gimbal lock case
-          euler[0] = 0; // Roll becomes undefined, set to zero
-
-          // Determine pitch based on r31 sign
+          euler[0] = 0;
           if (rotMatrix(2, 0) > 0) {
             euler[1] = -static_cast<gp_scalar>(M_PI / 2.0);
-            euler[2] = -atan2(rotMatrix(1, 2), rotMatrix(0, 2)); // yaw
-          }
-          else {
+            euler[2] = -atan2(rotMatrix(1, 2), rotMatrix(0, 2));
+          } else {
             euler[1] = static_cast<gp_scalar>(M_PI / 2.0);
-            euler[2] = atan2(rotMatrix(1, 2), rotMatrix(0, 2)); // yaw
+            euler[2] = atan2(rotMatrix(1, 2), rotMatrix(0, 2));
           }
-        }
-        else {
-          // Normal case
-          euler[0] = atan2(rotMatrix(2, 1), rotMatrix(2, 2)); // roll (phi)
-          euler[1] = -asin(rotMatrix(2, 0));                 // pitch (theta)
-          euler[2] = atan2(rotMatrix(1, 0), rotMatrix(0, 0)); // yaw (psi)
+        } else {
+          euler[0] = atan2(rotMatrix(2, 1), rotMatrix(2, 2));
+          euler[1] = -asin(rotMatrix(2, 0));
+          euler[2] = atan2(rotMatrix(1, 0), rotMatrix(0, 0));
         }
 
-        // Calculate body-frame velocity for GP operators
+        // Body-frame velocity
         gp_vec3 velocity_body = stepAircraftState.getOrientation().inverse() *
-                                 stepAircraftState.getVelocity();
+                                stepAircraftState.getVelocity();
 
-        // Calculate GP operator values (matching GP/autoc/gp_operators.h)
-        gp_scalar alpha_deg = atan2(-velocity_body.z(), velocity_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);  // GETALPHA
-        gp_scalar beta_deg = atan2(velocity_body.y(), velocity_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);    // GETBETA
+        // GP operator values
+        gp_scalar alpha_deg = atan2(-velocity_body.z(), velocity_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);
+        gp_scalar beta_deg = atan2(velocity_body.y(), velocity_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);
 
-        // Calculate angle to target in body frame (GETDTHETA, GETDPHI)
+        // Angle to target in body frame
         gp_vec3 craftToTarget = path.at(pathIndex).start - stepAircraftState.getPosition();
         gp_vec3 target_body = stepAircraftState.getOrientation().inverse() * craftToTarget;
-        gp_scalar dtheta_deg = atan2(-target_body.z(), target_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);    // GETDTHETA
-        gp_scalar dphi_deg = atan2(target_body.y(), target_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);       // GETDPHI
+        gp_scalar dtheta_deg = atan2(-target_body.z(), target_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);
+        gp_scalar dphi_deg = atan2(target_body.y(), -target_body.z()) * static_cast<gp_scalar>(180.0 / M_PI);
 
-        // Distance to home (GETDHOME)
+        // Distance to home
         gp_vec3 home(0, 0, SIM_INITIAL_ALTITUDE);
         gp_scalar dhome = (home - stepAircraftState.getPosition()).norm();
 
-        // Get raw quaternion
         gp_quat q = craftOrientation;
 
-        char outbuf[1600]; // XXX use c++20
-        sprintf(outbuf, "%06llu %06llu %03d/%02d:%04d: %06ld %3d % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.4f % 7.4f % 7.4f % 7.4f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.2f % 7.2f % 7.2f\n",
+        char outbuf[1600];
+        sprintf(outbuf, "%06llu %06llu %03d/%02d:%04d: %06ld %3d % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.4f % 7.4f % 7.4f % 7.4f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.3f % 6.4f % 6.1f\n",
           static_cast<unsigned long long>(scenarioSequence),
           static_cast<unsigned long long>(bakeoffSequence),
           pathVariantIndex, windVariantIndex, simulation_steps,
@@ -872,73 +1271,52 @@ void MyGP::evalTask(WorkerContext& context)
           stepAircraftState.getPosition()[0],
           stepAircraftState.getPosition()[1],
           stepAircraftState.getPosition()[2],
-          euler[2],
-          euler[1],
-          euler[0],
+          euler[2], euler[1], euler[0],
           stepAircraftState.getRelVel(),
           stepAircraftState.getRollCommand(),
           stepAircraftState.getPitchCommand(),
           stepAircraftState.getThrottleCommand(),
-          distanceFromGoal,
-          angle_rad,
-          movement_efficiency,
-          // NEW FIELDS:
-          q.w(), q.x(), q.y(), q.z(),                       // Quaternion
-          velocity_body.x(), velocity_body.y(), velocity_body.z(),  // Body velocity
-          alpha_deg, beta_deg,                              // GETALPHA, GETBETA
-          dtheta_deg, dphi_deg,                             // GETDTHETA, GETDPHI
-          dhome,                                            // GETDHOME
-          crossTrackPercentForLog,
-          oscillationPercentForLog,
-          orientationPenaltyForLog
+          q.w(), q.x(), q.y(), q.z(),
+          velocity_body.x(), velocity_body.y(), velocity_body.z(),
+          alpha_deg, beta_deg,
+          dtheta_deg, dphi_deg,
+          dhome,
+          distance,        // New: distance to rabbit
+          attitude_delta,  // New: attitude change this step
+          rabbitVel
         );
         fout << outbuf;
       }
     }
 
-    // ========================================================================
-    // SIMPLIFIED FITNESS COMPUTATION
-    // ========================================================================
-    // Get total path distance (odometer) for normalization
-    gp_scalar total_path_distance = path.back().distanceFromStart;
+    // Scale attitude by path geometry so 1 rad excess ≈ (path_dist/path_turn) meters
+    gp_scalar path_distance = path.back().distanceFromStart;
+    gp_scalar path_turn_rad = path.back().radiansFromStart;
+    // Fallback for straight paths: treat as one full rotation worth
+    gp_scalar attitude_scale = path_distance / std::max(path_turn_rad, static_cast<gp_scalar>(2.0 * M_PI));
 
-    // Normalize all metrics by total path distance (odometer reading)
-    // This ensures paths of different lengths/granularity are compared fairly
-    // Guard against near-zero to prevent divide-by-near-zero overflow
-    gp_scalar normalization_factor = (total_path_distance > 0.1f) ? total_path_distance : 1.0f;
-
-    gp_scalar normalized_waypoint_distance = (waypoint_distance_sum / normalization_factor);
-    gp_scalar normalized_cross_track = (cross_track_error_sum / normalization_factor);
-    gp_scalar normalized_movement_direction = (movement_direction_error_sum / normalization_factor);
-    gp_scalar normalized_throttle_energy = (throttle_energy_sum / normalization_factor);
-
-    // Sum all components (lower is better)
-    localFitness = normalized_waypoint_distance +     // Reach waypoints on time
-                   normalized_cross_track +           // Stay near path centerline
-                   normalized_movement_direction +    // Move along path tangent
-                   normalized_throttle_energy;        // Minimize throttle usage
+    localFitness = distance_sum + attitude_sum * attitude_scale;
 
     if (isnan(localFitness)) {
       nanDetector++;
     }
 
-    // Crash penalty: add large penalty scaled by how much path remains
+    // Crash penalty: soft lexicographic - completion dominates, quality provides gradient
     if (crashReason != CrashReason::None) {
-      gp_scalar fractional_distance_remaining = static_cast<gp_scalar>(1.0f) -
-        path.at(aircraftState.back().getThisPathIndex()).distanceFromStart / path.back().distanceFromStart;
-      localFitness += SIM_CRASH_PENALTY * fractional_distance_remaining;
+      gp_fitness total_path_distance = path.back().distanceFromStart;
+      gp_fitness fraction_completed =
+        static_cast<gp_fitness>(path.at(aircraftState.back().getThisPathIndex()).distanceFromStart) / total_path_distance;
+      fraction_completed = std::max(fraction_completed, static_cast<gp_fitness>(0.001));
+      gp_fitness completion_penalty = (1.0 - fraction_completed) * CRASH_COMPLETION_WEIGHT;
+      localFitness = completion_penalty + localFitness;
     }
 
-    // accumulate the local fitness
+    // Sum path fitness
     stdFitness += localFitness;
   }
 
-  // normalize
-  stdFitness /= context.evalResults.pathList.size();
-  
   // Mark fitness as valid for the GP library
   fitnessValid = 1;
-  
 }
 
 void newHandler()
@@ -991,11 +1369,19 @@ int main(int argc, char** argv)
   // we don't know it's there.
   set_new_handler(newHandler);
 
-  // Init GP system.
-  GPInit(1, -1);
-
-  // Initialize ConfigManager (this replaces the old GPConfiguration call)
+  // Initialize ConfigManager first so we can access gpSeed
   ConfigManager::initialize(configFile, *logger.info());
+
+  // Init GP system with seed from config
+  // Handle -1 as time-based seed (GP library doesn't recognize this convention)
+  long gpSeed;
+  if (ConfigManager::getExtraConfig().gpSeed == -1) {
+    gpSeed = static_cast<long>(time(NULL));
+    *logger.info() << "GPSeed: -1 (auto) -> " << gpSeed << endl;
+  } else {
+    gpSeed = static_cast<long>(ConfigManager::getExtraConfig().gpSeed);
+  }
+  GPInit(1, gpSeed);
 
   // AWS setup
   Aws::SDKOptions options;
@@ -1012,12 +1398,87 @@ int main(int argc, char** argv)
   *logger.info() << "MinisimPortOverride: " << ConfigManager::getExtraConfig().minisimPortOverride << endl;
   *logger.info() << "EvaluateMode: " << ConfigManager::getExtraConfig().evaluateMode << endl;
   *logger.info() << "WindScenarios: " << ConfigManager::getExtraConfig().windScenarioCount << endl;
-  *logger.info() << "WindSeedBase: " << ConfigManager::getExtraConfig().windSeedBase << endl;
-  *logger.info() << "WindSeedStride: " << ConfigManager::getExtraConfig().windSeedStride << endl << endl;
+  *logger.info() << "GPSeed: " << ConfigManager::getExtraConfig().gpSeed << endl;
+  *logger.info() << "RandomPathSeedB: " << ConfigManager::getExtraConfig().randomPathSeedB << endl;
+
+  // Log VARIATIONS1 settings and initialize global sigmas
+  const ExtraConfig& extraCfg = ConfigManager::getExtraConfig();
+  *logger.info() << "EnableEntryVariations: " << extraCfg.enableEntryVariations << endl;
+  *logger.info() << "EnableWindVariations: " << extraCfg.enableWindVariations << endl;
+
+  // Initialize global variation parameters from config (degrees -> radians)
+  // Store individual flags for selective application in populateVariationOffsets()
+  gEnableEntryVariations = (extraCfg.enableEntryVariations != 0);
+  gEnableWindVariations = (extraCfg.enableWindVariations != 0);
+  gVariationSigmas = VariationSigmas::fromDegrees(
+      extraCfg.entryHeadingSigma,
+      extraCfg.entryRollSigma,
+      extraCfg.entryPitchSigma,
+      extraCfg.entrySpeedSigma,  // already a fraction
+      extraCfg.windDirectionSigma
+  );
+
+  // Initialize global rabbit speed config
+  gRabbitSpeedConfig = RabbitSpeedConfig{
+      extraCfg.rabbitSpeedNominal,
+      extraCfg.rabbitSpeedSigma,
+      extraCfg.rabbitSpeedMin,
+      extraCfg.rabbitSpeedMax,
+      extraCfg.rabbitSpeedCycleMin,
+      extraCfg.rabbitSpeedCycleMax
+  };
+
+  // Log rabbit speed configuration
+  *logger.info() << "RabbitSpeed: nominal=" << extraCfg.rabbitSpeedNominal << " m/s"
+                 << " sigma=" << extraCfg.rabbitSpeedSigma << " m/s"
+                 << " range=[" << extraCfg.rabbitSpeedMin << ", " << extraCfg.rabbitSpeedMax << "] m/s"
+                 << " cycles=[" << extraCfg.rabbitSpeedCycleMin << ", " << extraCfg.rabbitSpeedCycleMax << "] s"
+                 << (extraCfg.rabbitSpeedSigma > 0 ? " (VARIABLE)" : " (CONSTANT)") << endl;
+
+  // RAMP_LANDSCAPE: Initialize variation ramp globals
+  gTotalGenerations = ConfigManager::getGPConfig().NumberOfGenerations;
+  gVariationRampStep = extraCfg.variationRampStep;
+  gCurrentGeneration = 0;
+  if (gVariationRampStep > 0) {
+    int totalSteps = gTotalGenerations / gVariationRampStep;
+    *logger.info() << "VariationRamp: step=" << gVariationRampStep
+                   << " gens, " << totalSteps << " steps over " << gTotalGenerations
+                   << " gens (scale +=" << std::fixed << std::setprecision(1)
+                   << (100.0 / totalSteps) << "% per step)" << endl;
+  }
+
+  // SINGLE PRNG ARCHITECTURE: Pre-fetch all scenario variations from GPrand()
+  // This consumes from GPrand() BEFORE GP evolution, ensuring deterministic sequence
+  // When a variation type is disabled, defaults are stored in the table (not filtered later)
+  int windScenarioCount = std::max(extraCfg.windScenarioCount, 1);
+  prefetchAllVariations(windScenarioCount, gVariationSigmas, gRabbitSpeedConfig,
+                        extraCfg.randomPathSeedB,
+                        gEnableEntryVariations, gEnableWindVariations);
+
+  // Log pre-fetched variations for verification
+  *logger.info() << "Sigmas: heading=" << extraCfg.entryHeadingSigma << "° "
+                 << "roll=" << extraCfg.entryRollSigma << "° "
+                 << "pitch=" << extraCfg.entryPitchSigma << "° "
+                 << "speed=" << (extraCfg.entrySpeedSigma * 100) << "% "
+                 << "wind=" << extraCfg.windDirectionSigma << "°" << endl;
+  logPrefetchedVariations(windScenarioCount, gpSeed);
+
+  // Set training node mask before creating node set
+  setTrainingNodesMask(ConfigManager::getExtraConfig().trainingNodes);
 
   // Create the adf function/terminal set and print it out.
   createNodeSet(adfNs);
   *logger.info() << adfNs << endl;
+
+  // Log training nodes (the subset used for tree creation/mutation)
+  extern std::vector<std::string> trainingNodeNames;
+  std::ostringstream nodeListStr;
+  nodeListStr << "TrainingNodes (" << trainingNodeNames.size() << "): ";
+  for (size_t i = 0; i < trainingNodeNames.size(); i++) {
+    if (i > 0) nodeListStr << ",";
+    nodeListStr << trainingNodeNames[i];
+  }
+  *logger.info() << nodeListStr.str() << endl;
 
   // Open the main output file for the data and statistics file.
   // First set up names for data file.  Remember we should delete the
@@ -1027,6 +1488,9 @@ int main(int argc, char** argv)
   strStatFile << "data.stc" << ends;
   fout.open(strOutFile.str());
   bout.open(strStatFile.str());
+
+  // Set fixed-point notation for statistics file
+  bout << std::fixed << std::setprecision(6);
 
   std::string startTime = generate_iso8601_timestamp();
   auto runStartTime = std::chrono::steady_clock::now();
@@ -1046,21 +1510,21 @@ int main(int argc, char** argv)
          << " total=" << currentRuns
          << " durationSec=" << deltaSec
          << " rate=" << rate
-         << std::defaultfloat << std::endl;
+         << std::setprecision(6) << std::endl;
     bout.flush();
     lastThroughputTime = now;
     lastSimRunCount = currentRuns;
   };
 
-  // prime the paths?
+  // Generate initial paths using pre-fetched gPathSeed (single PRNG architecture)
   generationPaths = generateSmoothPaths(ConfigManager::getExtraConfig().generatorMethod,
                                         ConfigManager::getExtraConfig().simNumPathsPerGen,
                                         SIM_PATH_BOUNDS, SIM_PATH_BOUNDS,
-                                        ConfigManager::getExtraConfig().randomPathSeedB);
+                                        gPathSeed);
 
   // DEBUG: Log segment counts for each path
   std::cout << "\n=== Path Segment Counts (method=" << ConfigManager::getExtraConfig().generatorMethod
-            << ", seed=" << ConfigManager::getExtraConfig().randomPathSeedB << ") ===" << std::endl;
+            << ", seed=" << gPathSeed << ") ===" << std::endl;
   int maxSegments = 0;
   for (size_t i = 0; i < generationPaths.size(); i++) {
     int segCount = generationPaths[i].size();
@@ -1110,28 +1574,64 @@ int main(int argc, char** argv)
         const ScenarioDescriptor& scenario = scenarioForIndex(getScenarioIndex());
         EvalData evalData;
         evalData.gp = bytecodeBuffer;
+        evalData.gpHash = hashByteVector(evalData.gp);
         evalData.pathList = scenario.pathList;
         uint64_t scenarioSequence = globalScenarioCounter.fetch_add(1, std::memory_order_relaxed) + 1;
         evalData.scenario.scenarioSequence = scenarioSequence;
         evalData.scenarioList.clear();
         evalData.scenarioList.reserve(scenario.pathList.size());
         bool isBakeoff = isBakeoffMode();
+        const GPVariables& gpCfg = ConfigManager::getGPConfig();
+
         for (size_t idx = 0; idx < scenario.pathList.size(); ++idx) {
           ScenarioMetadata meta;
-          meta.pathVariantIndex = scenario.pathVariantIndex;
           meta.scenarioSequence = scenarioSequence;
           if (isBakeoff) {
             meta.bakeoffSequence = bakeoffPathCounter.fetch_add(1, std::memory_order_relaxed) + 1;
           } else {
             meta.bakeoffSequence = 0;
           }
-          if (idx < scenario.windScenarios.size()) {
-            meta.windVariantIndex = scenario.windScenarios[idx].windVariantIndex;
-            meta.windSeed = scenario.windScenarios[idx].windSeed;
+
+          if (gpCfg.DemeticGrouping && gpCfg.DemeSize > 0) {
+            // Demetic mode: scenario has one path variant across multiple winds
+            meta.pathVariantIndex = scenario.pathVariantIndex;
+            if (idx < scenario.windScenarios.size()) {
+              meta.windVariantIndex = scenario.windScenarios[idx].windVariantIndex;
+              meta.windSeed = scenario.windScenarios[idx].windSeed;
+            } else {
+              meta.windVariantIndex = scenario.windVariantIndex;
+              meta.windSeed = scenario.windSeed;
+            }
           } else {
-            meta.windVariantIndex = scenario.windVariantIndex;
-            meta.windSeed = scenario.windSeed;
+            // Non-demetic mode: scenario has all paths × all winds
+            // pathList is organized in PATH-MAJOR order: [p0w0, p0w1, ..., p0w5, p1w0, p1w1, ...]
+            size_t numWindScenarios = scenario.windScenarios.size();
+            if (numWindScenarios > 0 && scenario.pathList.size() > 0) {
+              size_t numBasePaths = scenario.pathList.size() / numWindScenarios;
+              size_t pathIdx = idx / numWindScenarios;
+              size_t windIdx = idx % numWindScenarios;
+
+              meta.pathVariantIndex = static_cast<int>(pathIdx);
+              if (windIdx < scenario.windScenarios.size()) {
+                meta.windVariantIndex = scenario.windScenarios[windIdx].windVariantIndex;
+                meta.windSeed = scenario.windScenarios[windIdx].windSeed;
+              } else {
+                meta.windVariantIndex = scenario.windVariantIndex;
+                meta.windSeed = scenario.windSeed;
+              }
+            } else {
+              // Fallback if structure is unexpected
+              meta.pathVariantIndex = static_cast<int>(idx);
+              meta.windVariantIndex = scenario.windVariantIndex;
+              meta.windSeed = scenario.windSeed;
+            }
           }
+          // VARIATIONS1: Populate entry/wind variation offsets (uses pre-fetched values)
+          populateVariationOffsets(meta);
+
+          // Variable rabbit speed: Apply speed profile to path timing (uses pre-fetched profile)
+          applySpeedProfileToPath(evalData.pathList[idx], meta.windVariantIndex);
+
           evalData.scenarioList.push_back(meta);
         }
         if (!evalData.scenarioList.empty()) {
@@ -1143,10 +1643,24 @@ int main(int argc, char** argv)
             : 0;
         }
         evalData.sanitizePaths();
+        const bool logDispatch = enableDeterministicTestLogging.load(std::memory_order_relaxed);
+        if (logDispatch) {
+          *logger.info() << "[AUTOC_SEND_GP] workerId=" << context.workerId
+                         << " gpHash=0x" << std::hex << evalData.gpHash << std::dec
+                         << " bytes=" << evalData.gp.size()
+                         << " scenarioSeq=" << scenarioSequence
+                         << " (bytecode eval)"
+                         << endl;
+        }
         sendRPC(*context.socket, evalData);
         
         // Get simulation results
         context.evalResults = receiveRPC<EvalResults>(*context.socket);
+
+        if (context.evalResults.gpHash == 0 && !context.evalResults.gp.empty()) {
+          context.evalResults.gpHash = hashByteVector(context.evalResults.gp);
+        }
+
         if (context.evalResults.pathList.empty() && !evalData.pathList.empty()) {
           context.evalResults.pathList = evalData.pathList;
         }
@@ -1159,6 +1673,7 @@ int main(int argc, char** argv)
         globalSimRunCounter.fetch_add(context.evalResults.pathList.size(), std::memory_order_relaxed);
 
         if (printEval) {
+          boost::unique_lock<boost::mutex> lock(evalCollectorMutex);
           if (activeEvalCollector) {
             appendEvalResults(*activeEvalCollector, context.evalResults);
           } else {
@@ -1166,7 +1681,8 @@ int main(int argc, char** argv)
           }
         }
         
-        // Use same fitness computation as normal GP evaluation
+        // Compute fitness for each path and sum
+        // Crash penalty (soft lexicographic) applied per-path
         for (int i = 0; i < context.evalResults.pathList.size(); i++) {
           auto& path = context.evalResults.pathList.at(i);
           auto& aircraftState = context.evalResults.aircraftStateList.at(i);
@@ -1186,101 +1702,99 @@ int main(int argc, char** argv)
             windSeed = context.evalResults.scenarioList.at(i).windSeed;
           }
 
-          gp_scalar localFitness = 0;
+          // ========================================================================
+          // SIMPLIFIED FITNESS (v3): Two objectives - distance + attitude delta
+          // See specs/FITNESS_SIMPLIFY_20260221.md
+          // ========================================================================
+          gp_fitness localFitness = 0.0;
           int stepIndex = 0;
 
-          // SIMPLIFIED error accumulators
-          gp_scalar waypoint_distance_sum = 0.0f;
-          gp_scalar cross_track_error_sum = 0.0f;
-          gp_scalar movement_direction_error_sum = 0.0f;
-          gp_scalar throttle_energy_sum = 0.0f;
+          // Accumulate raw values, scale attitude at end using path geometry
+          gp_fitness distance_sum = 0.0;
+          gp_fitness attitude_sum = 0.0;
           int simulation_steps = 0;
-          
+
+          // Attitude delta tracking
+          gp_fitness prev_roll = 0.0, prev_pitch = 0.0;
+          bool first_attitude_sample = true;
+
           while (++stepIndex < aircraftState.size()) {
             auto& stepAircraftState = aircraftState.at(stepIndex);
             int rawPathIndex = stepAircraftState.getThisPathIndex();
             int pathIndex = std::clamp(rawPathIndex, 0, static_cast<int>(path.size()) - 1);
             const Path& currentPathPoint = path.at(pathIndex);
-            PathFrame frame = computePathFrame(path, pathIndex);
-            int nextIndex = std::min(pathIndex + 1, static_cast<int>(path.size()) - 1);
-            
+
             gp_vec3 aircraftPosition = stepAircraftState.getPosition();
             gp_quat craftOrientation = stepAircraftState.getOrientation();
-            gp_vec3 aircraftUp = craftOrientation * gp_vec3::UnitZ();
 
-            // Waypoint distance
-            gp_scalar waypointDistance = (currentPathPoint.start - aircraftPosition).norm();
-            gp_scalar waypointDistancePercent = (waypointDistance * static_cast<gp_scalar>(100.0f)) /
-                                                 (static_cast<gp_scalar>(2.0f) * SIM_PATH_RADIUS_LIMIT);
-            waypoint_distance_sum += pow(waypointDistancePercent, WAYPOINT_DISTANCE_WEIGHT);
+            // ====================================================================
+            // ATTITUDE DELTA: Per-step roll/pitch change (radians)
+            // ====================================================================
+            gp_fitness qw = craftOrientation.w();
+            gp_fitness qx = craftOrientation.x();
+            gp_fitness qy = craftOrientation.y();
+            gp_fitness qz = craftOrientation.z();
 
-            // Cross-track error
+            // Roll (phi): rotation around X axis
+            gp_fitness roll = atan2(2.0 * (qw * qx + qy * qz),
+                                    1.0 - 2.0 * (qx * qx + qy * qy));
+            // Pitch (theta): rotation around Y axis
+            gp_fitness sinp = 2.0 * (qw * qy - qz * qx);
+            sinp = std::clamp(sinp, -1.0, 1.0);
+            gp_fitness pitch = asin(sinp);
+
+            gp_fitness attitude_delta = 0.0;
+            if (first_attitude_sample) {
+              prev_roll = roll;
+              prev_pitch = pitch;
+              first_attitude_sample = false;
+            } else {
+              attitude_delta = fabs(roll - prev_roll) + fabs(pitch - prev_pitch);
+              prev_roll = roll;
+              prev_pitch = pitch;
+            }
+
+            // ====================================================================
+            // DISTANCE: 3D distance to rabbit (meters)
+            // ====================================================================
             gp_vec3 craftOffset = aircraftPosition - currentPathPoint.start;
-            gp_vec3 lateral = craftOffset - frame.tangent * craftOffset.dot(frame.tangent);
-            gp_scalar crossTrackMagnitude = lateral.norm();
-            gp_scalar crossTrackPercent = 0.0f;
-            if (SIM_PATH_RADIUS_LIMIT > static_cast<gp_scalar>(0.0f)) {
-              crossTrackPercent = (crossTrackMagnitude * static_cast<gp_scalar>(100.0f)) / SIM_PATH_RADIUS_LIMIT;
-              cross_track_error_sum += pow(crossTrackPercent, CROSS_TRACK_WEIGHT);
-            }
+            gp_scalar distance = craftOffset.norm();
 
-            // Movement direction alignment
-            gp_scalar movementDirectionError = 0.0f;
-            if (stepIndex > 1) {
-              gp_vec3 aircraft_movement = stepAircraftState.getPosition() - aircraftState.at(stepIndex-1).getPosition();
-              gp_scalar aircraft_distance = aircraft_movement.norm();
-              if (aircraft_distance > static_cast<gp_scalar>(0.1f)) {
-                gp_scalar direction_alignment = aircraft_movement.normalized().dot(frame.tangent);
-                // Clamp to valid range to handle floating-point precision errors at boundaries
-                direction_alignment = std::clamp(direction_alignment, static_cast<gp_scalar>(-1.0f), static_cast<gp_scalar>(1.0f));
-                movementDirectionError = (static_cast<gp_scalar>(1.0f) - direction_alignment) * static_cast<gp_scalar>(50.0f);
-                movement_direction_error_sum += pow(movementDirectionError, MOVEMENT_DIRECTION_WEIGHT);
-              }
-            }
-
-            // Throttle efficiency
-            gp_scalar current_throttle = stepAircraftState.getThrottleCommand();
-            // Throttle is -1 to 1 range, map to 0-1 range for energy (motor off at -1, full power at +1)
-            gp_scalar throttleNormalized = (current_throttle + 1.0f) * 0.5f;  // Maps [-1,1] -> [0,1]
-            gp_scalar throttlePercent = throttleNormalized * static_cast<gp_scalar>(100.0f);
-            throttle_energy_sum += pow(throttlePercent, THROTTLE_EFFICIENCY_WEIGHT);
-
-            // Logging variables for compatibility (not used in fitness)
-            gp_scalar distanceFromGoal = (currentPathPoint.start - aircraftPosition).norm();
-            distanceFromGoal = distanceFromGoal * static_cast<gp_scalar>(100.0f) / (static_cast<gp_scalar>(2.0f) * SIM_PATH_RADIUS_LIMIT);
-
-            gp_vec3 target_direction = path.at(nextIndex).start - currentPathPoint.start;
-            if (target_direction.norm() < static_cast<gp_scalar>(1e-5f)) {
-              target_direction = frame.tangent;
-            }
-            gp_vec3 aircraft_to_target = currentPathPoint.start - aircraftPosition;
-            gp_scalar angle_rad = 0.0f;
-            gp_scalar angle_denom = target_direction.norm() * aircraft_to_target.norm();
-            if (angle_denom > static_cast<gp_scalar>(1e-5f)) {
-              angle_rad = static_cast<gp_scalar>(
-                std::acos(std::clamp(target_direction.dot(aircraft_to_target) / angle_denom,
-                                     static_cast<gp_scalar>(-1.0f),
-                                     static_cast<gp_scalar>(1.0f))));
-            }
-            angle_rad = angle_rad * static_cast<gp_scalar>(100.0f) / static_cast<gp_scalar>(M_PI);
-
-            gp_scalar crossTrackPercentForLog = crossTrackPercent;
-            gp_scalar oscillationPercentForLog = 0.0f;
-            gp_scalar orientationPenaltyForLog = 0.0f;
-            gp_scalar movement_efficiency = movementDirectionError;
-
+            // Accumulate with nonlinear penalty (small excursions still expensive)
+            distance_sum += pow(distance, DISTANCE_POWER);
+            attitude_sum += attitude_delta;
             simulation_steps++;
-            
+
+            // Per-step logging
             if (printEval) {
               bestOfEvalResults = context.evalResults;
-              
+
               if (stepIndex == 1) {
-                fout << "Pth:Step:   Time Idx  totDist   pathX    pathY    pathZ        X        Y        Z       dr       dp       dy   relVel     roll    pitch    power    distP   angleP  movEffP      qw      qx      qy      qz   vxBody   vyBody   vzBody    alpha     beta   dtheta    dphi   dhome   xtrkP   xOscP orientP\n";
+                fout << "Pth:Step:   Time Idx  totDist   pathX    pathY    pathZ        X        Y        Z       dr       dp       dy   relVel     roll    pitch    power      qw      qx      qy      qz   vxBody   vyBody   vzBody    alpha     beta   dtheta    dphi   dhome     dist   attDlt  rabVel\n";
               }
-              
+
+              // Compute rabbit velocity from path position delta
+              static gp_vec3 prevPathPos2(0, 0, 0);
+              static long prevPathTime2 = 0;
+              static bool firstStep2 = true;
+              gp_scalar rabbitVel = 0.0f;
+              gp_vec3 currPathPos = path.at(pathIndex).start;
+              long currPathTime = path.at(pathIndex).simTimeMsec;
+              if (stepIndex == 1) {
+                firstStep2 = true;
+              }
+              if (!firstStep2 && currPathTime > prevPathTime2) {
+                gp_scalar dist = (currPathPos - prevPathPos2).norm();
+                gp_scalar dt = static_cast<gp_scalar>(currPathTime - prevPathTime2) / 1000.0f;
+                rabbitVel = dist / dt;
+              }
+              prevPathPos2 = currPathPos;
+              prevPathTime2 = currPathTime;
+              firstStep2 = false;
+
+              // Convert orientation to euler angles
               Eigen::Matrix3f rotMatrix = craftOrientation.toRotationMatrix();
               gp_vec3 euler;
-              
               if (std::abs(rotMatrix(2, 0)) > static_cast<gp_scalar>(0.99999f)) {
                 euler[0] = 0;
                 if (rotMatrix(2, 0) > 0) {
@@ -1296,29 +1810,28 @@ int main(int argc, char** argv)
                 euler[2] = atan2(rotMatrix(1, 0), rotMatrix(0, 0));
               }
 
-              // Calculate body-frame velocity for GP operators
+              // Body-frame velocity
               gp_vec3 velocity_body = stepAircraftState.getOrientation().inverse() *
-                                       stepAircraftState.getVelocity();
+                                      stepAircraftState.getVelocity();
 
-              // Calculate GP operator values (matching GP/autoc/gp_operators.h)
-              gp_scalar alpha_deg = atan2(-velocity_body.z(), velocity_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);  // GETALPHA
-              gp_scalar beta_deg = atan2(velocity_body.y(), velocity_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);    // GETBETA
+              // GP operator values
+              gp_scalar alpha_deg = atan2(-velocity_body.z(), velocity_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);
+              gp_scalar beta_deg = atan2(velocity_body.y(), velocity_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);
 
-              // Calculate angle to target in body frame (GETDTHETA, GETDPHI)
+              // Angle to target in body frame
               gp_vec3 craftToTarget = path.at(pathIndex).start - stepAircraftState.getPosition();
               gp_vec3 target_body = stepAircraftState.getOrientation().inverse() * craftToTarget;
-              gp_scalar dtheta_deg = atan2(-target_body.z(), target_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);    // GETDTHETA
-              gp_scalar dphi_deg = atan2(target_body.y(), target_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);       // GETDPHI
+              gp_scalar dtheta_deg = atan2(-target_body.z(), target_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);
+              gp_scalar dphi_deg = atan2(target_body.y(), -target_body.z()) * static_cast<gp_scalar>(180.0 / M_PI);
 
-              // Distance to home (GETDHOME)
+              // Distance to home
               gp_vec3 home(0, 0, SIM_INITIAL_ALTITUDE);
               gp_scalar dhome = (home - stepAircraftState.getPosition()).norm();
 
-              // Get raw quaternion
               gp_quat q = craftOrientation;
 
               char outbuf[1500];
-              sprintf(outbuf, "%03d:%04d: %06ld %3d % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.4f % 7.4f % 7.4f % 7.4f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.2f % 7.2f % 7.2f\n",
+              sprintf(outbuf, "%03d:%04d: %06ld %3d % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.4f % 7.4f % 7.4f % 7.4f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.3f % 6.4f % 6.1f\n",
                 pathVariantIndex, simulation_steps,
                 stepAircraftState.getSimTimeMsec(), pathIndex,
                 path.at(pathIndex).distanceFromStart,
@@ -1328,69 +1841,55 @@ int main(int argc, char** argv)
                 stepAircraftState.getPosition()[0],
                 stepAircraftState.getPosition()[1],
                 stepAircraftState.getPosition()[2],
-                euler[2],
-                euler[1],
-                euler[0],
+                euler[2], euler[1], euler[0],
                 stepAircraftState.getRelVel(),
                 stepAircraftState.getRollCommand(),
                 stepAircraftState.getPitchCommand(),
                 stepAircraftState.getThrottleCommand(),
-                distanceFromGoal,
-                angle_rad,
-                movement_efficiency,
-                // NEW FIELDS:
-                q.w(), q.x(), q.y(), q.z(),                       // Quaternion
-                velocity_body.x(), velocity_body.y(), velocity_body.z(),  // Body velocity
-                alpha_deg, beta_deg,                              // GETALPHA, GETBETA
-                dtheta_deg, dphi_deg,                             // GETDTHETA, GETDPHI
-                dhome,                                            // GETDHOME
-                crossTrackPercentForLog,
-                oscillationPercentForLog,
-                orientationPenaltyForLog
+                q.w(), q.x(), q.y(), q.z(),
+                velocity_body.x(), velocity_body.y(), velocity_body.z(),
+                alpha_deg, beta_deg,
+                dtheta_deg, dphi_deg,
+                dhome,
+                distance,        // New: distance to rabbit
+                attitude_delta,  // New: attitude change this step
+                rabbitVel
               );
               fout << outbuf;
             }
           }
-          
-          // SIMPLIFIED FITNESS COMPUTATION
-          // Get total path distance (odometer) for normalization
-          gp_scalar total_path_distance = path.back().distanceFromStart;
 
-          // Normalize all metrics by total path distance (odometer reading)
-          // This ensures paths of different lengths/granularity are compared fairly
-          // Guard against near-zero to prevent divide-by-near-zero overflow
-          gp_scalar normalization_factor = (total_path_distance > 0.1f) ? total_path_distance : 1.0f;
+          // Scale attitude by path geometry so 1 rad excess ≈ (path_dist/path_turn) meters
+          gp_scalar path_distance = path.back().distanceFromStart;
+          gp_scalar path_turn_rad = path.back().radiansFromStart;
+          // Fallback for straight paths: treat as one full rotation worth
+          gp_scalar attitude_scale = path_distance / std::max(path_turn_rad, static_cast<gp_scalar>(2.0 * M_PI));
 
-          gp_scalar normalized_waypoint_distance = (waypoint_distance_sum / normalization_factor);
-          gp_scalar normalized_cross_track = (cross_track_error_sum / normalization_factor);
-          gp_scalar normalized_movement_direction = (movement_direction_error_sum / normalization_factor);
-          gp_scalar normalized_throttle_energy = (throttle_energy_sum / normalization_factor);
-
-          localFitness = normalized_waypoint_distance +
-                         normalized_cross_track +
-                         normalized_movement_direction +
-                         normalized_throttle_energy;
+          localFitness = distance_sum + attitude_sum * attitude_scale;
 
           if (isnan(localFitness)) {
             nanDetector++;
           }
 
+          // Crash penalty: soft lexicographic - completion dominates, quality provides gradient
           if (crashReason != CrashReason::None) {
-            gp_scalar fractional_distance_remaining = static_cast<gp_scalar>(1.0f) -
-              path.at(aircraftState.back().getThisPathIndex()).distanceFromStart / path.back().distanceFromStart;
-            localFitness += SIM_CRASH_PENALTY * fractional_distance_remaining;
+            gp_fitness total_path_distance = path.back().distanceFromStart;
+            gp_fitness fraction_completed =
+              static_cast<gp_fitness>(path.at(aircraftState.back().getThisPathIndex()).distanceFromStart) / total_path_distance;
+            fraction_completed = std::max(fraction_completed, static_cast<gp_fitness>(0.001));
+            gp_fitness completion_penalty = (1.0 - fraction_completed) * CRASH_COMPLETION_WEIGHT;
+            localFitness = completion_penalty + localFitness;
           }
-          
+
+          // Sum path fitness
           stdFitness += localFitness;
         }
-        
-        stdFitness /= context.evalResults.pathList.size();
         
         // Mark fitness as valid for the GP library
         fitnessValid = 1;
       }
       
-      gp_scalar getFinalFitness() const { return static_cast<gp_scalar>(stdFitness); }
+      gp_fitness getFinalFitness() const { return stdFitness; }
     };
     
     // Serialize the bytecode interpreter for transport to simulators
@@ -1410,45 +1909,51 @@ int main(int argc, char** argv)
     // Create bytecode evaluation GP
     BytecodeEvaluationGP evalGP(bytecodeBuffer);
     
-    clearEvalResults(aggregatedEvalResults);
-    aggregatedEvalResults.scenario.pathVariantIndex = -1;
-    aggregatedEvalResults.scenario.windVariantIndex = -1;
-    aggregatedEvalResults.scenario.windSeed = 0;
+    aggregatedEvalResults.clear();
     EvalResults* previousCollector = activeEvalCollector;
     activeEvalCollector = &aggregatedEvalResults;
     
     evaluationProgress.store(0);
-    gp_scalar cumulativeFitness = 0.0f;
+    gp_fitness cumulativeFitness = 0.0;
     size_t scenariosEvaluated = 0;
-    
+
     for (size_t scenarioIdx = 0; scenarioIdx < generationScenarios.size(); ++scenarioIdx) {
       const auto& scenario = scenarioForIndex(static_cast<int>(scenarioIdx));
       *logger.debug() << "Evaluating scenario " << scenarioIdx
                       << " paths=" << scenario.pathList.size() << endl;
       evalGP.setScenarioIndex(static_cast<int>(scenarioIdx));
       evalGP.evaluate();
-      
+
       for (auto& task : tasks) {
         threadPool->enqueue([task](WorkerContext& context) {
           task->evalTask(context);
           });
       }
-      
+
       threadPool->wait_for_tasks();
       tasks.clear();
-      
+
       cumulativeFitness += evalGP.getFinalFitness();
       scenariosEvaluated++;
     }
-    
+
     activeEvalCollector = previousCollector;
     printEval = false;
-    
-    gp_scalar averageFitness = scenariosEvaluated > 0 ? cumulativeFitness / static_cast<gp_scalar>(scenariosEvaluated) : static_cast<gp_scalar>(0.0f);
+
+    gp_fitness averageFitness = scenariosEvaluated > 0 ? cumulativeFitness / static_cast<gp_fitness>(scenariosEvaluated) : 0.0;
     *logger.info() << "Aggregated results: paths=" << aggregatedEvalResults.pathList.size()
                    << " states=" << aggregatedEvalResults.aircraftStateList.size() << endl;
     bestOfEvalResults = aggregatedEvalResults;
-    
+
+    // Serialize a GP object with the computed fitness for renderer display
+    MyGP fitnessHolder(1);
+    fitnessHolder.setFitness(averageFitness);
+    std::vector<char> gpBuffer;
+    boost::iostreams::stream<boost::iostreams::back_insert_device<std::vector<char>>> gpOutStream(gpBuffer);
+    fitnessHolder.save(gpOutStream);
+    gpOutStream.flush();
+    bestOfEvalResults.gp = gpBuffer;
+
     *logger.info() << "Bytecode evaluation complete!" << endl;
     *logger.info() << "Computed fitness: " << averageFitness << endl;
     *logger.info() << "Original GP fitness: " << interpreter.getFitness() << endl;
@@ -1462,8 +1967,8 @@ int main(int argc, char** argv)
       request.SetBucket(ConfigManager::getExtraConfig().s3Bucket);
       request.SetKey(computedKeyName);
 
-      std::ostringstream oss;
-      boost::archive::text_oarchive oa(oss);
+      std::ostringstream oss(std::ios::binary);
+      boost::archive::binary_oarchive oa(oss);
       oa << bestOfEvalResults;
 
       std::shared_ptr<Aws::StringStream> ss = Aws::MakeShared<Aws::StringStream>("");
@@ -1494,11 +1999,28 @@ int main(int argc, char** argv)
 
     for (int gen = 1; gen <= ConfigManager::getGPConfig().NumberOfGenerations; gen++)
     {
-      // For this generation, build a smooth path goal
+      // RAMP_LANDSCAPE: Update current generation for variation scaling
+      int prevGen = gCurrentGeneration;
+      gCurrentGeneration = gen;
+
+      // Log when scale changes (at step boundaries)
+      if (gVariationRampStep > 0) {
+        int prevStep = prevGen / gVariationRampStep;
+        int currStep = gen / gVariationRampStep;
+        if (currStep != prevStep || gen == 1) {
+          double scale = computeVariationScale();
+          int totalSteps = gTotalGenerations / gVariationRampStep;
+          *logger.info() << "VariationScale: " << std::fixed << std::setprecision(2)
+                         << (scale * 100.0) << "% (step " << currStep << "/" << totalSteps << ")" << endl;
+        }
+      }
+
+      // For this generation, build a smooth path goal using pre-fetched gPathSeed
+      // (single PRNG architecture: consistent paths derived from GPSeed)
       generationPaths = generateSmoothPaths(ConfigManager::getExtraConfig().generatorMethod,
                                             ConfigManager::getExtraConfig().simNumPathsPerGen,
                                             SIM_PATH_BOUNDS, SIM_PATH_BOUNDS,
-                                            ConfigManager::getExtraConfig().randomPathSeedB);
+                                            gPathSeed);
       rebuildGenerationScenarios(generationPaths);
       warnIfScenarioMismatch();
 
@@ -1518,10 +2040,6 @@ int main(int argc, char** argv)
         delete oldPop;
       }
 
-      MyGP* best = pop->NthMyGP(pop->bestOfPopulation);
-      best->setScenarioIndex(computeScenarioIndexForIndividual(pop->bestOfPopulation));
-      best->evaluate();
-
       // reverse order names for s3...
       computedKeyName = startTime + "/gen" + std::to_string(10000 - gen) + ".dmp";
       pop->endOfEvaluation();
@@ -1532,81 +2050,427 @@ int main(int argc, char** argv)
       if (nanDetector > 0) {
         *logger.warn() << "NanDetector count: " << nanDetector << endl;
       }
-      pop->createGenerationReport(0, gen, fout, bout, *logger.info());
+      auto logStream = logger.info();
+      pop->createGenerationReport(0, gen, fout, bout, *logStream);
       logGenerationStats(gen);
 
-      // DETERMINISM TEST: Clone best to entire population and check for identical fitness
-      // Disabled for production runs - uncomment to test determinism
-      if (false && gen == 2) {
-        *logger.info() << "=== DETERMINISM TEST: Cloning best individual to entire population ===" << endl;
-        MyGP* bestGP = pop->NthMyGP(pop->bestOfPopulation);
-        gp_scalar bestFitness = bestGP->getFitness();
-        *logger.info() << "Best fitness before cloning: " << bestFitness << endl;
+      // ELITE TRACE CAPTURE: Save full simulation trace when elite is evaluated
+      // Compare traces when fitness worsens to identify root cause
 
-        // Clone best to everyone
-        for (int n = 0; n < pop->containerSize(); ++n) {
-          if (n != pop->bestOfPopulation) {
-            MyGP* clone = (MyGP*)&bestGP->duplicate();
-            pop->put(n, *clone);
+      // Helper to compute ULP (Units in Last Place) difference for float32
+      auto computeULP = [](float a, float b) -> int64_t {
+        if (std::isnan(a) || std::isnan(b)) return INT64_MAX;
+        if (a == b) return 0;
+
+        uint32_t bits_a, bits_b;
+        std::memcpy(&bits_a, &a, sizeof(float));
+        std::memcpy(&bits_b, &b, sizeof(float));
+
+        // Handle sign bit - convert to signed magnitude representation
+        int32_t signed_a = (bits_a & 0x80000000) ? (0x80000000 - (bits_a & 0x7FFFFFFF)) : bits_a;
+        int32_t signed_b = (bits_b & 0x80000000) ? (0x80000000 - (bits_b & 0x7FFFFFFF)) : bits_b;
+
+        return std::abs(static_cast<int64_t>(signed_a) - static_cast<int64_t>(signed_b));
+      };
+
+      // In-memory trace comparison function (only called when gEliteTraceEnabled)
+      auto compareTraces = [&](const EvalResults& trace1, const EvalResults& trace2,
+                               const std::string& label1, const std::string& label2) {
+        *logger.warn() << "=== IN-MEMORY TRACE COMPARISON ===" << endl;
+        *logger.warn() << "Trace 1: " << label1
+                      << " workerId=" << trace1.workerId
+                      << " pid=" << trace1.workerPid
+                      << " evalCounter=" << trace1.workerEvalCounter << endl;
+        *logger.warn() << "Trace 2: " << label2
+                      << " workerId=" << trace2.workerId
+                      << " pid=" << trace2.workerPid
+                      << " evalCounter=" << trace2.workerEvalCounter << endl;
+        *logger.warn() << endl;
+
+        // Helper for computing ULP distance between doubles (native physics precision)
+        auto computeULPDouble = [](double a, double b) -> int64_t {
+          if (a == b) return 0;
+          if (std::isnan(a) || std::isnan(b)) return INT64_MAX;
+
+          int64_t ia, ib;
+          memcpy(&ia, &a, sizeof(double));
+          memcpy(&ib, &b, sizeof(double));
+
+          // Handle sign bit
+          if (ia < 0) ia = INT64_MIN - ia;
+          if (ib < 0) ib = INT64_MIN - ib;
+
+          return std::abs(ia - ib);
+        };
+
+        // Helper for double vectors (3D)
+        auto ulpDouble3 = [&](const double* a, const double* b, int64_t out[3]) {
+          for (int i = 0; i < 3; ++i) {
+            out[i] = computeULPDouble(a[i], b[i]);
           }
+        };
+
+        // Require physicsTrace - no fallback to debugSamples
+        if (trace1.physicsTrace.empty() || trace2.physicsTrace.empty()) {
+          *logger.error() << "*** ERROR: Physics trace data missing! ***" << endl;
+          *logger.error() << "  Trace1 physicsTrace size: " << trace1.physicsTrace.size()
+                         << " (expected non-empty)" << endl;
+          *logger.error() << "  Trace2 physicsTrace size: " << trace2.physicsTrace.size()
+                         << " (expected non-empty)" << endl;
+          *logger.error() << "  This indicates crrcsim binary was not recompiled with physics trace code." << endl;
+          *logger.error() << "  Trace comparison ABORTED - cannot proceed without native precision data." << endl;
+          return;
         }
 
-        // Re-evaluate entire population
-        *logger.info() << "Re-evaluating cloned population..." << endl;
-        pop->evaluate();
+        *logger.warn() << "=== PHYSICS TRACE COMPARISON (native double precision) ===" << endl;
 
-        // Check for fitness variance
-        gp_scalar minFit = std::numeric_limits<gp_scalar>::infinity();
-        gp_scalar maxFit = -std::numeric_limits<gp_scalar>::infinity();
-        gp_scalar sumFit = 0.0f;
+          size_t pathCount = std::min(trace1.physicsTrace.size(), trace2.physicsTrace.size());
 
-        // Collect all fitness values for detailed analysis
-        std::vector<std::pair<int, gp_scalar>> fitnessValues;
-        for (int n = 0; n < pop->containerSize(); ++n) {
-          gp_scalar fit = pop->NthMyGP(n)->getFitness();
-          fitnessValues.push_back(std::make_pair(n, fit));
-          minFit = std::min(minFit, fit);
-          maxFit = std::max(maxFit, fit);
-          sumFit += fit;
-        }
-        gp_scalar avgFit = sumFit / static_cast<gp_scalar>(pop->containerSize());
-        gp_scalar variance = maxFit - minFit;
+          // First pass: scan for RNG divergence to find where non-determinism starts
+          int firstRngDivergenceStep = -1;
+          size_t firstRngDivergencePath = 0;
+          for (size_t pathIdx = 0; pathIdx < pathCount && firstRngDivergenceStep < 0; ++pathIdx) {
+            const auto& p1 = trace1.physicsTrace[pathIdx];
+            const auto& p2 = trace2.physicsTrace[pathIdx];
+            if (p1.empty() || p2.empty()) continue;
 
-        // Sort by fitness to see groupings
-        std::sort(fitnessValues.begin(), fitnessValues.end(),
-                  [](const std::pair<int, gp_scalar>& a, const std::pair<int, gp_scalar>& b) {
-                    return a.second < b.second;
-                  });
+            size_t stepCount = std::min(p1.size(), p2.size());
+            for (size_t stepIdx = 0; stepIdx < stepCount; ++stepIdx) {
+              const auto& s1 = p1[stepIdx];
+              const auto& s2 = p2[stepIdx];
+              bool rngDiff = (s1.rngState16 != s2.rngState16) || (s1.rngState32 != s2.rngState32);
+              if (rngDiff) {
+                firstRngDivergenceStep = static_cast<int>(stepIdx);
+                firstRngDivergencePath = pathIdx;
+                break;
+              }
+            }
+          }
 
-        *logger.info() << "Determinism test results:" << endl;
-        *logger.info() << "  Population size: " << pop->containerSize() << endl;
-        *logger.info() << "  Num threads: " << ConfigManager::getExtraConfig().evalThreads << endl;
-        *logger.info() << "  Wind scenarios: " << ConfigManager::getExtraConfig().windScenarioCount << endl;
-        *logger.info() << "  Wind seed base: " << ConfigManager::getExtraConfig().windSeedBase << endl;
-        *logger.info() << "  Min fitness: " << minFit << endl;
-        *logger.info() << "  Max fitness: " << maxFit << endl;
-        *logger.info() << "  Avg fitness: " << avgFit << endl;
-        *logger.info() << "  Variance (max-min): " << variance << endl;
-        *logger.info() << endl;
+          if (firstRngDivergenceStep >= 0) {
+            *logger.warn() << "*** RNG DIVERGENCE DETECTED ***" << endl;
+            *logger.warn() << "First RNG divergence at Path " << firstRngDivergencePath
+                          << ", Step " << firstRngDivergenceStep
+                          << " (t=" << (firstRngDivergenceStep * 3) << "ms physics step)" << endl;
+            *logger.warn() << endl;
 
-        // Print all fitness values (sorted)
-        *logger.info() << "All fitness values (sorted, showing [index] = fitness):" << endl;
-        for (size_t i = 0; i < fitnessValues.size(); ++i) {
-          *logger.info() << "  [" << std::setw(3) << fitnessValues[i].first << "] = "
-                        << std::fixed << std::setprecision(6) << fitnessValues[i].second << endl;
-        }
-        *logger.info() << std::defaultfloat << endl;
+            // Print context window: 3 steps before and 2 steps after the divergence
+            const auto& p1 = trace1.physicsTrace[firstRngDivergencePath];
+            const auto& p2 = trace2.physicsTrace[firstRngDivergencePath];
+            size_t stepCount = std::min(p1.size(), p2.size());
 
-        if (variance < 1e-6) {
-          *logger.info() << "SUCCESS: All individuals have identical fitness (deterministic)" << endl;
+            int contextBefore = 3;
+            int contextAfter = 2;
+            int startStep = std::max(0, firstRngDivergenceStep - contextBefore);
+            int endStep = std::min(static_cast<int>(stepCount) - 1, firstRngDivergenceStep + contextAfter);
+
+            *logger.warn() << "Context window (steps " << startStep << "-" << endStep << "):" << endl;
+            for (int stepIdx = startStep; stepIdx <= endStep; ++stepIdx) {
+              const auto& s1 = p1[stepIdx];
+              const auto& s2 = p2[stepIdx];
+              bool rngDiff = (s1.rngState16 != s2.rngState16) || (s1.rngState32 != s2.rngState32);
+
+              std::string marker = (stepIdx == firstRngDivergenceStep) ? " <<< FIRST DIVERGENCE" : "";
+              *logger.warn() << "  Step " << stepIdx << " (t=" << (stepIdx * 3) << "ms):" << marker << endl;
+              *logger.warn() << "    RNG state16: " << s1.rngState16 << " vs " << s2.rngState16;
+              if (rngDiff) *logger.warn() << " [DIFFER]";
+              *logger.warn() << endl;
+              *logger.warn() << "    RNG state32: " << s1.rngState32 << " vs " << s2.rngState32;
+              if (rngDiff) *logger.warn() << " [DIFFER]";
+              *logger.warn() << endl;
+
+              // Show gust values for context
+              *logger.warn() << "    Gust[xyz]: [" << s1.gustBody[0] << ", " << s1.gustBody[1] << ", " << s1.gustBody[2] << "]"
+                            << " vs [" << s2.gustBody[0] << ", " << s2.gustBody[1] << ", " << s2.gustBody[2] << "]" << endl;
+            }
+            *logger.warn() << endl;
+
+            // Now print full detail for the first divergence step only
+            const auto& s1 = p1[firstRngDivergenceStep];
+            const auto& s2 = p2[firstRngDivergenceStep];
+
+            *logger.warn() << "=== DETAILED DIVERGENCE REPORT (Step " << firstRngDivergenceStep << ") ===" << endl;
+          } else {
+            *logger.warn() << "No RNG divergence found in physics trace (all " << pathCount << " paths checked)" << endl;
+            *logger.warn() << endl;
+          }
+
+          // Detailed reporting for first divergence only
+          for (size_t pathIdx = 0; pathIdx < pathCount; ++pathIdx) {
+            const auto& p1 = trace1.physicsTrace[pathIdx];
+            const auto& p2 = trace2.physicsTrace[pathIdx];
+
+            if (p1.empty() || p2.empty()) continue;
+            size_t stepCount = std::min(p1.size(), p2.size());
+
+            for (size_t stepIdx = 0; stepIdx < stepCount; ++stepIdx) {
+              const auto& s1 = p1[stepIdx];
+              const auto& s2 = p2[stepIdx];
+
+              // Check for ANY divergence in key physics values
+              bool posDiff = (s1.pos[0] != s2.pos[0]) || (s1.pos[1] != s2.pos[1]) || (s1.pos[2] != s2.pos[2]);
+              bool velDiff = (s1.vel[0] != s2.vel[0]) || (s1.vel[1] != s2.vel[1]) || (s1.vel[2] != s2.vel[2]);
+              bool accDiff = (s1.acc[0] != s2.acc[0]) || (s1.acc[1] != s2.acc[1]) || (s1.acc[2] != s2.acc[2]);
+              bool quatDiff = (s1.quat[0] != s2.quat[0]) || (s1.quat[1] != s2.quat[1]) ||
+                             (s1.quat[2] != s2.quat[2]) || (s1.quat[3] != s2.quat[3]);
+              bool alphaDiff = (s1.alpha != s2.alpha);
+              bool betaDiff = (s1.beta != s2.beta);
+              bool CLDiff = (s1.CL != s2.CL);
+              bool CDDiff = (s1.CD != s2.CD);
+              bool cmdDiff = (s1.pitchCommand != s2.pitchCommand) ||
+                            (s1.rollCommand != s2.rollCommand) ||
+                            (s1.throttleCommand != s2.throttleCommand);
+              bool gustDiff = false;
+              for (int i = 0; i < 6; ++i) {
+                if (s1.gustBody[i] != s2.gustBody[i]) {
+                  gustDiff = true;
+                  break;
+                }
+              }
+              bool rngDiff = (s1.rngState16 != s2.rngState16) || (s1.rngState32 != s2.rngState32);
+
+              if (posDiff || velDiff || accDiff || quatDiff || alphaDiff || betaDiff ||
+                  CLDiff || CDDiff || cmdDiff || gustDiff || rngDiff) {
+
+                *logger.warn() << "*** PHYSICS TRACE DIVERGENCE ***" << endl;
+                *logger.warn() << "  Path " << pathIdx << ", Step " << stepIdx
+                              << " (step=" << s1.step << " vs " << s2.step << ")" << endl;
+                *logger.warn() << "  Time: " << s1.simTimeMsec << " vs " << s2.simTimeMsec << " ms" << endl;
+                *logger.warn() << "  Worker1: id=" << s1.workerId << " pid=" << s1.workerPid
+                              << " eval=" << s1.evalCounter << endl;
+                *logger.warn() << "  Worker2: id=" << s2.workerId << " pid=" << s2.workerPid
+                              << " eval=" << s2.evalCounter << endl;
+
+                // Compute ULP differences for all key values
+                int64_t posULP[3], velULP[3], accULP[3], quatULP[4];
+                ulpDouble3(s1.pos, s2.pos, posULP);
+                ulpDouble3(s1.vel, s2.vel, velULP);
+                ulpDouble3(s1.acc, s2.acc, accULP);
+                for (int i = 0; i < 4; ++i) quatULP[i] = computeULPDouble(s1.quat[i], s2.quat[i]);
+
+                int64_t alphaULP = computeULPDouble(s1.alpha, s2.alpha);
+                int64_t betaULP = computeULPDouble(s1.beta, s2.beta);
+                int64_t vRelWindULP = computeULPDouble(s1.vRelWind, s2.vRelWind);
+                int64_t CL_ULP = computeULPDouble(s1.CL, s2.CL);
+                int64_t CD_ULP = computeULPDouble(s1.CD, s2.CD);
+
+                *logger.warn() << "  Position: [" << s1.pos[0] << ", " << s1.pos[1] << ", " << s1.pos[2] << "]"
+                              << " vs [" << s2.pos[0] << ", " << s2.pos[1] << ", " << s2.pos[2] << "]" << endl;
+                *logger.warn() << "    ULP: [" << posULP[0] << ", " << posULP[1] << ", " << posULP[2] << "]" << endl;
+
+                *logger.warn() << "  Velocity: [" << s1.vel[0] << ", " << s1.vel[1] << ", " << s1.vel[2] << "]"
+                              << " vs [" << s2.vel[0] << ", " << s2.vel[1] << ", " << s2.vel[2] << "]" << endl;
+                *logger.warn() << "    ULP: [" << velULP[0] << ", " << velULP[1] << ", " << velULP[2] << "]" << endl;
+
+                *logger.warn() << "  Acceleration: [" << s1.acc[0] << ", " << s1.acc[1] << ", " << s1.acc[2] << "]"
+                              << " vs [" << s2.acc[0] << ", " << s2.acc[1] << ", " << s2.acc[2] << "]" << endl;
+                *logger.warn() << "    ULP: [" << accULP[0] << ", " << accULP[1] << ", " << accULP[2] << "]" << endl;
+
+                *logger.warn() << "  Quaternion: [" << s1.quat[0] << ", " << s1.quat[1] << ", "
+                              << s1.quat[2] << ", " << s1.quat[3] << "]" << endl;
+                *logger.warn() << "         vs: [" << s2.quat[0] << ", " << s2.quat[1] << ", "
+                              << s2.quat[2] << ", " << s2.quat[3] << "]" << endl;
+                *logger.warn() << "    ULP: [" << quatULP[0] << ", " << quatULP[1] << ", "
+                              << quatULP[2] << ", " << quatULP[3] << "]" << endl;
+
+                *logger.warn() << "  Alpha: " << s1.alpha << " vs " << s2.alpha
+                              << " (diff=" << std::scientific << (s1.alpha - s2.alpha)
+                              << std::defaultfloat << ", " << alphaULP << " ULPs)" << endl;
+                *logger.warn() << "  Beta: " << s1.beta << " vs " << s2.beta
+                              << " (diff=" << std::scientific << (s1.beta - s2.beta)
+                              << std::defaultfloat << ", " << betaULP << " ULPs)" << endl;
+                *logger.warn() << "  VrelWind: " << s1.vRelWind << " vs " << s2.vRelWind
+                              << " (diff=" << std::scientific << (s1.vRelWind - s2.vRelWind)
+                              << std::defaultfloat << ", " << vRelWindULP << " ULPs)" << endl;
+
+                *logger.warn() << "  CL: " << s1.CL << " vs " << s2.CL
+                              << " (diff=" << std::scientific << (s1.CL - s2.CL)
+                              << std::defaultfloat << ", " << CL_ULP << " ULPs)" << endl;
+                *logger.warn() << "  CD: " << s1.CD << " vs " << s2.CD
+                              << " (diff=" << std::scientific << (s1.CD - s2.CD)
+                              << std::defaultfloat << ", " << CD_ULP << " ULPs)" << endl;
+
+                *logger.warn() << "  CL_wing: " << s1.CL_wing << " (left=" << s1.CL_left
+                              << " cent=" << s1.CL_cent << " right=" << s1.CL_right << ")" << endl;
+                *logger.warn() << "      vs: " << s2.CL_wing << " (left=" << s2.CL_left
+                              << " cent=" << s2.CL_cent << " right=" << s2.CL_right << ")" << endl;
+
+                *logger.warn() << "  Moments (Cl,Cm,Cn): [" << s1.Cl << ", " << s1.Cm << ", " << s1.Cn << "]"
+                              << " vs [" << s2.Cl << ", " << s2.Cm << ", " << s2.Cn << "]" << endl;
+
+                *logger.warn() << "  QS (dynamic pressure × area): " << s1.QS << " vs " << s2.QS << endl;
+
+                *logger.warn() << "  Trig values: cos(α)=" << s1.cosAlpha << " vs " << s2.cosAlpha
+                              << ", sin(α)=" << s1.sinAlpha << " vs " << s2.sinAlpha
+                              << ", cos(β)=" << s1.cosBeta << " vs " << s2.cosBeta << endl;
+
+                *logger.warn() << "  Commands: pitch=" << s1.pitchCommand << " vs " << s2.pitchCommand
+                              << ", roll=" << s1.rollCommand << " vs " << s2.rollCommand
+                              << ", throttle=" << s1.throttleCommand << " vs " << s2.throttleCommand << endl;
+
+                *logger.warn() << "  Sim inputs: elev=" << s1.elevator << " vs " << s2.elevator
+                              << ", ail=" << s1.aileron << " vs " << s2.aileron
+                              << ", rud=" << s1.rudder << " vs " << s2.rudder << endl;
+
+                *logger.warn() << "  RNG: state16=" << s1.rngState16 << " vs " << s2.rngState16
+                              << ", state32=" << s1.rngState32 << " vs " << s2.rngState32 << endl;
+
+                // Gust data (6 elements: linear velocity [0-2] + rotational rates [3-5])
+                int64_t gustULP[6];
+                for (int i = 0; i < 6; ++i) {
+                  gustULP[i] = computeULPDouble(s1.gustBody[i], s2.gustBody[i]);
+                }
+                *logger.warn() << "  Gust Linear [xyz]: [" << s1.gustBody[0] << ", " << s1.gustBody[1] << ", " << s1.gustBody[2] << "]"
+                              << " vs [" << s2.gustBody[0] << ", " << s2.gustBody[1] << ", " << s2.gustBody[2] << "]" << endl;
+                *logger.warn() << "    ULP: [" << gustULP[0] << ", " << gustULP[1] << ", " << gustULP[2] << "]" << endl;
+                *logger.warn() << "  Gust Rotational [pqr]: [" << s1.gustBody[3] << ", " << s1.gustBody[4] << ", " << s1.gustBody[5] << "]"
+                              << " vs [" << s2.gustBody[3] << ", " << s2.gustBody[4] << ", " << s2.gustBody[5] << "]" << endl;
+                *logger.warn() << "    ULP: [" << gustULP[3] << ", " << gustULP[4] << ", " << gustULP[5] << "]" << endl;
+
+                *logger.warn() << endl;
+
+                // Report first divergence and stop
+                return;
+              }
+            }
+          }
+
+          *logger.warn() << "No physics trace divergence found - traces are bitwise identical!" << endl;
+          *logger.warn() << endl;
+
+          // MACRO TRAJECTORY COMPARISON (100ms GP evaluation steps)
+          *logger.warn() << "=== MACRO TRAJECTORY COMPARISON (100ms GP evaluation steps) ===" << endl;
+          size_t macroPathCount = std::min(trace1.aircraftStateList.size(), trace2.aircraftStateList.size());
+          for (size_t pathIdx = 0; pathIdx < macroPathCount; ++pathIdx) {
+            const auto& traj1 = trace1.aircraftStateList[pathIdx];
+            const auto& traj2 = trace2.aircraftStateList[pathIdx];
+            size_t stepCount = std::min(traj1.size(), traj2.size());
+
+            *logger.warn() << "Path " << pathIdx << ": " << stepCount << " macro steps (100ms intervals)" << endl;
+
+            for (size_t stepIdx = 0; stepIdx < stepCount; ++stepIdx) {
+              const auto& a1 = traj1[stepIdx];
+              const auto& a2 = traj2[stepIdx];
+
+              gp_vec3 pos1 = a1.getPosition();
+              gp_vec3 pos2 = a2.getPosition();
+              gp_vec3 vel1 = a1.getVelocity();
+              gp_vec3 vel2 = a2.getVelocity();
+              gp_quat q1 = a1.getOrientation();
+              gp_quat q2 = a2.getOrientation();
+
+              bool posDiff = (pos1.x() != pos2.x()) || (pos1.y() != pos2.y()) || (pos1.z() != pos2.z());
+              bool velDiff = (vel1.x() != vel2.x()) || (vel1.y() != vel2.y()) || (vel1.z() != vel2.z());
+              bool quatDiff = (q1.x() != q2.x()) || (q1.y() != q2.y()) || (q1.z() != q2.z()) || (q1.w() != q2.w());
+
+              if (posDiff || velDiff || quatDiff) {
+                *logger.warn() << "  DIVERGENCE at step " << stepIdx << " (t=" << (stepIdx * 100) << "ms):" << endl;
+                if (posDiff) {
+                  *logger.warn() << "    Position: [" << pos1.x() << "," << pos1.y() << "," << pos1.z() << "]"
+                                << " vs [" << pos2.x() << "," << pos2.y() << "," << pos2.z() << "]" << endl;
+                }
+                if (velDiff) {
+                  *logger.warn() << "    Velocity: [" << vel1.x() << "," << vel1.y() << "," << vel1.z() << "]"
+                                << " vs [" << vel2.x() << "," << vel2.y() << "," << vel2.z() << "]" << endl;
+                }
+                if (quatDiff) {
+                  *logger.warn() << "    Quat: [" << q1.w() << "," << q1.x() << "," << q1.y() << "," << q1.z() << "]"
+                                << " vs [" << q2.w() << "," << q2.x() << "," << q2.y() << "," << q2.z() << "]" << endl;
+                }
+                // Only show first divergence per path to avoid log spam
+                break;
+              }
+            }
+          }
+          *logger.warn() << endl;
+      };
+
+      // Elite tracking for non-demetic mode
+      // Single ELITE_STORE log per generation with outcome:
+      //   INITIAL - first generation
+      //   REPLACED - new elite (different gpHash)
+      //   SAME - same elite, same fitness (no-op)
+      //   DIVERGED - same elite, different fitness (non-determinism)
+      MyGP* currentElite = pop->NthMyGP(pop->bestOfPopulation);
+      double currentFitness = currentElite->getFitness();  // Use double to match library's stdFitness
+      int currentLength = currentElite->length();
+      int currentDepth = currentElite->depth();
+
+      // Generate Lisp-form string of elite GP for hash
+      std::ostringstream eliteGpStringStream;
+      currentElite->printOn(eliteGpStringStream);
+      std::string currentEliteGpString = eliteGpStringStream.str();
+      uint64_t currentEliteGpHash = hashString(currentEliteGpString);
+
+      // Determine outcome
+      bool isFirstGen = (gLastEliteGpHash == 0);
+      bool sameStructure = !isFirstGen && (currentEliteGpHash == gLastEliteGpHash);
+      const char* outcome;
+
+      if (isFirstGen) {
+        outcome = "INITIAL";
+      } else if (!sameStructure) {
+        outcome = "REPLACED";
+      } else {
+        // Same structure - check if fitness matches
+        gEliteReevalCount++;
+        if (!bitwiseEqual(currentFitness, gLastEliteFitness)) {
+          gEliteDivergenceCount++;
+          outcome = "DIVERGED";
         } else {
-          *logger.warn() << "FAILURE: Fitness varies across identical individuals (non-deterministic!)" << endl;
-          *logger.warn() << "Possible causes: PRNG seeding, threading race conditions, uninitialized vars" << endl;
+          outcome = "SAME";
         }
-
-        *logger.info() << "=== Exiting after determinism test ===" << endl;
-        break;  // Exit after test
       }
+
+      // Single log line per generation (warn level for divergence, info otherwise)
+      // Compact format: gpHash=old->new fitness=old->new len=old->new depth=old->new
+      if (strcmp(outcome, "DIVERGED") == 0) {
+        double delta = currentFitness - gLastEliteFitness;
+        *logger.warn() << "ELITE_STORE: gen=" << gen
+                       << " gpHash=0x" << std::hex << gLastEliteGpHash << "->0x" << currentEliteGpHash << std::dec
+                       << " fitness=" << std::fixed << std::setprecision(6) << gLastEliteFitness << "->" << currentFitness
+                       << " len=" << gLastEliteLength << "->" << currentLength
+                       << " depth=" << gLastEliteDepth << "->" << currentDepth
+                       << " delta=" << std::scientific << delta << std::defaultfloat
+                       << " " << outcome << endl;
+        if (gEliteTraceEnabled) {
+          // Compare physics traces to find divergence point
+          compareTraces(gLastEliteEvalResults, gPendingEliteEvalResults,
+                       "gen" + std::to_string(gen-1) + " elite",
+                       "gen" + std::to_string(gen) + " reeval");
+        }
+      } else {
+        *logger.info() << "ELITE_STORE: gen=" << gen
+                       << " gpHash=0x" << std::hex << gLastEliteGpHash << "->0x" << currentEliteGpHash << std::dec
+                       << " fitness=" << std::fixed << std::setprecision(6) << gLastEliteFitness << "->" << currentFitness
+                       << " len=" << gLastEliteLength << "->" << currentLength
+                       << " depth=" << gLastEliteDepth << "->" << currentDepth
+                       << " " << outcome << endl;
+      }
+
+      // Update baseline
+      gLastEliteFitness = currentFitness;
+      gLastEliteGpHash = currentEliteGpHash;
+      gLastEliteLength = currentLength;
+      gLastEliteDepth = currentDepth;
+      gLastEliteNumPaths = bestOfEvalResults.pathList.size();
+      gLastEliteScenarioHash = computeScenarioHash(bestOfEvalResults.scenarioList);
+      if (gEliteTraceEnabled) {
+        // Move pending elite trace to gLastEliteEvalResults for next gen comparison
+        // (gPendingEliteEvalResults is populated by elite reeval callbacks during the gen)
+        if (gPendingEliteEvalResults.physicsTrace.empty()) {
+          *logger.warn() << "Elite reeval returned no physics trace - divergence analysis unavailable" << endl;
+          *logger.warn() << "  (crrcsim may need rebuild, or isEliteReeval flag not set properly)" << endl;
+        }
+        gLastEliteEvalResults = std::move(gPendingEliteEvalResults);
+        // Clear pending for next generation
+        gPendingEliteEvalResults = EvalResults();
+      }
+
+      // Per-generation counter summary (useful if run is interrupted)
+      *logger.info() << "ELITE_STATUS: gen=" << gen
+                     << " reevals=" << gEliteReevalCount
+                     << " divergences=" << gEliteDivergenceCount << endl;
     }
 
     // TODO send exit message to workers
@@ -1616,6 +2480,24 @@ int main(int argc, char** argv)
     // pop->NthMyGP(pop->bestOfPopulation)->save(bestGP);
 
     *logger.info() << "GP complete!" << endl;
+
+    // Print elite tracking summary
+    *logger.info() << "Elite tracking summary:" << endl;
+    *logger.info() << "  Elite re-evals: " << gEliteReevalCount << endl;
+    *logger.info() << "  Divergences: " << gEliteDivergenceCount << endl;
+
+    if (gEliteDivergenceCount > 0) {
+      *logger.warn() << "WARNING: " << gEliteDivergenceCount << " divergences detected - "
+                     << "non-determinism in simulation!" << endl;
+    }
+
+    // Clean up final population to prevent memory leak
+    delete pop;
+    pop = nullptr;
+
+    // Clean up accumulated evaluation results to prevent memory leak
+    bestOfEvalResults.clear();
+    aggregatedEvalResults.clear();
   }
 
   uint64_t totalRuns = globalSimRunCounter.load(std::memory_order_relaxed);

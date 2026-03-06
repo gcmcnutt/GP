@@ -33,7 +33,11 @@ LogBuf::~LogBuf() {
 
 LogStream::LogStream(boost::log::sources::severity_logger<boost::log::trivial::severity_level>& logger,
   boost::log::trivial::severity_level level)
-  : std::ostream(&m_buf), m_buf(logger, level) {}
+  : std::ostream(&m_buf), m_buf(logger, level) {
+  // Set default formatting for all log streams
+  this->setf(std::ios::fixed, std::ios::floatfield);
+  this->precision(6);
+}
 
 Logger::Logger() {}
 
