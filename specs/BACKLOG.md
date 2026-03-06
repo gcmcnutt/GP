@@ -1,0 +1,212 @@
+# Project Backlog
+
+**Location**: `~/GP/specs/BACKLOG.md`
+**Source**: Migrated from `~/GP/autoc/TODO`
+**Last Updated**: 2026-03-06
+
+## Legend
+
+- `[ACTIVE]` - Currently being worked on
+- `[NEXT]` - High priority, ready to start
+- `[BLOCKED]` - Waiting on dependencies
+- `[DEFERRED]` - Lower priority, will revisit
+- `[ABANDONED]` - Investigated and rejected
+- `[DONE]` - Completed (reference only)
+
+---
+
+## Infrastructure & Build
+
+### [DEFERRED] Migrate Away from Boost Serialization
+- Boost serialization is NOT portable across different Boost versions
+- Current issue: Boost 1.74 (x86) cannot read archives from Boost 1.83 (ARM64)
+- Archive version in header changes between Boost releases (v18 vs v19)
+- This breaks cross-architecture artifact sharing via S3
+- Consider alternatives: cereal, JSON, FlatBuffers, custom text format
+- Migration required for: EvalData, EvalResults, Path, AircraftState, ScenarioMetadata
+- **Reference**: `autoc/specs/REPLACE_BOOST.md`
+
+### [DEFERRED] Make pathgen.h Portable for Embedded
+- Current: Separate `embedded_pathgen_selector.h` duplicates AeroStandard logic
+- Issue: Code duplication, maintenance burden, version drift risk
+- Goal: Single pathgen.h that works on both desktop and embedded
+- Method: Conditional compilation for std::vector vs fixed arrays
+- Defer: Wait until path system stabilizes
+
+### [NEXT] Refactor Opcode Enum
+- Need to refactor the opcode enum to only have one definition
+- Stop using numeric opcodes in the bytecode2cpp generator
+
+### [DEFERRED] GP Library Fitness Serialization Precision
+- Renderer shows fitness as 164073.000 instead of 164073.136503
+- Root cause: GP::save() in `/home/gmcnutt/GP/src/gp.cc:148-157` uses default ostream precision
+- Fix: Add `os << std::setprecision(17) << stdFitness` (17 = max_digits10 for double)
+
+---
+
+## Evolution & GP Engine
+
+### [NEXT] Demetic Mode Elite Preservation
+- Current: Best fitness jumps wildly (135→191→192→191→174→180→173→177)
+- Root cause: Elite's aggregated fitness lost when re-evaluated on single scenario
+- Impact: Cannot track evolution progress, GP search is ineffective
+- Need: Preserve elite's full aggregated fitness across generations
+- Approach: Fix attempted solution in autoc.cc lines 623-661, 665-744
+  - Ensure elite is NOT re-evaluated (skip in evaluate() call)
+  - OR restore aggregated fitness immediately after evaluation
+  - Add logging to verify elite fitness is truly preserved
+  - Test that best fitness is monotonically improving
+
+### [DEFERRED] Co-evolve Random Paths
+- Consider co-evolving the random paths alongside the GP population
+
+### [DEFERRED] LLM Fitness Function Evolution
+- Progressively raise the bar on complexity - staged evolution
+- Could enable co-evolution of fitness criteria
+
+### [DEFERRED] Simplify Eval Tree Interface
+- Try to simplify the eval tree by passing a class reference instead of N args
+
+### [DEFERRED] Checkpoint/Resume Evolution
+- Checkpoint/resume a run - including for LLM enhancement over time
+
+---
+
+## Robustness & Variations
+
+### [NEXT] Variations Project - Zero-shot Transfer
+- Goal: Get closer to zero-shot transfer from simulation to real aircraft
+- Variations to implement:
+  - Power, drag, service response times
+  - ✅ [DONE] Varying speed rabbit (see `autoc/specs/ZZZ-VARIABLE_RABBIT.md`)
+  - Craft variations (for robustness to airframe differences):
+    - CG position variation
+    - Wing loading variation
+    - Control surface response times/rates
+    - Drag coefficient variation
+    - Power/thrust variation
+- **Reference**: `autoc/specs/ZZZ-VARIATIONS1.md`
+
+---
+
+## Controller Architecture
+
+### [NEXT] Layered Controller Architecture
+- **Reference**: `autoc/specs/LAYERED_CONTROLLER.md` for full design document
+
+Current tracking layer (autoc-minimal.ini) follows the rabbit but has no awareness of:
+- Am I about to crash?
+- Am I going out of bounds?
+- Am I in recovery vs tracking mode?
+
+**SAFETY LAYER** (next priority):
+- Hardcoded constraints that override GP outputs when danger detected
+- OOB detection: if approaching geofence, break off and head toward origin
+- Altitude protection: if too low, force climb
+- Stall prevention: if too slow, force dive + throttle
+- Re-engagement: when near origin/safe, resume tracking
+- Implementation: post-GP safety clamping in evaluateOutput() or similar
+
+**Testing**:
+- Create intentional OOB paths to verify safety layer behavior
+- Paths that go toward boundaries, into the ground, etc.
+- Verify break-off and re-engagement logic works
+
+**STRATEGY LAYER** (future):
+- Phase detection (intercept → track → recover)
+- Energy management
+- Path preview / anticipation
+
+### [DEFERRED] Error Cone for Future Path Points
+- The further ahead we look from rabbit's current position, the less accurate the target point becomes
+- Options evaluated:
+  1. Weight by distance - MUL(GETDPHI(n), DIV(1, n))
+  2. New operator GETDPHI_WEIGHTED(n)
+  3. Keep it simple - For pure tracking layer, uncertainty may help
+- Current evolved programs already show adaptive lookahead via nested GETDPHI
+
+---
+
+## Embedded/Hardware Integration
+
+### [NEXT] Export RC Commands to Xiao Log
+- Currently: GP Output (rc=[...]) only logged during autoc=Y test spans
+- Need: Log RC commands throughout entire flight for full playback visualization
+- Location: xiao-gp/src/msplink.cpp - add logging in non-autoc code path
+- Benefit: Control HUD in renderer 'a' mode will show stick/throttle for full flight
+
+### [DEFERRED] GP to Autoc in INAV via Controls
+- Selector mechanism
+- Activate mechanism
+
+---
+
+## Visualization & Renderer
+
+### [DEFERRED] Blackbox Rendering Improvements
+- Select a path and a blackbox log for comparisons
+- User interface to allow selecting path, log file, etc
+- Additional attributes on renderer playback (e.g., loss of GPS signal)
+- Blackbox logs are 1/32 Hz which is still a lot of data, consider subselect (5 Hz?)
+- FPV mode for playback
+
+### [DEFERRED] CRRCSim Display Dependency
+- CRRCSim is dependent on a valid DISPLAY even when in headless mode
+
+### [DEFERRED] Clean Shutdown Method
+- Now that a crrcsim batch runs long, perhaps have polling loop for keepalive
+- When autoc exits, crrcsim should exit cleanly
+
+---
+
+## Code Cleanup
+
+### [DEFERRED] Memory Leak Investigation
+- Walk various classes for copy by reference, copy by pointer, copy by value
+- Small memory leak exists in autoc
+
+### [DEFERRED] Buffer Best Run
+- Buffer the best run over a population vs re-running it
+- Save the final eval steps
+
+### [DEFERRED] Interactive Mode Fallback
+- Cannot interactively flip to autoc input as it attempts to use the callback port
+- Soften this dependency - if port not set, fall back to Mouse
+
+### [DEFERRED] CRRCSim Robots for Lead Plane
+- Figure out how to use crrcsim robots to form lead plane
+
+### [DEFERRED] Check for Dangling Source Files
+- Check for dangling or vestigial source files in the codebase
+
+---
+
+## Abandoned / Not Pursuing
+
+### [ABANDONED] BLE Download Pipelining (PRN-Style)
+- Baseline: 1.77 KB/s with simple request-response (reliable)
+- Attempted: Nordic DFU PRN-style pipelining (browser-driven)
+- Result: 2.52 KB/s on 17.9KB file (1.42x), but 171KB wedges frequently
+- Root cause: ArduinoBLE written() doesn't queue - rapid writeValueWithoutResponse calls overwrite each other
+- Complexity: state tracking (outstanding/pending/drain/crc flags) has race conditions
+- Conclusion: 1.42x gain doesn't justify complexity/reliability issues
+- **Reference**: `autoc/specs/ZZZ-FLASH_SPEEDUP.md` "Phase 3: PRN-Style Pipelining"
+- Future options: compression (Heatshrink), larger MTU, different BLE stack
+
+---
+
+## Completed (Reference)
+
+### [DONE] Variable Speed Rabbit
+- **Reference**: `autoc/specs/ZZZ-VARIABLE_RABBIT.md`
+
+---
+
+## Related Documentation
+
+| Location | Description |
+|----------|-------------|
+| `~/GP/CLAUDE.md` | Main project guidance for Claude Code |
+| `~/GP/autoc/specs/` | Design specs (ZZZ- prefix = archived/done) |
+| `~/GP/specs/` | Feature specs (speckit workflow) |
+| `~/GP/.specify/` | Speckit templates and configuration |

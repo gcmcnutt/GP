@@ -8,6 +8,16 @@ GPC++ is a C++ genetic programming kernel class library originally developed by 
 
 This repository contains both the core GP library and various example applications, with `autoc/` being a modern aircraft control evolution system that includes a sophisticated bytecode interpreter system.
 
+## Documentation Structure
+
+| Location | Description |
+|----------|-------------|
+| `CLAUDE.md` | This file - main project guidance |
+| `specs/BACKLOG.md` | Project backlog and TODO items |
+| `autoc/specs/` | Design specifications (ZZZ- prefix = archived/done) |
+| `specs/` | Feature specs (speckit workflow) |
+| `.specify/memory/constitution.md` | Project constitution and principles |
+
 ## Build System
 
 The project uses a hybrid build system:
@@ -223,8 +233,20 @@ The PROGN bytecode instruction preserves GP tree semantics for operations with s
 - `PI, ZERO, ONE, TWO` - Mathematical constants
 - `PROGN` - Sequential execution operator (returns second argument)
 
+**Temporal State** (derivative-style control):
+- `GETDPHI_PREV(n)` - Previous dPhi error at history index n
+- `GETDTHETA_PREV(n)` - Previous dTheta error at history index n
+- `GETDPHI_RATE` - Rate of change of dPhi (rad/s)
+- `GETDTHETA_RATE` - Rate of change of dTheta (rad/s)
+
 **Platform Compatibility:**
 All mathematical functions use platform-specific macros (e.g., `CLAMP_DEF`) to support both full C++ builds and Arduino/embedded platforms.
+
+**Portable Evaluator** (`gp_evaluator_portable.cc/h`):
+- Single codebase for desktop and embedded evaluation
+- LUT-based trigonometry (512-element SIN table with interpolation)
+- `GP_BUILD` define for full desktop builds
+- `GP_TEST` define exposes internal functions for testing
 
 ## Coordinate Systems
 
@@ -260,3 +282,19 @@ All mathematical functions use platform-specific macros (e.g., `CLAMP_DEF`) to s
 All source files depend on the main headers. The dependency chain flows from the core library outward to the examples, which link against `libgp.a`. The autoc project has its own dependency tree and uses the core library as a foundation for aircraft control evolution.
 
 The bytecode system creates an additional dependency path: GP trees (S3) → gpextractor → bytecode files → evaluation mode, enabling deployment independent of the full GP system.
+
+## Key Design Specs
+
+| Spec | Description |
+|------|-------------|
+| `autoc/specs/COORDINATE_CONVENTIONS.md` | NED frame, quaternion conventions, Euler extraction |
+| `autoc/specs/LAYERED_CONTROLLER.md` | Safety/strategy layer architecture |
+| `autoc/specs/FASTMATH.md` | LUT-based trig, platform-portable math |
+| `autoc/specs/ZZZ-TEMPORAL_STATE.md` | GETDPHI_PREV/RATE nodes (completed) |
+
+## Active Technologies
+- C++17 (CMake 3.10+, g++) + Eigen3 (quaternions, vectors), GoogleTest 1.14.0 (testing) (001-gp-eval-tests)
+- N/A (in-memory test state only) (001-gp-eval-tests)
+
+## Recent Changes
+- 001-gp-eval-tests: Added C++17 (CMake 3.10+, g++) + Eigen3 (quaternions, vectors), GoogleTest 1.14.0 (testing)
