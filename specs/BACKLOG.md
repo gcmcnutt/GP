@@ -2,7 +2,7 @@
 
 **Location**: `~/GP/specs/BACKLOG.md`
 **Source**: Migrated from `~/GP/autoc/TODO`
-**Last Updated**: 2026-03-06
+**Last Updated**: 2026-03-06 (added Path Interpolation)
 
 ## Legend
 
@@ -116,6 +116,26 @@ Current tracking layer (autoc-minimal.ini) follows the rabbit but has no awarene
 - Phase detection (intercept → track → recover)
 - Energy management
 - Path preview / anticipation
+
+### [NEXT] Path Interpolation for Smooth Target Tracking
+- **Problem**: Current `getPathIndex()` snaps to discrete waypoints, causing issues:
+  - **Timing jitter overshoot**: Waypoint at t=98ms is skipped when looking for t=100ms
+    because `98 < 100`, jumping to t=200ms instead (discovered in gp_evaluator_tests)
+  - **Discontinuous sensors**: GETDPHI/GETDTHETA jump discretely between waypoints
+  - **Real-time sensitivity**: On xiao-gp, eval loop jitter causes erratic sensor values
+- **Solution**: Interpolate target position based on exact time instead of snapping to waypoints
+  - Binary search for bracketing waypoints around goal time
+  - Linear interpolation between them: `pos = lerp(p0, p1, frac)`
+  - Eval at t=99ms vs t=101ms gives nearly identical positions (smooth, not discrete jump)
+- **Implementation**:
+  - Add `getInterpolatedTargetPosition(pathProvider, currentTimeMsec, offsetSteps)`
+  - Update `executeGetDPhi/DTheta/DTarget` to use interpolated positions
+  - Remove discrete `getPathIndex()` function
+- **Benefits**:
+  - Robust to timing jitter (no more overshoot problem)
+  - GP trains on smooth continuous tracking matching real-world behavior
+  - Works correctly with variable rabbit speed
+- **Files**: `gp_evaluator_portable.cc`, `aircraft_state.h`, `tests/gp_evaluator_tests.cc`
 
 ### [DEFERRED] Error Cone for Future Path Points
 - The further ahead we look from rabbit's current position, the less accurate the target point becomes

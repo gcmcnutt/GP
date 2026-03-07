@@ -453,3 +453,18 @@ gp_scalar evaluateBytecodePortable(const struct GPBytecode* program, int program
     
     return applyRangeLimit(stack[0]);
 }
+
+// Expose LUT functions for testing via wrapper functions
+#ifdef GP_TEST
+gp_scalar testFastSin(gp_scalar angle) {
+    return fastSin(angle);
+}
+
+gp_scalar testFastCos(gp_scalar angle) {
+    return fastCos(angle);
+}
+
+gp_scalar testFastAtan2(gp_scalar y, gp_scalar x) {
+    return fastAtan2(y, x);
+}
+#endif

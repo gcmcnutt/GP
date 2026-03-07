@@ -90,9 +90,9 @@ These build instructions MUST always be followed.
 | CRRCSim | CMake + Make | `~/crsim/crrcsim-0.9.13` |
 | xiao-gp | PlatformIO | `~/xiao-gp` |
 
-### From-Scratch / CMakeLists.txt Changes
+### From-Scratch Builds
 
-When building from scratch OR when `CMakeLists.txt` changes, use the rebuild scripts:
+When building from scratch (new clone, corrupted build dir), use the rebuild scripts:
 
 **GP/AutoC**:
 ```bash
@@ -102,6 +102,16 @@ cd ~/GP/autoc && bash rebuild.sh
 # Perf mode (optimized -O3, for long-running large tests)
 cd ~/GP/autoc && bash rebuild-perf.sh
 ```
+
+### CMakeLists.txt Changes
+
+When CMakeLists.txt changes but build dir is intact, reconfigure without clean:
+
+```bash
+cd ~/GP/build && cmake -DCMAKE_BUILD_TYPE=Debug ../autoc && make
+```
+
+Only use `rebuild.sh` if you need a full clean rebuild (dependency issues, stale objects).
 
 **CRRCSim**:
 ```bash

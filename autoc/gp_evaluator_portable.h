@@ -67,8 +67,15 @@ inline gp_scalar applyRangeLimit(gp_scalar value) {
 }
 
 // Stack-based bytecode evaluation using portable operators
-gp_scalar evaluateBytecodePortable(const GPBytecode* program, int program_size, 
-                               PathProvider& pathProvider, AircraftState& aircraftState, 
+gp_scalar evaluateBytecodePortable(const GPBytecode* program, int program_size,
+                               PathProvider& pathProvider, AircraftState& aircraftState,
                                gp_scalar contextArg = 0.0f);
+
+// Expose LUT functions for bit-accurate testing
+#ifdef GP_TEST
+gp_scalar testFastSin(gp_scalar angle);
+gp_scalar testFastCos(gp_scalar angle);
+gp_scalar testFastAtan2(gp_scalar y, gp_scalar x);
+#endif
 
 #endif

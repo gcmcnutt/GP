@@ -105,5 +105,6 @@ if(ENABLE_AUTOC_TESTS)
   target_link_libraries(autoc_tests GTest::gtest GTest::gtest_main Eigen3::Eigen)
   enable_testing()
   add_test(NAME autoc_tests COMMAND autoc_tests)
-  add_custom_target(run_autoc_tests ALL DEPENDS autoc_tests COMMAND autoc_tests)
+  # --gtest_brief=1 only prints failures, not every test run
+  add_custom_target(run_autoc_tests ALL DEPENDS autoc_tests COMMAND autoc_tests --gtest_brief=1)
 endif()
