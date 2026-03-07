@@ -14,8 +14,9 @@ This repository contains both the core GP library and various example applicatio
 |----------|-------------|
 | `CLAUDE.md` | This file - main project guidance |
 | `specs/BACKLOG.md` | Project backlog and TODO items |
-| `autoc/specs/` | Design specifications (ZZZ- prefix = archived/done) |
 | `specs/` | Feature specs (speckit workflow) |
+| `docs/` | Reference documentation (loaded on-demand) |
+| `autoc/specs/` | Design specifications (ZZZ- prefix = archived/done) |
 | `.specify/memory/constitution.md` | Project constitution and principles |
 
 ## Build System
@@ -287,14 +288,16 @@ The bytecode system creates an additional dependency path: GP trees (S3) → gpe
 
 | Spec | Description |
 |------|-------------|
-| `autoc/specs/COORDINATE_CONVENTIONS.md` | NED frame, quaternion conventions, Euler extraction |
+| `docs/COORDINATE_CONVENTIONS.md` | NED frame, quaternion conventions, Euler extraction |
 | `autoc/specs/LAYERED_CONTROLLER.md` | Safety/strategy layer architecture |
-| `autoc/specs/FASTMATH.md` | LUT-based trig, platform-portable math |
+| `autoc/specs/ZZZ-FASTMATH.md` | LUT-based trig, platform-portable math (completed) |
 | `autoc/specs/ZZZ-TEMPORAL_STATE.md` | GETDPHI_PREV/RATE nodes (completed) |
 
 ## Active Technologies
 - C++17 (CMake 3.10+, g++) + Eigen3 (quaternions, vectors), GoogleTest 1.14.0 (testing) (001-gp-eval-tests)
 - N/A (in-memory test state only) (001-gp-eval-tests)
+- C++17 (g++, CMake 3.10+) + Eigen3 (vectors, quaternions), Boost (serialization, logging), GoogleTest 1.14.0 (002-path-interpolation)
+- N/A (in-memory state only) (002-path-interpolation)
 
 ## Recent Changes
 - 001-gp-eval-tests: Added C++17 (CMake 3.10+, g++) + Eigen3 (quaternions, vectors), GoogleTest 1.14.0 (testing)

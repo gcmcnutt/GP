@@ -145,6 +145,12 @@ Current tracking layer (autoc-minimal.ini) follows the rabbit but has no awarene
   3. Keep it simple - For pure tracking layer, uncertainty may help
 - Current evolved programs already show adaptive lookahead via nested GETDPHI
 
+### [DEFERRED] Target Pose Estimation/Interpolation
+- Current path interpolation is position-only
+- Future controllers may need predicted target orientation (slerp quaternions)
+- Would enable pose estimation sensors (target heading, target attitude)
+- Depends on: Path interpolation implementation (002-path-interpolation)
+
 ---
 
 ## Embedded/Hardware Integration
