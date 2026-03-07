@@ -4,3 +4,5 @@ data.*
 build
 *.dat
 *.stc
+# Claude Code local settings
+.claude/settings.local.json
