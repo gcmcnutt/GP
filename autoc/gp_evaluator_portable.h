@@ -45,6 +45,11 @@ gp_scalar evaluateGPOperator(int opcode, PathProvider& pathProvider,
                          AircraftState& aircraftState, 
                          const gp_scalar* args, int argc, gp_scalar contextArg = 0.0f);
 
+// Path interpolation - returns position at goal time (binary search + linear lerp)
+gp_vec3 getInterpolatedTargetPosition(PathProvider& pathProvider,
+                                       gp_scalar currentTimeMsec,
+                                       gp_scalar offsetSteps);
+
 // Navigation helpers - same logic, different path access
 gp_scalar executeGetDPhi(PathProvider& pathProvider, AircraftState& aircraftState, gp_scalar arg);
 gp_scalar executeGetDTheta(PathProvider& pathProvider, AircraftState& aircraftState, gp_scalar arg);

@@ -173,12 +173,7 @@ void createNodeSet(GPAdfNodeSet& adfNs)
 }
 
 
-
-// Legacy getIndex function - now delegates to portable implementation
-int getIndex(std::vector<Path>& path, MyGP& gp, gp_scalar arg) {
-  VectorPathProvider pathProvider(path, aircraftState.getThisPathIndex());
-  return getPathIndex(pathProvider, aircraftState, arg);
-}
+// REMOVED: getIndex() - replaced by getInterpolatedTargetPosition() in gp_evaluator_portable.cc
 
 // This function evaluates the fitness of a genetic tree using the portable evaluator.
 // This maintains compatibility while delegating to the portable implementation.

@@ -117,6 +117,9 @@ public:
 BOOST_CLASS_VERSION(Path, 2)
 #endif
 
+// Maximum offset steps for path interpolation (±1 second at 100ms/step)
+constexpr int MAX_OFFSET_STEPS = 10;
+
 // Portable path provider interface for unified GP evaluation
 // Abstracts path access for both vector and single-path environments
 class PathProvider {
@@ -125,6 +128,13 @@ public:
     virtual const Path& getPath(int index) const = 0;
     virtual int getCurrentIndex() const = 0;
     virtual int getPathSize() const = 0;
+
+    // Get the timestamp of the last waypoint in the path
+    gp_scalar getMaxTimeMsec() const {
+        int size = getPathSize();
+        if (size == 0) return 0.0f;
+        return getPath(size - 1).simTimeMsec;
+    }
 };
 
 #if defined(GP_BUILD) || defined(GP_TEST)
@@ -173,40 +183,8 @@ public:
 // Forward declaration for AircraftState
 struct AircraftState;
 
-// Portable helper function for GP path indexing
-// Uses pure time-domain lookahead: N steps = N * SIM_TIME_STEP_MSEC ahead/behind
-// This is cleaner than distance-based and works correctly with variable rabbit speed
-inline int getPathIndex(PathProvider& pathProvider, AircraftState& aircraftState, gp_scalar arg) {
-    if (std::isnan(arg)) {
-        return pathProvider.getCurrentIndex();
-    }
-
-    int steps = CLAMP_DEF((int)arg, -5, 5);
-    // Clamp current index defensively
-    int currentStep = CLAMP_DEF(pathProvider.getCurrentIndex(), 0, pathProvider.getPathSize() - 1);
-
-    // Time-based lookahead: N steps = N * 100ms
-    const gp_scalar currentTimeMsec = pathProvider.getPath(currentStep).simTimeMsec;
-    const gp_scalar timeGoalMsec = currentTimeMsec + steps * SIM_TIME_STEP_MSEC;
-
-    // Use a small epsilon to avoid off-by-one flip-flops when timeGoalMsec is
-    // very close to a waypoint boundary.
-    constexpr gp_scalar kEps = static_cast<gp_scalar>(0.1f);  // 0.1ms epsilon
-
-    if (steps > 0) {
-        while (currentStep < pathProvider.getPathSize() - 1 &&
-               pathProvider.getPath(currentStep).simTimeMsec + kEps < timeGoalMsec) {
-            currentStep++;
-        }
-    } else if (steps < 0) {
-        while (currentStep > 0 &&
-               pathProvider.getPath(currentStep).simTimeMsec - kEps > timeGoalMsec) {
-            currentStep--;
-        }
-    }
-
-    return currentStep;
-}
+// REMOVED: getPathIndex() - replaced by getInterpolatedTargetPosition() in gp_evaluator_portable.cc
+// The old discrete index lookup caused jitter sensitivity; interpolation provides smooth sensor values.
 
 /*
 * portable aircraft state

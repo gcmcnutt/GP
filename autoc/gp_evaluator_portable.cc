@@ -278,26 +278,102 @@ gp_scalar evaluateGPOperator(int opcode, PathProvider& pathProvider,
     return applyRangeLimit(result);
 }
 
+// =============================================================================
+// Path Interpolation - replaces discrete getPathIndex() for smooth sensors
+// Uses binary search + linear lerp between waypoints
+// =============================================================================
+
+gp_vec3 getInterpolatedTargetPosition(PathProvider& pathProvider,
+                                       gp_scalar currentTimeMsec,
+                                       gp_scalar offsetSteps) {
+    int pathSize = pathProvider.getPathSize();
+    if (pathSize == 0) {
+        return gp_vec3::Zero();
+    }
+    if (pathSize == 1) {
+        return pathProvider.getPath(0).start;
+    }
+
+    // Handle NaN offset - return current rabbit position
+    if (std::isnan(offsetSteps)) {
+        int currentIdx = CLAMP_DEF(pathProvider.getCurrentIndex(), 0, pathSize - 1);
+        return pathProvider.getPath(currentIdx).start;
+    }
+
+    // Clamp offset to ±MAX_OFFSET_STEPS (±1 second)
+    gp_scalar clampedSteps = CLAMP_DEF(offsetSteps,
+                                        static_cast<gp_scalar>(-MAX_OFFSET_STEPS),
+                                        static_cast<gp_scalar>(MAX_OFFSET_STEPS));
+
+    // Calculate goal time
+    gp_scalar goalTimeMsec = currentTimeMsec + clampedSteps * static_cast<gp_scalar>(SIM_TIME_STEP_MSEC);
+
+    // Clamp goal time to path bounds
+    gp_scalar minTime = pathProvider.getPath(0).simTimeMsec;
+    gp_scalar maxTime = pathProvider.getPath(pathSize - 1).simTimeMsec;
+
+    if (goalTimeMsec <= minTime) {
+        return pathProvider.getPath(0).start;
+    }
+    if (goalTimeMsec >= maxTime) {
+        return pathProvider.getPath(pathSize - 1).start;
+    }
+
+    // Binary search for bracketing waypoints
+    // Find i such that path[i].simTimeMsec <= goalTime < path[i+1].simTimeMsec
+    int lo = 0;
+    int hi = pathSize - 1;
+    while (lo < hi - 1) {
+        int mid = (lo + hi) / 2;
+        if (pathProvider.getPath(mid).simTimeMsec <= goalTimeMsec) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+
+    // lo is now the lower bracket index
+    const Path& p0 = pathProvider.getPath(lo);
+    const Path& p1 = pathProvider.getPath(lo + 1);
+
+    // Calculate interpolation fraction
+    gp_scalar dt = p1.simTimeMsec - p0.simTimeMsec;
+    gp_scalar frac = 0.0f;
+    if (dt > 0.0f) {
+        frac = (goalTimeMsec - p0.simTimeMsec) / dt;
+        frac = CLAMP_DEF(frac, 0.0f, 1.0f);  // Clamp for numerical stability
+    }
+
+    // Linear interpolation
+    return p0.start + frac * (p1.start - p0.start);
+}
+
 gp_scalar executeGetDPhi(PathProvider& pathProvider, AircraftState& aircraftState, gp_scalar arg) {
+    // Get interpolated target position
+    gp_vec3 targetPos = getInterpolatedTargetPosition(
+        pathProvider, static_cast<gp_scalar>(aircraftState.getSimTimeMsec()), arg);
+
     // Calculate the vector from craft to target in world frame
-    int idx = getPathIndex(pathProvider, aircraftState, arg);
-    gp_vec3 craftToTarget = pathProvider.getPath(idx).start - aircraftState.getPosition();
-    
+    gp_vec3 craftToTarget = targetPos - aircraftState.getPosition();
+
     // Transform the craft-to-target vector to body frame
     gp_vec3 target_local = aircraftState.getOrientation().inverse() * craftToTarget;
-    
+
     // Project the craft-to-target vector onto the body YZ plane
     gp_vec3 projectedVector(0.0f, target_local.y(), target_local.z());
-    
+
     // Calculate the angle between the projected vector and the body Z-axis
     return fastAtan2(projectedVector.y(), -projectedVector.z());
 }
 
 gp_scalar executeGetDTheta(PathProvider& pathProvider, AircraftState& aircraftState, gp_scalar arg) {
+    // Get interpolated target position
+    gp_vec3 targetPos = getInterpolatedTargetPosition(
+        pathProvider, static_cast<gp_scalar>(aircraftState.getSimTimeMsec()), arg);
+
     // Calculate the vector from craft to target in world frame
-    int idx = getPathIndex(pathProvider, aircraftState, arg);
-    gp_vec3 craftToTarget = pathProvider.getPath(idx).start - aircraftState.getPosition();
-    
+    gp_vec3 craftToTarget = targetPos - aircraftState.getPosition();
+
     // Transform the craft-to-target vector to body frame
     gp_vec3 target_local = aircraftState.getOrientation().inverse() * craftToTarget;
 
@@ -307,8 +383,11 @@ gp_scalar executeGetDTheta(PathProvider& pathProvider, AircraftState& aircraftSt
 }
 
 gp_scalar executeGetDTarget(PathProvider& pathProvider, AircraftState& aircraftState, gp_scalar arg) {
-    int idx = getPathIndex(pathProvider, aircraftState, arg);
-    gp_scalar distance = (pathProvider.getPath(idx).start - aircraftState.getPosition()).norm();
+    // Get interpolated target position
+    gp_vec3 targetPos = getInterpolatedTargetPosition(
+        pathProvider, static_cast<gp_scalar>(aircraftState.getSimTimeMsec()), arg);
+
+    gp_scalar distance = (targetPos - aircraftState.getPosition()).norm();
     return CLAMP_DEF((distance - static_cast<gp_scalar>(10.0f)) / aircraftState.getRelVel(), -1.0f, 1.0f);
 }
 

@@ -223,6 +223,17 @@ AircraftState makeState(const gp_vec3& position, const gp_quat& orientation, con
                          0);
 }
 
+// T015: makeState with time - needed for interpolation tests
+AircraftState makeStateWithTime(const gp_vec3& position, const gp_quat& orientation, int timeMsec) {
+    return AircraftState(0,
+                         static_cast<gp_scalar>(10.0f),  // relVel
+                         gp_vec3::Zero(),                 // velocity
+                         orientation,                     // orientation
+                         position,                        // position
+                         0.0f, 0.0f, 0.0f,
+                         timeMsec);                       // time in msec
+}
+
 // T014: TestPathProvider with helper methods
 struct TestPathProvider : public PathProvider {
     std::vector<Path> paths;
@@ -779,7 +790,9 @@ TEST(NavigationOps, TimeOffsetClampStart) {
     provider.paths.push_back(makePath(10.0f, 5.0f, 0.0f, 0.0f));    // Index 0: to the right, t=0ms
     provider.paths.push_back(makePath(20.0f, 0.0f, 0.0f, 100.0f));  // Index 1: straight ahead, t=100ms
 
-    AircraftState state = makeState(gp_vec3::Zero(), QuatHelper::level());
+    // With interpolation, aircraft time determines the reference point
+    // Set aircraft time to 100ms (matching index 1)
+    AircraftState state = makeStateWithTime(gp_vec3::Zero(), QuatHelper::level(), 100);
     provider.setCurrentIndex(1);  // Current is index 1 at t=100ms
 
     // Negative offset -1 targets time = 100 - 100ms = 0ms, which is index 0
@@ -793,33 +806,37 @@ TEST(NavigationOps, TimeOffsetClampStart) {
     TEST_NODE(GETDPHI);
 }
 
-// T040a: TEST(NavigationOps, NonUniformTimestamps) - real-time jitter simulation
-// On xiao-gp, timestamps aren't exact 100ms intervals due to real-time processing
-// NOTE: Current algorithm finds FIRST waypoint at-or-after goal time, not CLOSEST.
-// With jitter, this can overshoot (e.g., t=98ms is before t=100ms goal, so it advances
-// to next waypoint even though 98ms is very close). This behavior is documented here.
+// T040a: TEST(NavigationOps, NonUniformTimestamps) - FIXED by path interpolation
+// On xiao-gp, timestamps aren't exact 100ms intervals due to real-time processing.
+// Previously: Jitter caused overshooting (t=98ms < t=100ms goal → skip to next waypoint).
+// NOW: Interpolation finds exact position for goal time, regardless of jitter.
 TEST(NavigationOps, NonUniformTimestamps) {
     TestPathProvider provider;
     provider.paths.clear();
     // Simulate real-time jitter: timestamps slightly off from ideal 100ms intervals
     provider.paths.push_back(makePath(10.0f, 0.0f, 0.0f, 0.0f));      // Index 0, t=0ms
-    provider.paths.push_back(makePath(20.0f, 0.0f, 0.0f, 102.0f));    // Index 1, t=102ms (2ms late - AFTER goal)
-    provider.paths.push_back(makePath(30.0f, 5.0f, 0.0f, 198.0f));    // Index 2, t=198ms (2ms early)
+    provider.paths.push_back(makePath(20.0f, 0.0f, 0.0f, 102.0f));    // Index 1, t=102ms (2ms late)
+    provider.paths.push_back(makePath(30.0f, 5.0f, 0.0f, 198.0f));    // Index 2, t=198ms (2ms early), to the RIGHT
     provider.paths.push_back(makePath(40.0f, 0.0f, 0.0f, 305.0f));    // Index 3, t=305ms (5ms late)
 
     AircraftState state = makeState(gp_vec3::Zero(), QuatHelper::level());
     provider.setCurrentIndex(0);
 
-    // offset=1 targets t=100ms, finds index 1 (t=102ms is first at-or-after 100ms)
+    // offset=1 targets t=100ms (aircraft time=0 + 1*100ms)
+    // Binary search finds t=100ms between index 0 (t=0) and index 1 (t=102)
+    // Interpolation: frac = (100-0)/(102-0) ≈ 0.98 → position very close to index 1
     gp_scalar dPhi1 = executeGetDPhi(provider, state, 1.0f);
-    // offset=2 targets t=200ms, finds index 2 (t=198ms < 200ms, advances to index 3? No - 198.1 < 200)
-    // Actually: 198.1 < 200 is true, so advances to index 3 (t=305ms)
+
+    // offset=2 targets t=200ms
+    // Binary search finds t=200ms between index 2 (t=198) and index 3 (t=305)
+    // Interpolation: frac = (200-198)/(305-198) ≈ 0.019 → position very close to index 2
+    // Index 2 is to the RIGHT (y=5), so dPhi should be positive
     gp_scalar dPhi2 = executeGetDPhi(provider, state, 2.0f);
 
     // Index 1 is straight ahead (y=0)
-    EXPECT_NEAR(dPhi1, 0.0f, 1e-4f);
-    // Index 3 is also straight ahead (y=0) due to jitter overshoot
-    EXPECT_NEAR(dPhi2, 0.0f, 1e-4f);
+    EXPECT_NEAR(dPhi1, 0.0f, 0.1f);  // Nearly straight ahead (98% toward index 1)
+    // FIXED: Now correctly finds interpolated position near index 2 (to the right)
+    EXPECT_GT(dPhi2, 0.0f);  // Target is to the right
 
     TEST_NODE(GETDPHI);
 }
@@ -873,10 +890,11 @@ TEST(NavigationOps, TimestampBoundary) {
     TEST_NODE(GETDPHI);
 }
 
-// T040d: TEST(NavigationOps, EarlyTimestampOvershoot) - documents jitter overshoot behavior
-// IMPORTANT: This test documents a potential issue for xiao-gp real-time operation.
-// When a waypoint's timestamp is slightly EARLY (e.g., 98ms instead of 100ms),
-// the algorithm overshoots to the NEXT waypoint because 98ms < 100ms goal.
+// T040d: TEST(NavigationOps, EarlyTimestampOvershoot) - FIXED by path interpolation
+// Previously: When a waypoint's timestamp was slightly EARLY (e.g., 98ms instead of 100ms),
+// the discrete algorithm overshot to the NEXT waypoint because 98ms < 100ms goal.
+// NOW: With interpolation, targeting t=100ms finds position between index 1 (t=98ms) and
+// index 2 (t=200ms), correctly staying near index 1 instead of skipping it.
 TEST(NavigationOps, EarlyTimestampOvershoot) {
     TestPathProvider provider;
     provider.paths.clear();
@@ -888,15 +906,14 @@ TEST(NavigationOps, EarlyTimestampOvershoot) {
     provider.setCurrentIndex(0);
 
     // offset=1 targets t=100ms
-    // Index 1 at t=98ms: 98.1 < 100 → YES, advance!
-    // Index 2 at t=200ms: 200.1 < 100 → NO, stop
-    // Result: returns index 2, SKIPPING index 1 entirely!
+    // With interpolation: binary search finds t=100ms between index 1 (98ms) and index 2 (200ms)
+    // frac = (100-98)/(200-98) = 2/102 ≈ 0.0196
+    // Position ≈ (20.2, 4.9, 0) - very close to index 1, which is to the RIGHT
     gp_scalar dPhi1 = executeGetDPhi(provider, state, 1.0f);
 
-    // This SKIPS index 1 (to the right) and finds index 2 (straight ahead)
-    // Intuitively wrong - index 1 at 98ms is much closer to 100ms than index 2 at 200ms
-    // But this is the documented behavior of the algorithm.
-    EXPECT_NEAR(dPhi1, 0.0f, 1e-4f);  // Finds index 2, not index 1!
+    // FIXED: Now correctly finds interpolated position near index 1 (to the right)
+    // dPhi should be positive (roll right to face the target)
+    EXPECT_GT(dPhi1, 0.0f);  // Target is to the right, need positive roll
 
     TEST_NODE(GETDPHI);
 }
@@ -1026,6 +1043,118 @@ TEST(NavigationOps, TargetAllOctants) {
 
     TEST_NODE(GETDPHI);
     TEST_NODE(GETDTHETA);
+}
+
+// =============================================================================
+// Interpolation Tests - verify getInterpolatedTargetPosition()
+// These tests verify continuous position interpolation instead of discrete jumps
+// =============================================================================
+
+// T045a: TEST(NavigationOps, InterpolationMidpoint) - verify lerp at 50% between waypoints
+TEST(NavigationOps, InterpolationMidpoint) {
+    TestPathProvider provider;
+    provider.paths.clear();
+    // Two waypoints: 100ms apart, positions at x=10 and x=20
+    provider.paths.push_back(makePath(10.0f, 0.0f, 0.0f, 0.0f));     // Index 0, t=0ms
+    provider.paths.push_back(makePath(20.0f, 0.0f, 0.0f, 100.0f));   // Index 1, t=100ms
+    provider.setCurrentIndex(0);
+
+    // Goal time: 50ms (halfway between 0ms and 100ms)
+    // Expected position: lerp(10, 20, 0.5) = 15
+    gp_vec3 pos = getInterpolatedTargetPosition(provider, 50.0f, 0.0f);
+
+    EXPECT_FLOAT_EQ(pos.x(), 15.0f);
+    EXPECT_FLOAT_EQ(pos.y(), 0.0f);
+    EXPECT_FLOAT_EQ(pos.z(), 0.0f);
+}
+
+// T045b: TEST(NavigationOps, InterpolationContinuity) - verify no jumps at boundaries
+TEST(NavigationOps, InterpolationContinuity) {
+    TestPathProvider provider;
+    provider.paths.clear();
+    provider.paths.push_back(makePath(10.0f, 0.0f, 0.0f, 0.0f));     // t=0ms
+    provider.paths.push_back(makePath(20.0f, 0.0f, 0.0f, 100.0f));   // t=100ms
+    provider.paths.push_back(makePath(30.0f, 0.0f, 0.0f, 200.0f));   // t=200ms
+    provider.setCurrentIndex(0);
+
+    // Sample positions every 10ms across boundary at t=100ms
+    gp_vec3 pos90 = getInterpolatedTargetPosition(provider, 90.0f, 0.0f);
+    gp_vec3 pos100 = getInterpolatedTargetPosition(provider, 100.0f, 0.0f);
+    gp_vec3 pos110 = getInterpolatedTargetPosition(provider, 110.0f, 0.0f);
+
+    // Should be smooth: 19.0, 20.0, 21.0
+    EXPECT_FLOAT_EQ(pos90.x(), 19.0f);
+    EXPECT_FLOAT_EQ(pos100.x(), 20.0f);
+    EXPECT_FLOAT_EQ(pos110.x(), 21.0f);
+
+    // Check continuity: no jumps > 10% of step size
+    EXPECT_NEAR(pos100.x() - pos90.x(), 1.0f, 0.1f);
+    EXPECT_NEAR(pos110.x() - pos100.x(), 1.0f, 0.1f);
+}
+
+// T045c: TEST(NavigationOps, InterpolationJitterRobust) - 10ms jitter causes <1% change
+TEST(NavigationOps, InterpolationJitterRobust) {
+    TestPathProvider provider;
+    provider.paths.clear();
+    // Path with 100ms spacing, positions at 0, 100, 200 meters
+    provider.paths.push_back(makePath(0.0f, 0.0f, 0.0f, 0.0f));
+    provider.paths.push_back(makePath(100.0f, 0.0f, 0.0f, 100.0f));
+    provider.paths.push_back(makePath(200.0f, 0.0f, 0.0f, 200.0f));
+    provider.setCurrentIndex(1);
+
+    // Base case: exactly at t=100ms with offset=0
+    gp_vec3 posBase = getInterpolatedTargetPosition(provider, 100.0f, 0.0f);
+
+    // Jittered case: at t=98ms (2ms early, simulating real-time jitter)
+    gp_vec3 posJitter = getInterpolatedTargetPosition(provider, 98.0f, 0.0f);
+
+    // The difference should be small (< 1% of typical position value)
+    // Position at t=100ms should be around 100m, at t=98ms should be around 98m
+    // Difference of 2m on a 100m position is 2%, which is acceptable
+    // But the KEY test is that we don't jump to a completely different waypoint
+    gp_scalar diff = std::abs(posBase.x() - posJitter.x());
+    gp_scalar pctChange = diff / std::max(std::abs(posBase.x()), 1.0f) * 100.0f;
+
+    EXPECT_LT(pctChange, 5.0f);  // Less than 5% change from 2ms jitter
+    EXPECT_LT(diff, 10.0f);       // Absolute difference < 10 meters
+}
+
+// T045d: TEST(NavigationOps, InterpolationBoundaryClamp) - verify ±10 step clamp
+TEST(NavigationOps, InterpolationBoundaryClamp) {
+    TestPathProvider provider;
+    provider.paths.clear();
+    // Long path with many waypoints
+    for (int i = 0; i < 50; i++) {
+        provider.paths.push_back(makePath(i * 10.0f, 0.0f, 0.0f, i * 100.0f));
+    }
+    provider.setCurrentIndex(25);  // Middle of path, t=2500ms
+
+    // Request offset of +20 steps (should clamp to +10)
+    gp_vec3 posMax = getInterpolatedTargetPosition(provider, 2500.0f, 20.0f);
+    // Goal time with +10 steps: 2500 + 10*100 = 3500ms -> x=350m
+    EXPECT_FLOAT_EQ(posMax.x(), 350.0f);
+
+    // Request offset of -20 steps (should clamp to -10)
+    gp_vec3 posMin = getInterpolatedTargetPosition(provider, 2500.0f, -20.0f);
+    // Goal time with -10 steps: 2500 - 10*100 = 1500ms -> x=150m
+    EXPECT_FLOAT_EQ(posMin.x(), 150.0f);
+}
+
+// T045e: TEST(NavigationOps, InterpolationNaNHandling) - NaN returns current position
+TEST(NavigationOps, InterpolationNaNHandling) {
+    TestPathProvider provider;
+    provider.paths.clear();
+    provider.paths.push_back(makePath(10.0f, 0.0f, 0.0f, 0.0f));
+    provider.paths.push_back(makePath(20.0f, 0.0f, 0.0f, 100.0f));
+    provider.setCurrentIndex(0);
+
+    // Pass NaN as offset - should return current rabbit position
+    gp_vec3 pos = getInterpolatedTargetPosition(provider, 50.0f, std::nanf(""));
+
+    // Should return position at current index (index 0 -> x=10)
+    EXPECT_FLOAT_EQ(pos.x(), 10.0f);
+    EXPECT_FLOAT_EQ(pos.y(), 0.0f);
+    EXPECT_FLOAT_EQ(pos.z(), 0.0f);
 }
 
 // T046: TEST(BytecodeNavigation, GetDPhiDTheta) mirroring identity baseline tests

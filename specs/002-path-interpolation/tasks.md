@@ -23,7 +23,7 @@ All changes in `autoc/` subdirectory per plan.md structure decision.
 
 **Purpose**: No setup required - existing project structure, no new dependencies
 
-- [ ] T001 Verify build passes before starting: `cd ~/GP && make`
+- [x] T001 Verify build passes before starting: `cd ~/GP && make`
 
 ---
 
@@ -33,9 +33,9 @@ All changes in `autoc/` subdirectory per plan.md structure decision.
 
 **⚠️ CRITICAL**: US1 implementation depends on these completions
 
-- [ ] T002 Add `getMaxTimeMsec()` method to PathProvider in `autoc/aircraft_state.h`
-- [ ] T003 Add `MAX_OFFSET_STEPS` constant (10) in `autoc/aircraft_state.h`
-- [ ] T004 Add `getInterpolatedTargetPosition()` declaration in `autoc/gp_evaluator_portable.h`
+- [x] T002 Add `getMaxTimeMsec()` method to PathProvider in `autoc/aircraft_state.h`
+- [x] T003 Add `MAX_OFFSET_STEPS` constant (10) in `autoc/aircraft_state.h`
+- [x] T004 Add `getInterpolatedTargetPosition()` declaration in `autoc/gp_evaluator_portable.h`
 
 **Checkpoint**: Header declarations ready - implementation can now begin
 
@@ -51,25 +51,25 @@ All changes in `autoc/` subdirectory per plan.md structure decision.
 
 > **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
 
-- [ ] T005 [P] [US1] Add TEST(NavigationOps, InterpolationMidpoint) in `autoc/tests/gp_evaluator_tests.cc` - verify lerp at 50% between waypoints
-- [ ] T006 [P] [US1] Add TEST(NavigationOps, InterpolationContinuity) in `autoc/tests/gp_evaluator_tests.cc` - verify no jumps at waypoint boundaries
-- [ ] T007 [P] [US1] Add TEST(NavigationOps, InterpolationJitterRobust) in `autoc/tests/gp_evaluator_tests.cc` - verify 10ms jitter causes <1% change
-- [ ] T008 [P] [US1] Add TEST(NavigationOps, InterpolationBoundaryClamp) in `autoc/tests/gp_evaluator_tests.cc` - verify ±10 step clamp (±1 second)
-- [ ] T009 [P] [US1] Add TEST(NavigationOps, InterpolationNaNHandling) in `autoc/tests/gp_evaluator_tests.cc` - verify NaN input returns current rabbit position
-- [ ] T010 [US1] Verify new tests fail (no implementation yet): `cd ~/GP && make && ./build/autoc_tests --gtest_filter=NavigationOps.Interpolation*`
+- [x] T005 [P] [US1] Add TEST(NavigationOps, InterpolationMidpoint) in `autoc/tests/gp_evaluator_tests.cc` - verify lerp at 50% between waypoints
+- [x] T006 [P] [US1] Add TEST(NavigationOps, InterpolationContinuity) in `autoc/tests/gp_evaluator_tests.cc` - verify no jumps at waypoint boundaries
+- [x] T007 [P] [US1] Add TEST(NavigationOps, InterpolationJitterRobust) in `autoc/tests/gp_evaluator_tests.cc` - verify 10ms jitter causes <1% change
+- [x] T008 [P] [US1] Add TEST(NavigationOps, InterpolationBoundaryClamp) in `autoc/tests/gp_evaluator_tests.cc` - verify ±10 step clamp (±1 second)
+- [x] T009 [P] [US1] Add TEST(NavigationOps, InterpolationNaNHandling) in `autoc/tests/gp_evaluator_tests.cc` - verify NaN input returns current rabbit position
+- [x] T010 [US1] Verify new tests fail (no implementation yet): `cd ~/GP && make && ./build/autoc_tests --gtest_filter=NavigationOps.Interpolation*`
 
 ### Implementation for User Story 1
 
-- [ ] T011 [US1] Implement `getInterpolatedTargetPosition()` with binary search + linear lerp in `autoc/gp_evaluator_portable.cc`
-- [ ] T012 [US1] Update `executeGetDPhi()` to use interpolated position in `autoc/gp_evaluator_portable.cc`
-- [ ] T013 [US1] Update `executeGetDTheta()` to use interpolated position in `autoc/gp_evaluator_portable.cc`
-- [ ] T014 [US1] Update `executeGetDTarget()` to use interpolated position in `autoc/gp_evaluator_portable.cc`
-- [ ] T015 [US1] Update existing TEST(NavigationOps, EarlyTimestampOvershoot) to verify fix in `autoc/tests/gp_evaluator_tests.cc`
-- [ ] T016 [US1] Remove `getPathIndex()` from `autoc/aircraft_state.h`
-- [ ] T017 [US1] Verify all interpolation tests pass: `cd ~/GP && make && ./build/autoc_tests --gtest_filter=NavigationOps.*`
-- [ ] T018 [US1] Verify all 77+ existing tests still pass: `cd ~/GP && make && ./build/autoc_tests`
+- [x] T011 [US1] Implement `getInterpolatedTargetPosition()` with binary search + linear lerp in `autoc/gp_evaluator_portable.cc`
+- [x] T012 [US1] Update `executeGetDPhi()` to use interpolated position in `autoc/gp_evaluator_portable.cc`
+- [x] T013 [US1] Update `executeGetDTheta()` to use interpolated position in `autoc/gp_evaluator_portable.cc`
+- [x] T014 [US1] Update `executeGetDTarget()` to use interpolated position in `autoc/gp_evaluator_portable.cc`
+- [x] T015 [US1] Update existing TEST(NavigationOps, EarlyTimestampOvershoot) to verify fix in `autoc/tests/gp_evaluator_tests.cc`
+- [x] T016 [US1] Remove `getPathIndex()` from `autoc/aircraft_state.h`
+- [x] T017 [US1] Verify all interpolation tests pass: `cd ~/GP && make && ./build/autoc_tests --gtest_filter=NavigationOps.*`
+- [x] T018 [US1] Verify all 82 existing tests still pass: `cd ~/GP && make && ./build/autoc_tests`
 
-**Checkpoint**: Path interpolation complete - sensors now continuous, jitter-robust
+**Checkpoint**: ✅ Path interpolation complete - sensors now continuous, jitter-robust
 
 ---
 
