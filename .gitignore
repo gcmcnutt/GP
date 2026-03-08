@@ -6,3 +6,4 @@ build
 *.stc
 # Claude Code local settings
 .claude/settings.local.json
+autoc/log/
