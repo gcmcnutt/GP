@@ -1189,9 +1189,9 @@ void MyGP::evalTask(WorkerContext& context)
       gp_vec3 craftOffset = aircraftPosition - currentPathPoint.start;
       gp_scalar distance = craftOffset.norm();
 
-      // Accumulate with nonlinear penalty (small excursions still expensive)
-      distance_sum += pow(distance, DISTANCE_POWER);
-      attitude_sum += attitude_delta;
+      // Accumulate with normalized nonlinear penalty per step
+      distance_sum += pow(distance / DISTANCE_NORM, DISTANCE_POWER);
+      attitude_sum += pow(attitude_delta / ATTITUDE_NORM, ATTITUDE_POWER);
       simulation_steps++;
 
       // Per-step logging to data.dat
@@ -1760,9 +1760,9 @@ int main(int argc, char** argv)
             gp_vec3 craftOffset = aircraftPosition - currentPathPoint.start;
             gp_scalar distance = craftOffset.norm();
 
-            // Accumulate with nonlinear penalty (small excursions still expensive)
-            distance_sum += pow(distance, DISTANCE_POWER);
-            attitude_sum += attitude_delta;
+            // Accumulate with normalized nonlinear penalty per step
+            distance_sum += pow(distance / DISTANCE_NORM, DISTANCE_POWER);
+            attitude_sum += pow(attitude_delta / ATTITUDE_NORM, ATTITUDE_POWER);
             simulation_steps++;
 
             // Per-step logging

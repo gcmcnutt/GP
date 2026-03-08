@@ -630,3 +630,46 @@ Begin with Phase 1 (fitness_computer extraction) as it:
 - specs/LARGE_SCENARIO_STRATEGY.md - Deme mode architecture
 - specs/PARETO.md - Multi-objective fitness (future extension point)
 - specs/FASTMATH.md - Numerical precision considerations
+
+## Appendix D: Bug Fixes (Mar 2026)
+
+### D.1 Temporal History Wipe (inputdev_autoc.cpp)
+
+**Problem:** `aircraftState` was reconstructed from scratch every eval tick (line 747),
+destroying the temporal history ring buffer. All `GETDPHI_PREV(n)` for n>=1,
+`GETDTHETA_PREV(n)`, `GETDPHI_RATE`, and `GETDTHETA_RATE` nodes returned 0.0 or
+garbage during training — making them dead weight in the GP search space.
+
+**Fix:** Replace aggregate initialization with in-place setter calls that preserve
+the history fields. Add `clearHistory()` call on path reset.
+
+**Files changed:**
+- `crrcsim/src/mod_inputdev/inputdev_autoc/inputdev_autoc.cpp` — in-place update + clearHistory on path reset
+
+### D.2 `-ffast-math` Breaks NaN Guards (CMakeLists.txt)
+
+**Problem:** Performance builds used `-ffast-math` which implies `-ffinite-math-only`,
+causing the compiler to optimize away `std::isnan()` checks. GP trees routinely produce
+NaN via `DIV(x,0)`, `SQRT(-1)`, etc., and NaN guards in `getInterpolatedTargetPosition()`
+and elsewhere were silently eliminated.
+
+**Fix:** Append `-fno-finite-math-only` after `-ffast-math` in both CMakeLists.txt files
+to retain all other fast-math optimizations while preserving IEEE-754 NaN/Inf semantics.
+
+**Files changed:**
+- `autoc/CMakeLists.txt`
+- `crrcsim/CMakeLists.txt`
+
+### D.3 Future TODO: Eval Loop Integration Tests
+
+The current test suite validates individual sensor nodes but not the eval loop
+orchestration (construct state → record history → evaluate → advance). This class of
+bug (history wipe) would be caught by an integration test that:
+
+1. Injects a known GP tree (e.g., `GETDPHI_PREV(1)`) into the eval loop
+2. Runs 3+ ticks with known aircraft/path state
+3. Asserts that temporal nodes return non-zero values after the first tick
+
+This should be addressed as part of the unification effort (Phase 1/4), where the
+eval loop can be decomposed into testable components. See also the minisim eval loop
+which has the same pattern and could serve as a simpler test harness.
