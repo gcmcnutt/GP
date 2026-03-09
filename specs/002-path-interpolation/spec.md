@@ -271,9 +271,12 @@ The following design decisions were clarified during spec review:
 
 ### Float Precision in Interpolator (Non-Determinism Risk)
 
-The path interpolation system has 32-bit float precision issues that may cause subtle
-non-determinism across re-evaluations, observed as fitness regressions on the elite
-individual (fitness jumps 4x worse then recovers next gen, zero divergences detected).
+The path interpolation system has 32-bit float precision issues that cause confirmed
+non-determinism. Detected divergence at gen 120 of a debug-build run: same GP tree
+(hash `0x6f807954d9a05f9a`, len=55, depth=12), identical physics state (all 0 ULPs
+across position, velocity, quaternion, RNG, gusts), but GP evaluator produced different
+control outputs: `throttle=0.0 vs 0.5`, `roll=0.0 vs -0.0`. Fitness: 121993→884292
+(7.2x worse). The divergence occurred at step 13 (78ms), very early in the sim.
 
 **Root causes identified:**
 
@@ -296,16 +299,50 @@ individual (fitness jumps 4x worse then recovers next gen, zero divergences dete
 **Constraint:** `double` is too slow on target embedded hardware (Xiao-GP). Must stay
 32-bit float (`gp_scalar`).
 
+**Divergent GP analysis** (gpextractor gen 9879, fitness 121993):
+```
+(GT (SETTHROTTLE (GT GETROLL_RAD (SETPITCH (PROGN (SETROLL ...) ...))))
+    (PROGN (DIV (GETDTHETA ...) (DIV GETVEL 0)) ...))
+```
+Key observations:
+- Contains `DIV GETVEL 0` (twice) — produces ±Inf/NaN, amplifies tiny sensor diffs
+- `GETDPHI_PREV GETROLL_RAD` — history index from float (e.g., 0.001 rad truncates
+  to 0, but 0.9999 could round to 1 on one eval and 0 on another)
+- `SETTHROTTLE` nested inside `GT` first arg — throttle only fires when GT branch
+  executes. The GT balances on NaN/Inf from `DIV GETVEL 0`, so a 1-ULP sensor
+  difference flips the branch → throttle 0.0 vs 0.5
+- This GP is inherently fragile, but the system must still be deterministic for it
+
 **Proposed fix direction (revisit in this feature):**
 
-- The rabbit moves forward only — no backtracking needed
-- Search area is small: ±MAX_OFFSET_STEPS (±1 second at 10Hz)
-- Waypoint spacing is ~1.6m at 16 m/s
-- **Forward-scan from last known index** instead of binary search eliminates float
-  comparison sensitivity entirely — just walk forward from `getCurrentIndex()`
-- **Integer millisecond timestamps** in path would avoid float time comparison altogether
-- Path is generated once per scenario — accumulated error is consistent within one eval,
-  so the fix only needs to ensure the *lookup* is deterministic, not the path times
+The current binary search approach is fundamentally fragile for 32-bit float:
+- Float comparison sensitivity means 1-ULP differences select different waypoints
+- The binary search starts from scratch every call with no memory of prior position
+- This creates a "stateless lookup" that is sensitive to any FP rounding difference
+
+Better approach — **progressive index tracking with integer time**:
+
+1. **Track current rabbit index** as state in the evaluator (not recomputed each call)
+   - The rabbit only moves forward along the path
+   - Each 100ms eval tick, advance the index by the known step count
+   - Sensor offset (±10 steps) is a simple index addition, no float search needed
+
+2. **Use integer millisecond timestamps** in the Path struct
+   - `uint32_t simTimeMsec` instead of `gp_scalar simTimeMsec`
+   - Eliminates float comparison entirely in the lookup
+   - Integer comparison is exact and deterministic across all platforms/optimizers
+
+3. **Linear interpolation from tracked index**
+   - Given the tracked rabbit index and a step offset, compute the bracketing pair
+     directly: `lo = rabbitIndex + offset, hi = lo + 1`
+   - Fraction computed from integer times: `frac = (goalTime - path[lo].time) / (path[hi].time - path[lo].time)`
+   - Still uses float for the lerp itself, but the bracket selection is deterministic
+
+4. **Constraint-compatible**: All of the above works within 32-bit float (`gp_scalar`)
+   since the only float math is the final lerp, not the lookup
+
+This eliminates the root cause: the lookup decision (which waypoint pair to interpolate
+between) becomes purely integer arithmetic, immune to FP rounding.
 
 ### `-ffast-math` Removed on aarch64
 
