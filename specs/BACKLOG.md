@@ -155,6 +155,13 @@ Current tracking layer (autoc-minimal.ini) follows the rabbit but has no awarene
 
 ## Embedded/Hardware Integration
 
+### [NEXT] Record S3 Profile in Extracted Artifacts
+- `gpextractor` and `bytecode2cpp` print a timestamp but not which S3 profile was used
+- Multiple S3 profiles exist (AWS default, minio) — need to record which one the
+  extract came from so artifacts can be traced back to source
+- Relevant for xiao-gp codebase (not yet in this repo)
+- Simple fix: embed the profile string in the generated output header/comment
+
 ### [NEXT] Export RC Commands to Xiao Log
 - Currently: GP Output (rc=[...]) only logged during autoc=Y test spans
 - Need: Log RC commands throughout entire flight for full playback visualization
