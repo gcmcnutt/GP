@@ -267,9 +267,69 @@ The following design decisions were clarified during spec review:
 
 6. **Verification method**: Both code inspection + unit tests AND short evolution runs for FITNESS_SIMPLIFY/RAMP_LANDSCAPE.
 
+## Known Issues (Mar 2026 — aarch64 migration)
+
+### Float Precision in Interpolator (Non-Determinism Risk)
+
+The path interpolation system has 32-bit float precision issues that may cause subtle
+non-determinism across re-evaluations, observed as fitness regressions on the elite
+individual (fitness jumps 4x worse then recovers next gen, zero divergences detected).
+
+**Root causes identified:**
+
+1. **`unsigned long` → `float` cast loses precision at high sim times.**
+   `aircraftState.getSimTimeMsec()` is `unsigned long` but cast to `gp_scalar` (float,
+   ~7 decimal digits) at `gp_evaluator_portable.cc:354`. After ~100s of sim time
+   (100,000ms), float cannot distinguish consecutive milliseconds. The binary search
+   at line 328 uses exact `<=` comparison — a 1-ULP rounding difference selects a
+   different waypoint bracket.
+
+2. **Accumulated float odometer in path generation (`pathgen.h:67-94`).**
+   Each waypoint's `simTimeMsec` derives from `odometer / velocity * 1000`, where
+   `odometer += newDistance` accumulates across ~50+ loop iterations with transcendental
+   `norm()` calls. Deterministic per-seed but fragile to optimizer reordering.
+
+3. **Binary search has no epsilon tolerance (`gp_evaluator_portable.cc:322-333`).**
+   Exact float comparison means issues (1) and (2) can select different waypoint pairs
+   on re-evaluation, producing different interpolated positions and sensor values.
+
+**Constraint:** `double` is too slow on target embedded hardware (Xiao-GP). Must stay
+32-bit float (`gp_scalar`).
+
+**Proposed fix direction (revisit in this feature):**
+
+- The rabbit moves forward only — no backtracking needed
+- Search area is small: ±MAX_OFFSET_STEPS (±1 second at 10Hz)
+- Waypoint spacing is ~1.6m at 16 m/s
+- **Forward-scan from last known index** instead of binary search eliminates float
+  comparison sensitivity entirely — just walk forward from `getCurrentIndex()`
+- **Integer millisecond timestamps** in path would avoid float time comparison altogether
+- Path is generated once per scenario — accumulated error is consistent within one eval,
+  so the fix only needs to ensure the *lookup* is deterministic, not the path times
+
+### `-ffast-math` Removed on aarch64
+
+Performance builds originally used `-ffast-math` (5000 sims/sec). Removed because:
+- `-ffinite-math-only` optimizes away `std::isnan()` guards (GP trees produce NaN routinely)
+- Remaining sub-flags (`-funsafe-math-optimizations`, `-fassociative-math`, `-freciprocal-math`)
+  interact with NEON FMA to distort the fitness landscape vs x86 AVX
+
+Current perf flags: `-O3 -g -march=native -mtune=native -funroll-loops -flto`
+
+**Throughput regression:** ~200 sims/sec on short paths (longSequential) vs 5000 with
+`-ffast-math`. CPU utilization drops to ~5% per worker — not slow computation but
+idle/waiting. Longer paths (progressiveDistance) peg CPUs normally. Root cause TBD.
+
+### Temporal History Wipe (crrcsim — fixed)
+
+`aircraftState` was aggregate-reconstructed every eval tick, destroying the temporal
+history ring buffer. Fixed with in-place setters + `clearHistory()` on path reset.
+Committed to crrcsim main as `f65c8ad`.
+
 ## References
 
 - BACKLOG.md: "Path Interpolation for Smooth Target Tracking"
 - BACKLOG.md: "Error Cone for Future Path Points" (future work)
 - BACKLOG.md: "Target Pose Estimation/Interpolation" (future work)
 - autoc/tests/gp_evaluator_tests.cc (EarlyTimestampOvershoot test)
+- autoc/specs/UNIFY.md Appendix D — detailed bug fix notes

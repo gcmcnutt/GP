@@ -653,14 +653,67 @@ causing the compiler to optimize away `std::isnan()` checks. GP trees routinely 
 NaN via `DIV(x,0)`, `SQRT(-1)`, etc., and NaN guards in `getInterpolatedTargetPosition()`
 and elsewhere were silently eliminated.
 
-**Fix:** Append `-fno-finite-math-only` after `-ffast-math` in both CMakeLists.txt files
-to retain all other fast-math optimizations while preserving IEEE-754 NaN/Inf semantics.
+**Fix (v1):** Append `-fno-finite-math-only` after `-ffast-math` — preserves NaN checks
+but remaining sub-flags (`-funsafe-math-optimizations`, `-fassociative-math`,
+`-freciprocal-math`) distort the fitness landscape on aarch64 via NEON FMA rounding.
+
+**Fix (v2 — current):** Remove `-ffast-math` entirely from both CMakeLists.txt files.
+Perf flags are now: `-O3 -g -march=native -mtune=native -funroll-loops -flto`.
+On aarch64 (NVIDIA Grace / NEON), `-O3` alone provides sufficient speedup. The remaining
+sub-flags interact with NEON FMA instructions to produce different rounding than x86 AVX,
+which shifts the fitness landscape enough to break evolution.
+
+**Throughput regression:** Removing `-ffast-math` drops throughput from ~5000 sims/sec to
+~200 sims/sec on short paths (longSequential). Investigation shows this is not a codegen
+issue — CPU utilization drops to ~5% per worker, indicating the bottleneck is dispatch
+latency not computation speed. Longer paths (progressiveDistance) peg CPUs normally.
+Root cause TBD — may be TCP round-trip overhead dominating short eval times on the
+aarch64/Linux 6.17 kernel, or `-flto` pessimizing the dispatch path.
 
 **Files changed:**
 - `autoc/CMakeLists.txt`
 - `crrcsim/CMakeLists.txt`
 
-### D.3 Future TODO: Eval Loop Integration Tests
+### D.3 Path Interpolator Float Precision (gp_evaluator_portable.cc, pathgen.h)
+
+**Problem:** The path interpolation system has several 32-bit float precision issues that
+may cause subtle non-determinism, especially on longer paths or under different optimizer
+flags:
+
+1. **`unsigned long` → `gp_scalar` (float) cast loses precision at high sim times.**
+   At `gp_evaluator_portable.cc:354`, `aircraftState.getSimTimeMsec()` is `unsigned long`
+   but cast to `gp_scalar` (float, 7 digits). After ~100s of sim time (100,000ms), float
+   cannot represent millisecond differences. The binary search at line 328 uses exact `<=`
+   comparison — a 1-ULP difference in the cast selects a different waypoint pair.
+
+2. **Accumulated float odometer in path generation (`pathgen.h:67-94`).**
+   Each waypoint's `simTimeMsec` is derived from `odometer / velocity * 1000`, where
+   `odometer` is accumulated via `odometer += newDistance` in a loop of ~50+ iterations.
+   Each iteration adds transcendental error from `(point - lastPoint).norm()`. The
+   accumulated error is deterministic per-seed but fragile to optimizer reordering.
+
+3. **Binary search has no epsilon tolerance (`gp_evaluator_portable.cc:322-333`).**
+   Exact float comparison `path[mid].simTimeMsec <= goalTimeMsec` means a 1-ULP
+   difference in either side selects a different bracket. Combined with (1) and (2),
+   this can produce different interpolated positions on re-evaluation.
+
+**Constraint:** `double` is too slow on target embedded hardware (Xiao-GP). Must stay
+32-bit float (`gp_scalar`).
+
+**Design considerations for fix:**
+- The rabbit moves in one direction only along the path — no backtracking
+- Search area is small: current position ± MAX_OFFSET_STEPS (±10 steps = ±1 second)
+- Sample rate is 10Hz (100ms steps), so waypoint spacing is ~1.6m at 16 m/s
+- Path is generated once per scenario and reused — accumulated error is consistent
+  within a single evaluation, but may differ across optimizer flags or platforms
+- A forward-scanning approach from last known index (instead of binary search from
+  scratch each time) would avoid the float comparison sensitivity entirely
+- Alternatively, use integer millisecond timestamps in the path and avoid float
+  time comparison altogether
+
+**Status:** Analysis only — no code changes yet. Revisit as part of this feature.
+
+### D.4 Future TODO: Eval Loop Integration Tests
 
 The current test suite validates individual sensor nodes but not the eval loop
 orchestration (construct state → record history → evaluate → advance). This class of
