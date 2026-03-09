@@ -44,18 +44,12 @@ endif()
 
 if(PERFORMANCE_BUILD)
     message(STATUS "Enabling performance-optimized build for autoc (with debug symbols)")
-    # -O3: Aggressive optimization
-    # -g: Debug symbols for core dump analysis (doesn't affect runtime)
-    # -march=native: Use AVX-512/AVX2 and other CPU-specific instructions
-    # -mtune=native: Optimize instruction scheduling for this CPU
-    # -funroll-loops: Better SIMD utilization
-    # -flto: Link-time optimization for whole-program analysis
-    # NOTE: -ffast-math removed -- breaks GP evolution on aarch64 (NEON FMA + relaxed
-    #   math reordering distorts the fitness landscape). -O3 alone provides sufficient
-    #   speedup. See specs/UNIFY.md Appendix D for details.
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -g -march=native -mtune=native -funroll-loops -flto")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -g -march=native -mtune=native -funroll-loops -flto")
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -flto")
+    # Simple -O3 only. Aggressive flags (-march=native, -funroll-loops, -flto, -ffast-math)
+    # removed post-Eigen integration — they interact badly with Eigen's expression templates
+    # in the FDM integrator, causing non-deterministic physics and broken training.
+    # Fix forward: re-add flags one at a time once Eigen integration is validated.
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -g")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -g")
 endif()
 
 include(${VTK_USE_FILE})

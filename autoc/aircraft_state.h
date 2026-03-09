@@ -57,17 +57,17 @@ public:
   gp_vec3 orientation;
   gp_scalar distanceFromStart;
   gp_scalar radiansFromStart;
-  gp_scalar simTimeMsec;  // Simulation timestamp in milliseconds
+  int32_t simTimeMsec;  // Simulation timestamp in milliseconds (integer for exact comparison)
 
   // Default constructor for backward compatibility
-  Path() : start(gp_vec3::Zero()), orientation(gp_vec3::UnitX()), 
-           distanceFromStart(0.0f), radiansFromStart(0.0f), simTimeMsec(0.0f) {}
+  Path() : start(gp_vec3::Zero()), orientation(gp_vec3::UnitX()),
+           distanceFromStart(0.0f), radiansFromStart(0.0f), simTimeMsec(0) {}
 
   // Constructor to ensure all fields are properly initialized
-  Path(const gp_vec3& start_pos, const gp_vec3& orient, 
+  Path(const gp_vec3& start_pos, const gp_vec3& orient,
        gp_scalar distance, gp_scalar radians, gp_scalar time_msec)
-    : start(start_pos), orientation(orient), distanceFromStart(distance), 
-      radiansFromStart(radians), simTimeMsec(time_msec) {}
+    : start(start_pos), orientation(orient), distanceFromStart(distance),
+      radiansFromStart(radians), simTimeMsec(static_cast<int32_t>(time_msec)) {}
 
   // Generic constructor to cast external Eigen scalars into gp_scalar
   template <typename Scalar>
@@ -76,7 +76,7 @@ public:
     : start(start_pos.template cast<gp_scalar>()), orientation(orient.template cast<gp_scalar>()),
       distanceFromStart(static_cast<gp_scalar>(distance)),
       radiansFromStart(static_cast<gp_scalar>(radians)),
-      simTimeMsec(static_cast<gp_scalar>(time_msec)) {}
+      simTimeMsec(static_cast<int32_t>(time_msec)) {}
 
   void sanitize() {
     auto sanitizeScalar = [](gp_scalar value, gp_scalar fallback = 0.0f) {
@@ -89,12 +89,12 @@ public:
     }
     distanceFromStart = sanitizeScalar(distanceFromStart);
     radiansFromStart = sanitizeScalar(radiansFromStart);
-    simTimeMsec = sanitizeScalar(simTimeMsec);
+    if (simTimeMsec < 0) simTimeMsec = 0;
   }
 
 #ifdef GP_BUILD
   void dump(std::ostream& os) {
-    os << boost::format("Path: (%f, %f, %f), Odometer: %f, Turnmeter: %f, Time: %f")
+    os << boost::format("Path: (%f, %f, %f), Odometer: %f, Turnmeter: %f, Time: %d")
       % start[0] % start[1] % start[2]
       % distanceFromStart
       % radiansFromStart
@@ -130,9 +130,9 @@ public:
     virtual int getPathSize() const = 0;
 
     // Get the timestamp of the last waypoint in the path
-    gp_scalar getMaxTimeMsec() const {
+    int32_t getMaxTimeMsec() const {
         int size = getPathSize();
-        if (size == 0) return 0.0f;
+        if (size == 0) return 0;
         return getPath(size - 1).simTimeMsec;
     }
 };

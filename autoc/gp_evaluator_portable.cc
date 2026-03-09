@@ -284,7 +284,7 @@ gp_scalar evaluateGPOperator(int opcode, PathProvider& pathProvider,
 // =============================================================================
 
 gp_vec3 getInterpolatedTargetPosition(PathProvider& pathProvider,
-                                       gp_scalar currentTimeMsec,
+                                       int32_t currentTimeMsec,
                                        gp_scalar offsetSteps) {
     int pathSize = pathProvider.getPathSize();
     if (pathSize == 0) {
@@ -305,12 +305,12 @@ gp_vec3 getInterpolatedTargetPosition(PathProvider& pathProvider,
                                         static_cast<gp_scalar>(-MAX_OFFSET_STEPS),
                                         static_cast<gp_scalar>(MAX_OFFSET_STEPS));
 
-    // Calculate goal time
-    gp_scalar goalTimeMsec = currentTimeMsec + clampedSteps * static_cast<gp_scalar>(SIM_TIME_STEP_MSEC);
+    // Calculate goal time as integer (deterministic, no float precision issues)
+    int32_t goalTimeMsec = currentTimeMsec + static_cast<int32_t>(clampedSteps * static_cast<gp_scalar>(SIM_TIME_STEP_MSEC));
 
-    // Clamp goal time to path bounds
-    gp_scalar minTime = pathProvider.getPath(0).simTimeMsec;
-    gp_scalar maxTime = pathProvider.getPath(pathSize - 1).simTimeMsec;
+    // Clamp goal time to path bounds (all int32_t comparisons — exact)
+    int32_t minTime = pathProvider.getPath(0).simTimeMsec;
+    int32_t maxTime = pathProvider.getPath(pathSize - 1).simTimeMsec;
 
     if (goalTimeMsec <= minTime) {
         return pathProvider.getPath(0).start;
@@ -319,7 +319,7 @@ gp_vec3 getInterpolatedTargetPosition(PathProvider& pathProvider,
         return pathProvider.getPath(pathSize - 1).start;
     }
 
-    // Binary search for bracketing waypoints
+    // Binary search for bracketing waypoints (int32_t vs int32_t — deterministic)
     // Find i such that path[i].simTimeMsec <= goalTime < path[i+1].simTimeMsec
     int lo = 0;
     int hi = pathSize - 1;
@@ -336,12 +336,12 @@ gp_vec3 getInterpolatedTargetPosition(PathProvider& pathProvider,
     const Path& p0 = pathProvider.getPath(lo);
     const Path& p1 = pathProvider.getPath(lo + 1);
 
-    // Calculate interpolation fraction
-    gp_scalar dt = p1.simTimeMsec - p0.simTimeMsec;
+    // Calculate interpolation fraction (int difference → float for lerp)
+    int32_t dt = p1.simTimeMsec - p0.simTimeMsec;
     gp_scalar frac = 0.0f;
-    if (dt > 0.0f) {
-        frac = (goalTimeMsec - p0.simTimeMsec) / dt;
-        frac = CLAMP_DEF(frac, 0.0f, 1.0f);  // Clamp for numerical stability
+    if (dt > 0) {
+        frac = static_cast<gp_scalar>(goalTimeMsec - p0.simTimeMsec) / static_cast<gp_scalar>(dt);
+        frac = CLAMP_DEF(frac, 0.0f, 1.0f);
     }
 
     // Linear interpolation
@@ -351,7 +351,7 @@ gp_vec3 getInterpolatedTargetPosition(PathProvider& pathProvider,
 gp_scalar executeGetDPhi(PathProvider& pathProvider, AircraftState& aircraftState, gp_scalar arg) {
     // Get interpolated target position
     gp_vec3 targetPos = getInterpolatedTargetPosition(
-        pathProvider, static_cast<gp_scalar>(aircraftState.getSimTimeMsec()), arg);
+        pathProvider, static_cast<int32_t>(aircraftState.getSimTimeMsec()), arg);
 
     // Calculate the vector from craft to target in world frame
     gp_vec3 craftToTarget = targetPos - aircraftState.getPosition();
@@ -369,7 +369,7 @@ gp_scalar executeGetDPhi(PathProvider& pathProvider, AircraftState& aircraftStat
 gp_scalar executeGetDTheta(PathProvider& pathProvider, AircraftState& aircraftState, gp_scalar arg) {
     // Get interpolated target position
     gp_vec3 targetPos = getInterpolatedTargetPosition(
-        pathProvider, static_cast<gp_scalar>(aircraftState.getSimTimeMsec()), arg);
+        pathProvider, static_cast<int32_t>(aircraftState.getSimTimeMsec()), arg);
 
     // Calculate the vector from craft to target in world frame
     gp_vec3 craftToTarget = targetPos - aircraftState.getPosition();
@@ -385,7 +385,7 @@ gp_scalar executeGetDTheta(PathProvider& pathProvider, AircraftState& aircraftSt
 gp_scalar executeGetDTarget(PathProvider& pathProvider, AircraftState& aircraftState, gp_scalar arg) {
     // Get interpolated target position
     gp_vec3 targetPos = getInterpolatedTargetPosition(
-        pathProvider, static_cast<gp_scalar>(aircraftState.getSimTimeMsec()), arg);
+        pathProvider, static_cast<int32_t>(aircraftState.getSimTimeMsec()), arg);
 
     gp_scalar distance = (targetPos - aircraftState.getPosition()).norm();
     return CLAMP_DEF((distance - static_cast<gp_scalar>(10.0f)) / aircraftState.getRelVel(), -1.0f, 1.0f);

@@ -13,7 +13,7 @@ cmake -DPERFORMANCE_BUILD=ON ../autoc
 cd ..
 make
 
-# same for crrcsim
+# same for crrcsim -- perf mode
 cd ~/crsim/crrcsim-0.9.13
 rm -rf build
 mkdir build

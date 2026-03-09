@@ -311,17 +311,17 @@ static void applySpeedProfileToPath(std::vector<Path>& path, int windVariantInde
   double nominal = gRabbitSpeedConfig.nominal;
 
   // Recompute simTimeMsec for each path point based on variable speed profile
-  gp_scalar simTimeMsec = 0.0f;
-  path[0].simTimeMsec = 0.0f;
+  gp_scalar accumTimeMsec = 0.0f;
+  path[0].simTimeMsec = 0;
 
   for (size_t i = 1; i < path.size(); i++) {
     gp_scalar segmentDistance = path[i].distanceFromStart - path[i-1].distanceFromStart;
-    double profileSpeed = getSpeedAtTime(speedProfile, static_cast<double>(simTimeMsec) / 1000.0);
+    double profileSpeed = getSpeedAtTime(speedProfile, static_cast<double>(accumTimeMsec) / 1000.0);
     // Scale speed toward nominal: at scale=0 use nominal, at scale=1 use profileSpeed
     double speed = nominal + scale * (profileSpeed - nominal);
     gp_scalar dt = (segmentDistance / static_cast<gp_scalar>(speed)) * 1000.0f;
-    simTimeMsec += dt;
-    path[i].simTimeMsec = simTimeMsec;
+    accumTimeMsec += dt;
+    path[i].simTimeMsec = static_cast<int32_t>(accumTimeMsec);
   }
 }
 std::atomic_ulong nanDetector = 0;

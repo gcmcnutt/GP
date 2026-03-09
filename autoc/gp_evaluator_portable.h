@@ -46,8 +46,9 @@ gp_scalar evaluateGPOperator(int opcode, PathProvider& pathProvider,
                          const gp_scalar* args, int argc, gp_scalar contextArg = 0.0f);
 
 // Path interpolation - returns position at goal time (binary search + linear lerp)
+// Uses int32_t timestamps for deterministic binary search (no float precision issues)
 gp_vec3 getInterpolatedTargetPosition(PathProvider& pathProvider,
-                                       gp_scalar currentTimeMsec,
+                                       int32_t currentTimeMsec,
                                        gp_scalar offsetSteps);
 
 // Navigation helpers - same logic, different path access

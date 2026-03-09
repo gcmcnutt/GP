@@ -18,6 +18,7 @@
 #include "minisim.h"
 #include "autoc.h"
 #include "gp_bytecode.h"
+#include "gp_evaluator_portable.h"
 
 using namespace std;
 using boost::asio::ip::tcp;
@@ -201,6 +202,7 @@ public:
         
         // reset sim state
         aircraftState = AircraftState{ 0, SIM_INITIAL_VELOCITY, initial_velocity, aircraft_orientation, initialPosition, 0.0f, 0.0f, SIM_INITIAL_THROTTLE, 0 };
+        aircraftState.clearHistory();  // Reset temporal history for new path
 
         // Record initial aircraft state at time 0 to match path start
         aircraftStateSteps.push_back(aircraftState);
@@ -230,11 +232,19 @@ public:
           }
 #endif
 
+          // Capture temporal history before GP evaluation (for GETDPHI_PREV, GETDTHETA_PREV, etc.)
+          {
+            VectorPathProvider pathProvider(path, aircraftState.getThisPathIndex());
+            gp_scalar dPhi = executeGetDPhi(pathProvider, aircraftState, 0.0f);
+            gp_scalar dTheta = executeGetDTheta(pathProvider, aircraftState, 0.0f);
+            aircraftState.recordErrorHistory(dPhi, dTheta, duration_msec);
+          }
+
           // Store control values before evaluation for comparison
           gp_scalar pre_roll = aircraftState.getRollCommand();
           gp_scalar pre_pitch = aircraftState.getPitchCommand();
           gp_scalar pre_throttle = aircraftState.getThrottleCommand();
-          
+
           // run the controller (GP tree or bytecode interpreter) - BOTH NOW HAVE SAME BASELINE
           gp_scalar evaluation_result = 0.0f;
           if (isGPTreeData) {

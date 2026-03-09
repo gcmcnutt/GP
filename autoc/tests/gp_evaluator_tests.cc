@@ -1061,7 +1061,7 @@ TEST(NavigationOps, InterpolationMidpoint) {
 
     // Goal time: 50ms (halfway between 0ms and 100ms)
     // Expected position: lerp(10, 20, 0.5) = 15
-    gp_vec3 pos = getInterpolatedTargetPosition(provider, 50.0f, 0.0f);
+    gp_vec3 pos = getInterpolatedTargetPosition(provider, 50, 0.0f);
 
     EXPECT_FLOAT_EQ(pos.x(), 15.0f);
     EXPECT_FLOAT_EQ(pos.y(), 0.0f);
@@ -1078,9 +1078,9 @@ TEST(NavigationOps, InterpolationContinuity) {
     provider.setCurrentIndex(0);
 
     // Sample positions every 10ms across boundary at t=100ms
-    gp_vec3 pos90 = getInterpolatedTargetPosition(provider, 90.0f, 0.0f);
-    gp_vec3 pos100 = getInterpolatedTargetPosition(provider, 100.0f, 0.0f);
-    gp_vec3 pos110 = getInterpolatedTargetPosition(provider, 110.0f, 0.0f);
+    gp_vec3 pos90 = getInterpolatedTargetPosition(provider, 90, 0.0f);
+    gp_vec3 pos100 = getInterpolatedTargetPosition(provider, 100, 0.0f);
+    gp_vec3 pos110 = getInterpolatedTargetPosition(provider, 110, 0.0f);
 
     // Should be smooth: 19.0, 20.0, 21.0
     EXPECT_FLOAT_EQ(pos90.x(), 19.0f);
@@ -1103,10 +1103,10 @@ TEST(NavigationOps, InterpolationJitterRobust) {
     provider.setCurrentIndex(1);
 
     // Base case: exactly at t=100ms with offset=0
-    gp_vec3 posBase = getInterpolatedTargetPosition(provider, 100.0f, 0.0f);
+    gp_vec3 posBase = getInterpolatedTargetPosition(provider, 100, 0.0f);
 
     // Jittered case: at t=98ms (2ms early, simulating real-time jitter)
-    gp_vec3 posJitter = getInterpolatedTargetPosition(provider, 98.0f, 0.0f);
+    gp_vec3 posJitter = getInterpolatedTargetPosition(provider, 98, 0.0f);
 
     // The difference should be small (< 1% of typical position value)
     // Position at t=100ms should be around 100m, at t=98ms should be around 98m
@@ -1130,12 +1130,12 @@ TEST(NavigationOps, InterpolationBoundaryClamp) {
     provider.setCurrentIndex(25);  // Middle of path, t=2500ms
 
     // Request offset of +20 steps (should clamp to +10)
-    gp_vec3 posMax = getInterpolatedTargetPosition(provider, 2500.0f, 20.0f);
+    gp_vec3 posMax = getInterpolatedTargetPosition(provider, 2500, 20.0f);
     // Goal time with +10 steps: 2500 + 10*100 = 3500ms -> x=350m
     EXPECT_FLOAT_EQ(posMax.x(), 350.0f);
 
     // Request offset of -20 steps (should clamp to -10)
-    gp_vec3 posMin = getInterpolatedTargetPosition(provider, 2500.0f, -20.0f);
+    gp_vec3 posMin = getInterpolatedTargetPosition(provider, 2500, -20.0f);
     // Goal time with -10 steps: 2500 - 10*100 = 1500ms -> x=150m
     EXPECT_FLOAT_EQ(posMin.x(), 150.0f);
 }
@@ -1149,7 +1149,7 @@ TEST(NavigationOps, InterpolationNaNHandling) {
     provider.setCurrentIndex(0);
 
     // Pass NaN as offset - should return current rabbit position
-    gp_vec3 pos = getInterpolatedTargetPosition(provider, 50.0f, std::nanf(""));
+    gp_vec3 pos = getInterpolatedTargetPosition(provider, 50, std::nanf(""));
 
     // Should return position at current index (index 0 -> x=10)
     EXPECT_FLOAT_EQ(pos.x(), 10.0f);
