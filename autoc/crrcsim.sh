@@ -21,7 +21,7 @@ case "$INSTANCE" in
   #   DISPLAY=:0
   #   ;;
   *)
-    DISPLAY=:0
+    DISPLAY=:1
     ;;
 esac
 

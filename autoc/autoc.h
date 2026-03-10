@@ -15,8 +15,18 @@ struct WorkerContext;
 // See specs/FITNESS_SIMPLIFY_20260221.md for rationale.
 // ========================================================================
 
-// Distance penalty: nonlinear to keep small excursions expensive
-#define DISTANCE_POWER 1.2
+// Nonlinear fitness: values are normalized so pow(x/NORM, POWER) has its
+// linear crossover at x=NORM.  Below NORM the cost compresses (tolerated),
+// above NORM it amplifies (penalized disproportionately).
+
+// Distance: 5m nominal — closer is cheap, farther is expensive
+#define DISTANCE_NORM 5.0
+#define DISTANCE_POWER 1.5
+
+// Attitude delta: 200 deg/s nominal at 10Hz → 0.349 rad/step
+// Below this rate is normal maneuvering; above is jerk
+#define ATTITUDE_NORM 0.349
+#define ATTITUDE_POWER 1.5
 
 // Attitude scaling: computed per-path from path geometry (no manual tuning)
 // attitude_scale = path_distance / path_turn_rad (meters per radian)

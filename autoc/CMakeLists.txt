@@ -44,16 +44,8 @@ endif()
 
 if(PERFORMANCE_BUILD)
     message(STATUS "Enabling performance-optimized build for autoc (with debug symbols)")
-    # -O3: Aggressive optimization
-    # -g: Debug symbols for core dump analysis (doesn't affect runtime)
-    # -march=native: Use AVX-512/AVX2 and other CPU-specific instructions
-    # -mtune=native: Optimize instruction scheduling for this CPU
-    # -funroll-loops: Better SIMD utilization
-    # -flto: Link-time optimization for whole-program analysis
-    # -ffast-math: Aggressive FP optimizations (safe now that simTime is deterministic)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -g -march=native -mtune=native -funroll-loops -flto -ffast-math")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -g -march=native -mtune=native -funroll-loops -flto -ffast-math")
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -flto")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -g -march=native -mtune=native -funroll-loops -flto=auto")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -g -march=native -mtune=native -funroll-loops -flto=auto")
 endif()
 
 include(${VTK_USE_FILE})
@@ -105,5 +97,6 @@ if(ENABLE_AUTOC_TESTS)
   target_link_libraries(autoc_tests GTest::gtest GTest::gtest_main Eigen3::Eigen)
   enable_testing()
   add_test(NAME autoc_tests COMMAND autoc_tests)
-  add_custom_target(run_autoc_tests ALL DEPENDS autoc_tests COMMAND autoc_tests)
+  # --gtest_brief=1 only prints failures, not every test run
+  add_custom_target(run_autoc_tests ALL DEPENDS autoc_tests COMMAND autoc_tests --gtest_brief=1)
 endif()

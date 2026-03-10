@@ -85,7 +85,7 @@ struct NodeDef {
   int args;  // 0 = terminal
 };
 
-static const NodeDef allNodes[] = {
+const NodeDef allNodes[] = {
   {ADD, "ADD", 2},
   {SUB, "SUB", 2},
   {MUL, "MUL", 2},
@@ -130,7 +130,7 @@ static const NodeDef allNodes[] = {
   {GETDPHI_RATE, "GETDPHI_RATE", 0},     // 0 args: nullary terminal
   {GETDTHETA_RATE, "GETDTHETA_RATE", 0}, // 0 args: nullary terminal
 };
-static const int allNodesCount = sizeof(allNodes) / sizeof(allNodes[0]);
+const int allNodesCount = sizeof(allNodes) / sizeof(allNodes[0]);
 
 // Create function and terminal set
 void createNodeSet(GPAdfNodeSet& adfNs)
@@ -173,12 +173,7 @@ void createNodeSet(GPAdfNodeSet& adfNs)
 }
 
 
-
-// Legacy getIndex function - now delegates to portable implementation
-int getIndex(std::vector<Path>& path, MyGP& gp, gp_scalar arg) {
-  VectorPathProvider pathProvider(path, aircraftState.getThisPathIndex());
-  return getPathIndex(pathProvider, aircraftState, arg);
-}
+// REMOVED: getIndex() - replaced by getInterpolatedTargetPosition() in gp_evaluator_portable.cc
 
 // This function evaluates the fitness of a genetic tree using the portable evaluator.
 // This maintains compatibility while delegating to the portable implementation.

@@ -45,6 +45,12 @@ gp_scalar evaluateGPOperator(int opcode, PathProvider& pathProvider,
                          AircraftState& aircraftState, 
                          const gp_scalar* args, int argc, gp_scalar contextArg = 0.0f);
 
+// Path interpolation - returns position at goal time (binary search + linear lerp)
+// Uses int32_t timestamps for deterministic binary search (no float precision issues)
+gp_vec3 getInterpolatedTargetPosition(PathProvider& pathProvider,
+                                       int32_t currentTimeMsec,
+                                       gp_scalar offsetSteps);
+
 // Navigation helpers - same logic, different path access
 gp_scalar executeGetDPhi(PathProvider& pathProvider, AircraftState& aircraftState, gp_scalar arg);
 gp_scalar executeGetDTheta(PathProvider& pathProvider, AircraftState& aircraftState, gp_scalar arg);
@@ -67,8 +73,15 @@ inline gp_scalar applyRangeLimit(gp_scalar value) {
 }
 
 // Stack-based bytecode evaluation using portable operators
-gp_scalar evaluateBytecodePortable(const GPBytecode* program, int program_size, 
-                               PathProvider& pathProvider, AircraftState& aircraftState, 
+gp_scalar evaluateBytecodePortable(const GPBytecode* program, int program_size,
+                               PathProvider& pathProvider, AircraftState& aircraftState,
                                gp_scalar contextArg = 0.0f);
+
+// Expose LUT functions for bit-accurate testing
+#ifdef GP_TEST
+gp_scalar testFastSin(gp_scalar angle);
+gp_scalar testFastCos(gp_scalar angle);
+gp_scalar testFastAtan2(gp_scalar y, gp_scalar x);
+#endif
 
 #endif

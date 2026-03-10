@@ -57,17 +57,17 @@ public:
   gp_vec3 orientation;
   gp_scalar distanceFromStart;
   gp_scalar radiansFromStart;
-  gp_scalar simTimeMsec;  // Simulation timestamp in milliseconds
+  int32_t simTimeMsec;  // Simulation timestamp in milliseconds (integer for exact comparison)
 
   // Default constructor for backward compatibility
-  Path() : start(gp_vec3::Zero()), orientation(gp_vec3::UnitX()), 
-           distanceFromStart(0.0f), radiansFromStart(0.0f), simTimeMsec(0.0f) {}
+  Path() : start(gp_vec3::Zero()), orientation(gp_vec3::UnitX()),
+           distanceFromStart(0.0f), radiansFromStart(0.0f), simTimeMsec(0) {}
 
   // Constructor to ensure all fields are properly initialized
-  Path(const gp_vec3& start_pos, const gp_vec3& orient, 
+  Path(const gp_vec3& start_pos, const gp_vec3& orient,
        gp_scalar distance, gp_scalar radians, gp_scalar time_msec)
-    : start(start_pos), orientation(orient), distanceFromStart(distance), 
-      radiansFromStart(radians), simTimeMsec(time_msec) {}
+    : start(start_pos), orientation(orient), distanceFromStart(distance),
+      radiansFromStart(radians), simTimeMsec(static_cast<int32_t>(time_msec)) {}
 
   // Generic constructor to cast external Eigen scalars into gp_scalar
   template <typename Scalar>
@@ -76,7 +76,7 @@ public:
     : start(start_pos.template cast<gp_scalar>()), orientation(orient.template cast<gp_scalar>()),
       distanceFromStart(static_cast<gp_scalar>(distance)),
       radiansFromStart(static_cast<gp_scalar>(radians)),
-      simTimeMsec(static_cast<gp_scalar>(time_msec)) {}
+      simTimeMsec(static_cast<int32_t>(time_msec)) {}
 
   void sanitize() {
     auto sanitizeScalar = [](gp_scalar value, gp_scalar fallback = 0.0f) {
@@ -89,12 +89,12 @@ public:
     }
     distanceFromStart = sanitizeScalar(distanceFromStart);
     radiansFromStart = sanitizeScalar(radiansFromStart);
-    simTimeMsec = sanitizeScalar(simTimeMsec);
+    if (simTimeMsec < 0) simTimeMsec = 0;
   }
 
 #ifdef GP_BUILD
   void dump(std::ostream& os) {
-    os << boost::format("Path: (%f, %f, %f), Odometer: %f, Turnmeter: %f, Time: %f")
+    os << boost::format("Path: (%f, %f, %f), Odometer: %f, Turnmeter: %f, Time: %d")
       % start[0] % start[1] % start[2]
       % distanceFromStart
       % radiansFromStart
@@ -117,6 +117,9 @@ public:
 BOOST_CLASS_VERSION(Path, 2)
 #endif
 
+// Maximum offset steps for path interpolation (±1 second at 100ms/step)
+constexpr int MAX_OFFSET_STEPS = 10;
+
 // Portable path provider interface for unified GP evaluation
 // Abstracts path access for both vector and single-path environments
 class PathProvider {
@@ -125,6 +128,13 @@ public:
     virtual const Path& getPath(int index) const = 0;
     virtual int getCurrentIndex() const = 0;
     virtual int getPathSize() const = 0;
+
+    // Get the timestamp of the last waypoint in the path
+    int32_t getMaxTimeMsec() const {
+        int size = getPathSize();
+        if (size == 0) return 0;
+        return getPath(size - 1).simTimeMsec;
+    }
 };
 
 #if defined(GP_BUILD) || defined(GP_TEST)
@@ -173,40 +183,8 @@ public:
 // Forward declaration for AircraftState
 struct AircraftState;
 
-// Portable helper function for GP path indexing
-// Uses pure time-domain lookahead: N steps = N * SIM_TIME_STEP_MSEC ahead/behind
-// This is cleaner than distance-based and works correctly with variable rabbit speed
-inline int getPathIndex(PathProvider& pathProvider, AircraftState& aircraftState, gp_scalar arg) {
-    if (std::isnan(arg)) {
-        return pathProvider.getCurrentIndex();
-    }
-
-    int steps = CLAMP_DEF((int)arg, -5, 5);
-    // Clamp current index defensively
-    int currentStep = CLAMP_DEF(pathProvider.getCurrentIndex(), 0, pathProvider.getPathSize() - 1);
-
-    // Time-based lookahead: N steps = N * 100ms
-    const gp_scalar currentTimeMsec = pathProvider.getPath(currentStep).simTimeMsec;
-    const gp_scalar timeGoalMsec = currentTimeMsec + steps * SIM_TIME_STEP_MSEC;
-
-    // Use a small epsilon to avoid off-by-one flip-flops when timeGoalMsec is
-    // very close to a waypoint boundary.
-    constexpr gp_scalar kEps = static_cast<gp_scalar>(0.1f);  // 0.1ms epsilon
-
-    if (steps > 0) {
-        while (currentStep < pathProvider.getPathSize() - 1 &&
-               pathProvider.getPath(currentStep).simTimeMsec + kEps < timeGoalMsec) {
-            currentStep++;
-        }
-    } else if (steps < 0) {
-        while (currentStep > 0 &&
-               pathProvider.getPath(currentStep).simTimeMsec - kEps > timeGoalMsec) {
-            currentStep--;
-        }
-    }
-
-    return currentStep;
-}
+// REMOVED: getPathIndex() - replaced by getInterpolatedTargetPosition() in gp_evaluator_portable.cc
+// The old discrete index lookup caused jitter sensitivity; interpolation provides smooth sensor values.
 
 /*
 * portable aircraft state
