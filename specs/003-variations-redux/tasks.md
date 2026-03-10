@@ -79,41 +79,51 @@
 
 ---
 
-## Phase 5: User Story 3 - Entry Condition Variations (Priority: P3)
+## Phase 5: User Story 3 - Variable Rabbit Speed (Priority: P3) — REORDERED
 
-**Goal**: Enable entry heading/roll/pitch/speed variations and validate GP evolves recovery behaviors
+**Goal**: Enable variable rabbit speed (wind + speed variations) and validate GP evolves speed-adaptive throttle control
 
-**Independent Test**: Enable EnableEntryVariations=1 with 36 scenarios. Run training, verify aircraft launches with varied attitudes.
+**Rationale**: Reordered ahead of entry variations. Entry variations require intercept-phase fitness ramp (early off-path steps shouldn't penalize fitness while craft is intercepting from arbitrary position). Rabbit speed variation is additive on top of wind and doesn't need fitness function changes.
 
-### Implementation for User Story 3
+**Independent Test**: Set RabbitSpeedSigma=3.0 with wind variations enabled. Run training, verify speed variation in path timestamps.
 
-- [ ] T020 [US3] Update autoc.ini: set EnableEntryVariations=1, WindScenarios=36 in `autoc/autoc.ini`
-- [ ] T021 [US3] Run short validation (10 gens) to verify entry offsets applied: `./build/autoc 2>&1 | tee log/autoc-003-p3-smoke.log`
-- [ ] T022 [US3] Verify autoc startup log shows variation table with non-zero entry offsets (heading, roll, pitch, speed)
-- [ ] T023 [US3] If generation time is unacceptable, reduce WindScenarios to 25 or 16
-- [ ] T024 [US3] Run 200-gen training: `./build/autoc 2>&1 | tee log/autoc-003-p3.log`
-- [ ] T025 [US3] Analyze evolved GP tree from `data.stc` for recovery node usage (GETROLL_RAD, GETPITCH_RAD, GETVEL)
-- [ ] T026 [US3] Render results to verify aircraft recovers from off-nominal entries
-- [ ] T027 [US3] Document results: fitness value, crash rate, recovery behaviors observed
+### Implementation for User Story 3 (Variable Rabbit Speed)
 
-**Checkpoint**: Entry+wind variations working. Evolved controllers handle off-nominal entries.
+- [ ] T020 [US3] Update autoc.ini: set RabbitSpeedSigma=3.0 in `autoc/autoc.ini` (wind variations already enabled)
+- [ ] T021 [US3] Run short validation (10 gens) to verify speed variation: `./build/autoc 2>&1 | tee log/autoc-003-p3-smoke.log`
+- [ ] T022 [US3] Verify bakeoff data shows varied rabbit speeds across scenarios
+- [ ] T023 [US3] Run 200-gen training: `./build/autoc 2>&1 | tee log/autoc-003-p3.log`
+- [ ] T024 [US3] Analyze fitness convergence — compare to US2 wind-only baseline (1.81M)
+- [ ] T025 [US3] Analyze evolved GP tree for GETDTARGET/GETVEL usage patterns (speed adaptation)
+- [ ] T026 [US3] Bytecode extract and eval pipeline verification
+- [ ] T027 [US3] Document results: fitness value, speed adaptation behaviors observed
+
+**Checkpoint**: Wind + speed variations working. Evolved controllers adapt throttle to varying rabbit speed.
 
 ---
 
-## Phase 6: User Story 4 - Variable Rabbit Speed (Priority: P4)
+## Phase 6: User Story 4 - Entry Condition Variations (Priority: P4) — BLOCKED
 
-**Goal**: Enable variable rabbit speed and validate GP evolves speed-adaptive throttle control
+**Goal**: Enable entry heading/roll/pitch/speed variations and validate GP evolves recovery behaviors
 
-**Independent Test**: Set RabbitSpeedSigma=2.0, run training, verify speed variation in path timestamps.
+**Status**: BLOCKED — Requires intercept-phase fitness ramp. When aircraft starts at an arbitrary position/heading, early steps will have large distance errors during intercept. Without ramping fitness penalty from 0→1 over an estimated intercept window, the signal-to-noise ratio is too low for GP to learn tracking vs recovery simultaneously.
 
-### Implementation for User Story 4
+**Prerequisites**:
+- Design and implement intercept fitness ramp (dynamic based on starting position/heading)
+- Estimate intercept time from entry offset magnitude
+- Ramp fitness weight from 0 at t=0 to 1.0 at t=intercept_estimate
 
-- [ ] T028 [US4] Update autoc.ini: set RabbitSpeedSigma=2.0, VariationRampStep=0 (disable ramp for non-ramped baseline) in `autoc/autoc.ini`
-- [ ] T029 [US4] Run 200-gen training with all variations: `./build/autoc 2>&1 | tee log/autoc-003-p4.log`
-- [ ] T030 [US4] Analyze fitness — compare to P3 (entry+wind only)
-- [ ] T031 [US4] Document results
+### Implementation for User Story 4 (Entry Variations)
 
-**Checkpoint**: Full variation suite enabled (entry + wind + variable rabbit speed)
+- [ ] T028 [US4] Design intercept fitness ramp: compute estimated intercept time from entry offset
+- [ ] T029 [US4] Implement fitness weight ramp in `autoc/autoc.cc` fitness computation
+- [ ] T030 [US4] Update autoc.ini: set EnableEntryVariations=1 in `autoc/autoc.ini`
+- [ ] T031 [US4] Run short validation to verify entry offsets applied and fitness ramp active
+- [ ] T032b [US4] Run 200-gen training: `./build/autoc 2>&1 | tee log/autoc-003-p4.log`
+- [ ] T033b [US4] Analyze evolved GP tree for recovery node usage (GETROLL_RAD, GETPITCH_RAD, GETVEL)
+- [ ] T034b [US4] Document results: fitness value, crash rate, recovery behaviors observed
+
+**Checkpoint**: Entry+wind+speed variations working. Evolved controllers handle off-nominal entries.
 
 ---
 
@@ -164,7 +174,7 @@
 ### User Story Dependencies
 
 This feature has **sequential dependencies** between stories because each phase adds complexity on top of the previous:
-- US1 (fitness tuning) → US2 (+ wind) → US3 (+ entry) → US4 (+ speed) → US5 (ramp tuning)
+- US1 (fitness tuning) → US2 (+ wind) → US3 (+ rabbit speed) → US4 (+ entry, needs intercept fitness ramp) → US5 (ramp tuning, deferred)
 
 This is intentional — progressive validation prevents debugging a 36-scenario failure when the root cause might be fitness constants.
 
@@ -191,9 +201,9 @@ This is intentional — progressive validation prevents debugging a 36-scenario 
 
 1. US1 → Tighter tracking validated → Commit constants
 2. US2 → Wind variations validated → Update autoc.ini
-3. US3 → Entry variations validated → Full variation training
-4. US4 → Variable speed added → Complete robustness suite
-5. US5 → Ramp tuning → Final production config
+3. US3 → Variable rabbit speed → Wind + speed robustness
+4. US4 → Entry variations → Requires intercept fitness ramp design/implementation
+5. US5 → Ramp tuning → Deferred (divergence detector issue)
 6. Each phase builds confidence before adding complexity.
 
 ---

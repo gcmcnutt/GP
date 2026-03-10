@@ -37,10 +37,10 @@
 - Need to refactor the opcode enum to only have one definition
 - Stop using numeric opcodes in the bytecode2cpp generator
 
-### [DEFERRED] GP Library Fitness Serialization Precision
-- Renderer shows fitness as 164073.000 instead of 164073.136503
-- Root cause: GP::save() in `/home/gmcnutt/GP/src/gp.cc:148-157` uses default ostream precision
-- Fix: Add `os << std::setprecision(17) << stdFitness` (17 = max_digits10 for double)
+### [DONE] GP Library Fitness Serialization Precision
+- ~~Renderer shows fitness as 164073.000 instead of 164073.136503~~
+- Fixed in 003-variations-redux: `src/gp.cc` now uses `std::setprecision(17)` for double round-trip
+- Note: Existing S3 archives still have truncated fitness; only new runs benefit
 
 ---
 
@@ -152,12 +152,22 @@ Current tracking layer (autoc-minimal.ini) follows the rabbit but has no awarene
 
 ## Embedded/Hardware Integration
 
-### [NEXT] Record S3 Profile in Extracted Artifacts
-- `gpextractor` and `bytecode2cpp` print a timestamp but not which S3 profile was used
-- Multiple S3 profiles exist (AWS default, minio) — need to record which one the
-  extract came from so artifacts can be traced back to source
+### [NEXT] Training Record Consistency & Provenance
+- Multiple S3 profiles/buckets exist (AWS default, minio, autoc-eval-arm) — need
+  consistent provenance in all outputs so artifacts can be traced back to source
+- **Fitness formatting**: `bytecode2cpp.cc` generated code comments use default
+  `operator<<` for `header.fitness` (may show exponent notation). Should use
+  `std::fixed << std::setprecision(6)` like gpextractor and gp_bytecode.cc do.
+- **S3 provenance gaps** — these locations print S3 key without bucket/profile:
+  - `autoc.cc:1982`: `"Results stored to S3: " << computedKeyName` — no bucket/profile
+  - `gp_bytecode.cc:62`: `"S3 Key: " << getS3Key()` — no bucket/profile
+  - `bytecode2cpp.cc:195,234`: generated comments have S3 Key but no bucket/profile
+  - `gpextractor.cc:273`: prints fitness and S3 key but no bucket/profile
+- **Good pattern**: `config_manager.cc:48-50` logs both bucket AND profile at startup
+- **Fitness in bout stream**: `autoc.cc:846` prints fitness without explicit precision
+- **Fix**: Add bucket+profile to GPBytecodeHeader (or a separate provenance struct),
+  embed in bytecode files and generated code, use consistent fixed-point formatting
 - Relevant for xiao-gp codebase (not yet in this repo)
-- Simple fix: embed the profile string in the generated output header/comment
 
 ### [NEXT] Export RC Commands to Xiao Log
 - Currently: GP Output (rc=[...]) only logged during autoc=Y test spans
