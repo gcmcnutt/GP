@@ -137,23 +137,23 @@ Current tracking layer (autoc-minimal.ini) follows the rabbit but has no awarene
   - Works correctly with variable rabbit speed
 - **Files**: `gp_evaluator_portable.cc`, `aircraft_state.h`, `tests/gp_evaluator_tests.cc`
 
-### [NEXT] Control Command Smoothness Fitness Objective
+### [DEFERRED] Control Command Smoothness Fitness Objective
 - Current fitness penalizes aircraft *attitude* changes but not *control command* changes
-- GP exploits crrcsim's airframe inertia smoothing — does pulse duty-cycle control
-- Throttle slams between 0.5 and 1.0; pitch/roll commands can reverse every tick
-- This won't transfer to real hardware (servo wear, latency, actuator limits)
-- **Proposed**: Add per-step control delta penalty matching existing pattern:
+- GP *sometimes* exploits crrcsim's airframe inertia smoothing — does pulse duty-cycle control
+- However, multiple runs with pop=20K and the expanded node set (23 nodes including
+  temporal RATE/PREV nodes) have evolved smooth proportional controllers without any
+  smoothness penalty. The bang-bang behavior appears seed-dependent, not systematic.
+- **Observation**: With enough population size and the right node set, GP finds smooth
+  solutions on its own. A smoothness penalty may be unnecessary overhead that constrains
+  the search space. Revisit only if bang-bang becomes dominant when variations are enabled.
+- **If needed**: Add per-step control delta penalty matching existing pattern:
   - `control_delta = |Δroll_cmd| + |Δpitch_cmd| + |Δthrottle_cmd|`
   - `control_sum += pow(control_delta / CONTROL_NORM, CONTROL_POWER)`
   - CONTROL_NORM ~0.2 (20% of range per tick = 2.0/sec full travel)
   - CONTROL_POWER 1.5 (matches distance/attitude convention)
-  - Scaling: fixed weight or path-relative like attitude
-- Penalize all three axes (roll, pitch, throttle)
 - **Related tuning**: Current DISTANCE_NORM=5.0 / DISTANCE_POWER=1.5 creates a "good enough"
-  zone at 15-20m where GP stops trying to get closer (marginal distance savings don't outweigh
-  attitude cost). Consider tightening alongside smoothness: e.g., NORM=3 POWER=2.0 would push
-  much harder toward tight tracking. These interact — smoothness + distance tuning should be
-  done together.
+  zone at 15-20m where GP stops trying to get closer. Consider tightening alongside smoothness
+  if needed: e.g., NORM=3 POWER=2.0 would push harder toward tight tracking.
 - **Files**: `autoc/autoc.cc` (fitness computation), `autoc/autoc.h` (constants)
 
 ### [NEXT] Fix LongSequential Path Immelman Segment
