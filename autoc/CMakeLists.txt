@@ -44,12 +44,8 @@ endif()
 
 if(PERFORMANCE_BUILD)
     message(STATUS "Enabling performance-optimized build for autoc (with debug symbols)")
-    # Simple -O3 only. Aggressive flags (-march=native, -funroll-loops, -flto, -ffast-math)
-    # removed post-Eigen integration — they interact badly with Eigen's expression templates
-    # in the FDM integrator, causing non-deterministic physics and broken training.
-    # Fix forward: re-add flags one at a time once Eigen integration is validated.
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -g")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -g")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -g -march=native -mtune=native -funroll-loops -flto=auto")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -g -march=native -mtune=native -funroll-loops -flto=auto")
 endif()
 
 include(${VTK_USE_FILE})
