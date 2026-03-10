@@ -19,9 +19,9 @@ struct WorkerContext;
 // linear crossover at x=NORM.  Below NORM the cost compresses (tolerated),
 // above NORM it amplifies (penalized disproportionately).
 
-// Distance: 5m nominal — closer is cheap, farther is expensive
-#define DISTANCE_NORM 5.0
-#define DISTANCE_POWER 1.5
+// Distance: 2m nominal — aggressive tightening for <10m tracking (was 5.0/1.5)
+#define DISTANCE_NORM 2.0
+#define DISTANCE_POWER 2.0
 
 // Attitude delta: 200 deg/s nominal at 10Hz → 0.349 rad/step
 // Below this rate is normal maneuvering; above is jerk

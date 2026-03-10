@@ -46,6 +46,7 @@ Fax:    (UK) 061 745 5999
 
 
 #include <iostream>
+#include <iomanip>
 #include "gp.h"
 
 using namespace std;
@@ -150,7 +151,7 @@ void GP::save (ostream& os)
   // Save variables.  Length and depth are not saved because it's no
   // problem to calculate them.
   os << fitnessValid << ' ';
-  os << stdFitness << ' ';
+  os << std::setprecision(17) << stdFitness << std::setprecision(6) << ' ';
 
   // Save container
   GPContainer::save (os);

@@ -307,3 +307,28 @@ gp_scalar executeGetEnergy(AircraftState& state) {
    - Smoothness (penalize control oscillation)
    - Efficiency (penalize throttle extremes)
    - Anticipation (reward early response to upcoming curves)
+
+---
+
+## Observations from 003-variations-redux (2026-03-09)
+
+### Lookahead is the Binding Constraint on Tracking Distance
+
+Analysis of a training run with tightened fitness params (DISTANCE_NORM=2.0, DISTANCE_POWER=2.0) showed:
+
+- **Median tracking distance: ~10.5m**, down from ~15-20m baseline
+- **Turn overshoots peak at ~16m** with dphi climbing from 22° to 46° through tight turns
+- **Pitch saturated at 1.0** during worst overshoots — the aircraft is physically trying as hard as it can
+- **Straight segment tracking is ~8-9m** — the fitness tuning helped here
+
+The GP's lookahead window via `GETDPHI(steps)` / `GETDTHETA(steps)` gives roughly 10-30m of path preview at ~16 m/s cruise speed. When a tight turn begins, the aircraft is already committed by the time it sees the curvature ramp up. It can't pre-position or anticipate.
+
+**Key insight**: The ~10m median is likely near the **physical ceiling** for reactive-only control with this craft, path geometry, and lookahead window. Further fitness tuning will yield diminishing returns. The turn overshoots are a planning/anticipation problem, not a control responsiveness problem.
+
+### What a Strategy Layer Would Need to Address
+
+1. **Turn anticipation**: "A sharp turn is coming in 50m — start bleeding speed and banking early." This requires lookahead beyond the GP's current ~10-30m reactive window.
+2. **Path feasibility**: "This turn radius is tighter than my min turn radius at current speed — I need to slow down NOW, not when I'm in the turn."
+3. **Arena awareness**: "The path curves back toward center after this turn — don't panic-correct, the geometry will bring me back."
+
+These are all examples of reasoning that requires a longer planning horizon than the current GP terminal set provides. The `GETPATHCURVE` terminal proposed in Option A above would be a lightweight first step.

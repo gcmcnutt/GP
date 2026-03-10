@@ -196,7 +196,7 @@ public:
         code << "//   Generation: " << header.generation << "\n";
         code << "//   Original Length: " << header.length << "\n";
         code << "//   Original Depth: " << header.depth << "\n";
-        code << "//   Fitness: " << (header.fitness_int / 1000000.0f) << "\n";
+        code << "//   Fitness: " << header.fitness << "\n";
         code << "//   Bytecode Instructions: " << program_size << "\n";
         code << "//\n";
         code << "#include \"gp_program.h\"\n\n";
@@ -235,7 +235,7 @@ public:
         code << "//   Generation: " << header.generation << "\n";
         code << "//   Original Length: " << header.length << "\n";
         code << "//   Original Depth: " << header.depth << "\n";
-        code << "//   Fitness: " << (header.fitness_int / 1000000.0f) << "\n";
+        code << "//   Fitness: " << header.fitness << "\n";
         code << "//   Bytecode Instructions: " << program_size << "\n";
         code << "//\n";
         code << "#include \"gp_program.h\"\n\n";

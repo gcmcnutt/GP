@@ -2,7 +2,7 @@
 
 **Location**: `~/GP/specs/BACKLOG.md`
 **Source**: Migrated from `~/GP/autoc/TODO`
-**Last Updated**: 2026-03-06 (added Path Interpolation)
+**Last Updated**: 2026-03-09 (003-variations-redux)
 
 ## Legend
 
@@ -74,17 +74,11 @@
 
 ## Robustness & Variations
 
-### [NEXT] Variations Project - Zero-shot Transfer
-- Goal: Get closer to zero-shot transfer from simulation to real aircraft
-- Variations to implement:
-  - Power, drag, service response times
-  - ✅ [DONE] Varying speed rabbit (see `autoc/specs/ZZZ-VARIABLE_RABBIT.md`)
-  - Craft variations (for robustness to airframe differences):
-    - CG position variation
-    - Wing loading variation
-    - Control surface response times/rates
-    - Drag coefficient variation
-    - Power/thrust variation
+### [ACTIVE] Variations Redux - Entry/Wind/Speed Variations
+- **Moved to**: `specs/003-variations-redux/` (feature branch `003-variations-redux`)
+- Covers: crrcsim integration, fitness distance tuning, progressive training ramp
+- Remaining for future VARIATIONS2:
+  - Craft variations: CG, wing loading, control surface rates, drag, power/thrust
 - **Reference**: `autoc/specs/ZZZ-VARIATIONS1.md`
 
 ---
@@ -117,26 +111,6 @@ Current tracking layer (autoc-minimal.ini) follows the rabbit but has no awarene
 - Energy management
 - Path preview / anticipation
 
-### [NEXT] Path Interpolation for Smooth Target Tracking
-- **Problem**: Current `getPathIndex()` snaps to discrete waypoints, causing issues:
-  - **Timing jitter overshoot**: Waypoint at t=98ms is skipped when looking for t=100ms
-    because `98 < 100`, jumping to t=200ms instead (discovered in gp_evaluator_tests)
-  - **Discontinuous sensors**: GETDPHI/GETDTHETA jump discretely between waypoints
-  - **Real-time sensitivity**: On xiao-gp, eval loop jitter causes erratic sensor values
-- **Solution**: Interpolate target position based on exact time instead of snapping to waypoints
-  - Binary search for bracketing waypoints around goal time
-  - Linear interpolation between them: `pos = lerp(p0, p1, frac)`
-  - Eval at t=99ms vs t=101ms gives nearly identical positions (smooth, not discrete jump)
-- **Implementation**:
-  - Add `getInterpolatedTargetPosition(pathProvider, currentTimeMsec, offsetSteps)`
-  - Update `executeGetDPhi/DTheta/DTarget` to use interpolated positions
-  - Remove discrete `getPathIndex()` function
-- **Benefits**:
-  - Robust to timing jitter (no more overshoot problem)
-  - GP trains on smooth continuous tracking matching real-world behavior
-  - Works correctly with variable rabbit speed
-- **Files**: `gp_evaluator_portable.cc`, `aircraft_state.h`, `tests/gp_evaluator_tests.cc`
-
 ### [DEFERRED] Control Command Smoothness Fitness Objective
 - Current fitness penalizes aircraft *attitude* changes but not *control command* changes
 - GP *sometimes* exploits crrcsim's airframe inertia smoothing — does pulse duty-cycle control
@@ -151,9 +125,7 @@ Current tracking layer (autoc-minimal.ini) follows the rabbit but has no awarene
   - `control_sum += pow(control_delta / CONTROL_NORM, CONTROL_POWER)`
   - CONTROL_NORM ~0.2 (20% of range per tick = 2.0/sec full travel)
   - CONTROL_POWER 1.5 (matches distance/attitude convention)
-- **Related tuning**: Current DISTANCE_NORM=5.0 / DISTANCE_POWER=1.5 creates a "good enough"
-  zone at 15-20m where GP stops trying to get closer. Consider tightening alongside smoothness
-  if needed: e.g., NORM=3 POWER=2.0 would push harder toward tight tracking.
+- **Related tuning**: DISTANCE_NORM/POWER tuning moved to `003-variations-redux`.
 - **Files**: `autoc/autoc.cc` (fitness computation), `autoc/autoc.h` (constants)
 
 ### [NEXT] Fix LongSequential Path Immelman Segment
@@ -217,6 +189,34 @@ Current tracking layer (autoc-minimal.ini) follows the rabbit but has no awarene
 
 ---
 
+## Performance
+
+### [DEFERRED] Wind Speed Variation
+- Currently only wind direction varies across scenarios (via windDirectionOffset)
+- Wind speed is fixed at base value from autoc_config.xml (e.g., 12 m/s)
+- crrcsim adds Dryden turbulence on top (MIL-HDBK-1797), which provides continuous
+  body-axis gust perturbations (~±10% of base wind speed, σ_w = 0.1 * V_wind)
+- Different windSeeds produce different turbulence sequences, so GP already sees
+  *stochastic* speed variation — but not *systematic* bias (e.g., 8 vs 16 m/s base)
+- **Enhancement**: Add windSpeedOffset or windSpeedFactor to ScenarioMetadata
+- Would need: new field in ScenarioMetadata, application in crrcsim windfield.cpp,
+  sigma config in autoc.ini, generation in variation_generator.h
+- This would train robustness to *different wind regimes*, complementing the
+  turbulence which trains robustness to *gusts within a single regime*
+
+### [NEXT] Batch and Cache Deterministic Scenarios
+- With 36 wind scenarios, autoc serializes the full scenario table per individual evaluation
+- This causes ~4x throughput hit (observed: 400% slower with 36 scenarios vs 1)
+- Scenarios ARE deterministic per generation (seed + sigmas → offsets)
+- **Optimization**: Send scenario table once at generation start, then only send population
+  batches (GP trees) back and forth per individual
+- crrcsim caches the scenario table and applies it to each incoming individual
+- Reduces per-eval serialization from O(scenarios × individual) to O(individual)
+- **Files**: `autoc/autoc.cc` (eval dispatch), `autoc/minisim.h` (ScenarioMetadata),
+  crrcsim `inputdev_autoc.cpp` (scenario reception)
+
+---
+
 ## Code Cleanup
 
 ### [DEFERRED] Memory Leak Investigation
@@ -254,6 +254,9 @@ Current tracking layer (autoc-minimal.ini) follows the rabbit but has no awarene
 ---
 
 ## Completed (Reference)
+
+### [DONE] Path Interpolation
+- **Reference**: `specs/002-path-interpolation/`
 
 ### [DONE] Variable Speed Rabbit
 - **Reference**: `autoc/specs/ZZZ-VARIABLE_RABBIT.md`

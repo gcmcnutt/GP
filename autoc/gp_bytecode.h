@@ -40,14 +40,14 @@ struct GPBytecodeHeader {
     uint32_t magic;         // File format magic number
     uint32_t version;       // Bytecode format version
     uint32_t instruction_count;
-    uint32_t fitness_int;   // Fitness as fixed-point (fitness * 1000000)
+    double fitness;         // Original GP fitness value
     uint32_t length;        // Original GP length
     uint32_t depth;         // Original GP depth
     char s3_key[256];       // Source S3 key
     uint32_t generation;    // Generation number
     
     static const uint32_t MAGIC = 0x47504243; // "GPBC"
-    static const uint32_t VERSION = 1;
+    static const uint32_t VERSION = 2;
 
 #ifdef GP_BUILD
     friend class boost::serialization::access;
@@ -57,7 +57,7 @@ struct GPBytecodeHeader {
         ar& magic;
         ar& version;
         ar& instruction_count;
-        ar& fitness_int;
+        ar& fitness;
         ar& length;
         ar& depth;
         ar& boost::serialization::make_array(s3_key, 256);
@@ -82,7 +82,7 @@ public:
     
     // Get program information
     const GPBytecodeHeader& getHeader() const { return header; }
-    gp_scalar getFitness() const { return header.fitness_int / 1000000.0f; }
+    gp_scalar getFitness() const { return header.fitness; }
     uint32_t getLength() const { return header.length; }
     uint32_t getDepth() const { return header.depth; }
     const std::string getS3Key() const { return std::string(header.s3_key); }
