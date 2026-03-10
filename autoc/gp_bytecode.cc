@@ -4,6 +4,7 @@
 #include <fstream>
 #include <iostream>
 #include <cmath>
+#include <iomanip>
 #include <algorithm>
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
@@ -61,7 +62,7 @@ bool GPBytecodeInterpreter::loadProgram(const std::string& filename) {
     std::cout << "  S3 Key: " << getS3Key() << std::endl;
     std::cout << "  Generation: " << getGeneration() << std::endl;
     std::cout << "  Length: " << getLength() << ", Depth: " << getDepth() << std::endl;
-    std::cout << "  Fitness: " << getFitness() << std::endl;
+    std::cout << "  Fitness: " << std::fixed << std::setprecision(6) << getFitness() << std::endl;
     std::cout << "  Instructions: " << header.instruction_count << std::endl;
     
     return true;
