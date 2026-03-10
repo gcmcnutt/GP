@@ -1,4 +1,4 @@
-# LAYERED_CONTROLLER: Evolving Beyond Basic Tracking
+# [TRANSFERRED to specs/010-safety-layer] LAYERED_CONTROLLER: Evolving Beyond Basic Tracking
 
 ## The Current Problem
 
