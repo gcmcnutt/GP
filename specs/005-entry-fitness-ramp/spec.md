@@ -19,7 +19,7 @@ This lets early-generation GP individuals receive gradient signal for "heading t
 
 **Acceptance Scenarios**:
 
-1. **Given** an aircraft starting 60m from the path with 90-degree heading offset, **When** the intercept budget is estimated at 7 seconds, **Then** at t=1s the distance penalty is scaled to approximately 1/7 of the full penalty value.
+1. **Given** an aircraft starting 60m from the path with 90-degree heading offset, **When** the intercept budget is estimated at 7 seconds, **Then** at t=1s the distance penalty is scaled to near-floor (~0.12) due to the quadratic ramp (FR-009).
 2. **Given** an aircraft that has completed its intercept budget, **When** it reaches the tracking phase, **Then** the distance penalty is at full (unscaled) value, identical to the current system.
 3. **Given** two GP individuals where one turns toward the path and one flies away, **When** both start from the same offset entry, **Then** the one turning toward the path has meaningfully lower fitness (better).
 
@@ -36,7 +36,7 @@ The researcher configures position offset variations in `autoc.ini`. The system 
 **Acceptance Scenarios**:
 
 1. **Given** `EntryPositionSigma=30` configured, **When** scenarios are generated, **Then** starting positions are Gaussian-distributed around the path start with sigma of 30 meters (horizontal).
-2. **Given** position offset variations, **When** sent to minisim/crrcsim, **Then** the simulator applies the position offset to the aircraft initial state before simulation begins.
+2. **Given** position offset variations, **When** sent to crrcsim, **Then** the simulator applies the position offset to the aircraft initial state before simulation begins. Minisim deserializes the metadata without error but does not apply variation offsets.
 3. **Given** position sigma of 0, **When** scenarios are generated, **Then** behavior is identical to current system (no position offset).
 
 ---
@@ -82,11 +82,11 @@ The system computes an approximate time-to-intercept from the initial conditions
 - **FR-003**: The scaling function MUST be applied per-step BEFORE the power function (e.g., `pow(scale * distance / DISTANCE_NORM, DISTANCE_POWER)`), so it modulates the raw values.
 - **FR-004**: Steps beyond the intercept budget time MUST receive full (unscaled) distance penalty, identical to current behavior.
 - **FR-005**: System MUST add entry position offsets (North, East, Down) to ScenarioMetadata and VariationOffsets, following the existing Gaussian variation_generator pattern. Offsets are relative to the test origin (path start at SIM_INITIAL_ALTITUDE).
-- **FR-006**: Position offset MUST be configurable via `autoc.ini` sigma parameters (e.g., `EntryPositionRadiusSigma`, `EntryPositionAltSigma`), with 0 meaning disabled. Cylindrical generation is natural for the cylindrical arena: Gaussian radius + uniform angle + Gaussian altitude offset.
+- **FR-006**: Position offset MUST be configurable via a single `autoc.ini` sigma parameter (`EntryPositionSigma`), with 0 meaning disabled. The sigma controls a random point and attitude inside the arena cylinder: Gaussian radius + uniform angle + proportional altitude offset, clamped to safe bounds.
 - **FR-011**: Generated entry positions MUST stay within safe arena bounds (compile-time constants with ~15m margin from crash boundaries: max radius ~55m, altitude range approximately -22m to -105m NED). Positions exceeding bounds MUST be clamped.
-- **FR-012**: Existing attitude variation sigmas (heading, roll, pitch) MUST be expandable toward all-attitude entries as the training ramp matures. The variation_generator and RAMP_LANDSCAPE infrastructure already support this — sigmas can be increased in autoc.ini.
+- **FR-012**: *(Satisfied by existing infrastructure)* Existing attitude variation sigmas (heading, roll, pitch) are already expandable toward all-attitude entries via autoc.ini — no implementation needed for this feature.
 - **FR-007**: The intercept budget estimation MUST handle the degenerate case of zero displacement/zero heading offset by producing a near-zero budget (immediate full tracking penalty).
-- **FR-008**: The intercept budget MUST be capped at a configurable maximum to prevent near-zero scaling for entire runs.
+- **FR-008**: The intercept budget MUST be capped at a compile-time constant maximum (INTERCEPT_BUDGET_MAX) to prevent near-zero scaling for entire runs.
 - **FR-009**: The scaling function MUST be non-linear (e.g., quadratic or sigmoid) to provide some gradient signal early while ramping quickly toward full penalty near intercept.
 - **FR-010**: The scaling function MUST have a configurable floor (minimum scale, e.g., ~0.1) and ceiling (maximum scale, e.g., 1.0), defined as compile-time constants in a header file alongside other fitness constants (DISTANCE_NORM, etc.), not as autoc.ini runtime parameters.
 
@@ -94,13 +94,13 @@ The system computes an approximate time-to-intercept from the initial conditions
 
 - **Intercept Budget**: Estimated time in seconds for the aircraft to reach the path from its initial offset position and heading. Computed once per scenario at the start of each scenario's evaluation. Each of the ~49 scenarios in a generation gets its own budget based on its specific entry conditions.
 - **Intercept Scale Factor**: Per-step multiplier on distance and attitude (floor to ceiling, e.g., 0.1 to 1.0) derived from `f(step_time / intercept_budget)`. Applied to raw values before normalization and power function. Floor/ceiling are compile-time constants.
-- **Entry Position Offset**: North/East/Down displacement in meters from test origin (path start at SIM_INITIAL_ALTITUDE). Generated in cylindrical coordinates (Gaussian radius + uniform angle + Gaussian altitude), clamped to safe arena bounds. Added to ScenarioMetadata alongside existing heading/roll/pitch/speed offsets.
+- **Entry Position Offset**: North/East/Down displacement in meters from test origin (path start at SIM_INITIAL_ALTITUDE). Generated from a single `EntryPositionSigma` parameter: Gaussian radius + uniform angle + proportional altitude offset, clamped to safe arena bounds. Added to ScenarioMetadata alongside existing heading/roll/pitch/speed offsets.
 
 ## Success Criteria *(mandatory)*
 
 ### Measurable Outcomes
 
-- **SC-001**: GP evolution with 30m position-offset entries produces controllers that successfully intercept and track (fitness below crash threshold) within 50 generations.
+- **SC-001**: GP evolution with 30m position-offset entries produces controllers that successfully intercept and track (fitness below ~48M worst-case baseline, indicating non-trivial tracking) within 50 generations.
 - **SC-002**: Evolved controllers handle any entry position within the trained sigma envelope without crashes on 90%+ of test scenarios.
 - **SC-003**: A single controller handles both intercept and tracking phases — no separate controller or mode switch needed.
 - **SC-004**: Fitness values during intercept-phase training differentiate between good and bad intercept behavior (fitness variance across population > 10% in generation 1).
@@ -114,4 +114,4 @@ The system computes an approximate time-to-intercept from the initial conditions
 - The scaling function applies to BOTH distance and attitude delta components during the intercept budget window.
 - The path does NOT publish an optimal approach attitude — any intercept direction is valid, so the budget estimation does not assume a specific approach vector.
 - The rabbit speed for budget estimation uses the nominal configured speed, not per-step variable speed.
-- Minisim already supports entry heading/roll/pitch offsets via ScenarioMetadata; adding position offset follows the same pattern.
+- Minisim does not apply variation offsets (attitude or position) — it only needs to deserialize ScenarioMetadata without error. Only crrcsim applies entry variations.

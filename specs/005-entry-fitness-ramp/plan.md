@@ -51,7 +51,7 @@ autoc/
 ├── variation_generator.h # MODIFY: Add entryNorthOffset, entryEastOffset, entryAltOffset; cylindrical generation
 ├── config_manager.cc    # MODIFY: Add EntryPositionSigma config parameter
 ├── minisim.h            # MODIFY: Add position offset fields to ScenarioMetadata (version bump to 6)
-├── minisim.cc           # MODIFY: Apply position offset to initial aircraft position
+├── minisim.cc           # VERIFY: Compiles/runs cleanly with ScenarioMetadata v6 (does NOT apply variations)
 └── tests/
     └── gp_evaluator_tests.cc  # MODIFY: Add intercept budget and scaling function tests
 

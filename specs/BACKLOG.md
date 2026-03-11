@@ -51,8 +51,13 @@
 ### [DEFERRED] Simplify Eval Tree Interface
 - Try to simplify the eval tree by passing a class reference instead of N args
 
-### [DEFERRED] Checkpoint/Resume Evolution
-- Checkpoint/resume a run - including for LLM enhancement over time
+### [NEXT] Checkpoint/Resume Evolution
+- Dump full state at end of each generation so a crashed/paused run can resume from last completed gen
+- State includes: population (GP trees + fitness), PRNG state, generation counter, elite store, scenario variation table
+- Use local storage (not S3) for checkpoint files — fast writes, no network dependency
+- Must restore deterministic PRNG sequence so resumed run produces identical results to uninterrupted run
+- Motivation: long runs (200 gens × ~160s/gen ≈ 9 hours) are vulnerable to crashes, OOM, machine reboots
+- Future: could also enable LLM-guided fitness function evolution between checkpoints
 
 ---
 

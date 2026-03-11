@@ -19,11 +19,11 @@
 
 - [ ] T001 [P] Add intercept budget and scaling constants (INTERCEPT_SCALE_FLOOR, INTERCEPT_SCALE_CEILING, INTERCEPT_BUDGET_MAX, INTERCEPT_TURN_RATE) to autoc/autoc.h alongside existing DISTANCE_NORM/DISTANCE_POWER constants
 - [ ] T002 [P] Add entry safe-bounds constants (ENTRY_SAFE_RADIUS, ENTRY_SAFE_ALT_MIN, ENTRY_SAFE_ALT_MAX) to autoc/autoc.h
-- [ ] T003 [P] Add positionRadiusSigma and positionAltSigma fields to VariationSigmas struct in autoc/variation_generator.h
+- [ ] T003 [P] Add positionSigma field to VariationSigmas struct in autoc/variation_generator.h
 - [ ] T004 [P] Add entryNorthOffset, entryEastOffset, entryAltOffset fields to VariationOffsets struct in autoc/variation_generator.h
 - [ ] T005 Add entryNorthOffset, entryEastOffset, entryAltOffset fields to ScenarioMetadata in autoc/minisim.h with version bump from 5 to 6 (backward-compatible: v5 loads set position offsets to 0.0)
-- [ ] T006 [P] Add entryPositionRadiusSigma and entryPositionAltSigma to ExtraConfig in autoc/autoc.h (default 0.0)
-- [ ] T007 Add EntryPositionRadiusSigma and EntryPositionAltSigma config parameters to autoc/config_manager.cc
+- [ ] T006 [P] Add entryPositionSigma to ExtraConfig in autoc/autoc.h (default 0.0)
+- [ ] T007 Add EntryPositionSigma config parameter to autoc/config_manager.cc
 
 **Checkpoint**: All data structures and constants in place. Build must pass with no functional change (all new fields default to 0).
 
@@ -35,12 +35,12 @@
 
 **⚠️ CRITICAL**: US1 (scaling) can proceed without this phase, but US2 and US3 depend on correct position handling
 
-- [ ] T008 Clean up hardcoded initial position (-2.19, 5.49, -36.93) in autoc/minisim.cc to use canonical test origin (0, 0, SIM_INITIAL_ALTITUDE) and apply entryNorthOffset/entryEastOffset/entryAltOffset from ScenarioMetadata
+- [ ] T008 Ensure minisim (autoc/minisim.cc) compiles and runs cleanly with ScenarioMetadata v6 (new position offset fields). Minisim does NOT need to apply variation offsets — it just must not break on deserialization. Only crrcsim applies entry variations.
 - [ ] T009 [P] Add entryNorthOffset, entryEastOffset, entryAltOffset globals to ~/crsim/crrcsim-0.9.13/src/global.h and ~/crsim/crrcsim-0.9.13/src/global.cpp (default 0.0)
 - [ ] T010 [P] Read entryNorthOffset, entryEastOffset, entryAltOffset from ScenarioMetadata into globals in ~/crsim/crrcsim-0.9.13/src/mod_inputdev/inputdev_autoc/inputdev_autoc.cpp
 - [ ] T011 Apply position offsets (posX += entryNorthOffset, posY += entryEastOffset, Altitude += entryAltOffset) after VARIATIONS1 attitude block in ~/crsim/crrcsim-0.9.13/src/crrc_main.cpp
 
-**Checkpoint**: Both minisim and crrcsim apply position offsets from ScenarioMetadata. Build both repos (GP make, crrcsim make). Verify no behavioral change with offsets=0.
+**Checkpoint**: crrcsim applies position offsets from ScenarioMetadata. Minisim compiles and runs cleanly with v6 metadata (does not apply variations). Build both repos (GP make, crrcsim make). Verify no behavioral change with offsets=0.
 
 ---
 
@@ -93,14 +93,14 @@
 
 ### Tests for User Story 2
 
-- [ ] T019 [P] [US2] Add unit test for cylindrical position generation: verify Gaussian radius distribution, uniform angle, altitude offset, clamping to ENTRY_SAFE_RADIUS and ENTRY_SAFE_ALT bounds in autoc/tests/gp_evaluator_tests.cc
+- [ ] T019 [P] [US2] Add unit test for cylindrical position generation: verify Gaussian radius, uniform angle, proportional altitude offset, clamping to ENTRY_SAFE_RADIUS and ENTRY_SAFE_ALT bounds from single EntryPositionSigma in autoc/tests/gp_evaluator_tests.cc
 
 ### Implementation for User Story 2
 
-- [ ] T020 [US2] Add cylindrical position generation to generateVariationsFromGPrand() in autoc/variation_generator.h: half-normal radius, uniform angle → N/E, Gaussian altitude, clamp to safe bounds
+- [ ] T020 [US2] Add cylindrical position generation to generateVariationsFromGPrand() in autoc/variation_generator.h: half-normal radius from positionSigma, uniform angle → N/E, proportional altitude offset, clamp to safe bounds
 - [ ] T021 [US2] Add position offset propagation in populateVariationOffsets() in autoc/autoc.cc: copy entryNorthOffset/entryEastOffset/entryAltOffset to ScenarioMetadata with RAMP_LANDSCAPE scaling
-- [ ] T022 [US2] Update VariationSigmas::fromDegrees() or add factory that accepts position sigma params in autoc/variation_generator.h
-- [ ] T023 [US2] Wire entryPositionRadiusSigma/entryPositionAltSigma from ExtraConfig into VariationSigmas at variation generation call site in autoc/autoc.cc
+- [ ] T022 [US2] Update VariationSigmas::fromDegrees() or add factory that accepts single positionSigma param in autoc/variation_generator.h
+- [ ] T023 [US2] Wire entryPositionSigma from ExtraConfig into VariationSigmas at variation generation call site in autoc/autoc.cc
 
 **Checkpoint**: Full position variation pipeline working. Aircraft starts at random positions within safe arena bounds. Fitness scaling from US1 handles the intercept phase.
 
@@ -112,8 +112,8 @@
 
 - [ ] T024 Verify build stability: GP `make` (from ~/GP/build), crrcsim `make` (from ~/crsim/crrcsim-0.9.13), xiao-gp `pio run` (from ~/xiao-gp)
 - [ ] T025 Run all GoogleTest tests: `./build/autoc_tests` passes
-- [ ] T026 Integration validation: run short evolution (5 generations) with EntryPositionRadiusSigma=30 and verify fitness differentiates between good and bad intercept behavior (SC-004: variance > 10% in gen 1)
-- [ ] T027 Backward compatibility validation: run with EntryPositionRadiusSigma=0 and verify identical fitness to baseline (SC-005)
+- [ ] T026 Integration validation: run short evolution (5 generations) with EntryPositionSigma=30 and verify fitness differentiates between good and bad intercept behavior (SC-004: variance > 10% in gen 1)
+- [ ] T027 Backward compatibility validation: run with EntryPositionSigma=0 and verify identical fitness to baseline (SC-005)
 
 ---
 
