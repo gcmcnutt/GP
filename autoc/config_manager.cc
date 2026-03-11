@@ -115,6 +115,9 @@ GPConfigVarInformation* ConfigManager::createConfigArray() {
         {"EntryPitchSigma", DATADOUBLE, &extraConfig->entryPitchSigma},
         {"EntrySpeedSigma", DATADOUBLE, &extraConfig->entrySpeedSigma},
         {"WindDirectionSigma", DATADOUBLE, &extraConfig->windDirectionSigma},
+        // Entry position variations (see specs/005-entry-fitness-ramp)
+        {"EntryPositionRadiusSigma", DATADOUBLE, &extraConfig->entryPositionRadiusSigma},
+        {"EntryPositionAltSigma", DATADOUBLE, &extraConfig->entryPositionAltSigma},
         // Variation landscape ramp (see specs/RAMP_LANDSCAPE.md)
         {"VariationRampStep", DATAINT, &extraConfig->variationRampStep},
         // Variable rabbit speed (see specs/VARIABLE_RABBIT.md)

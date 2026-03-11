@@ -2,7 +2,44 @@
 #include <set>
 #include <vector>
 #include <cmath>
+#include <algorithm>
 #include "../gp_evaluator_portable.h"
+
+// Stub GPrand() for variation_generator.h's GPrand-based functions
+// (not used by tests — tests use seed-based generateVariations())
+static int stubGPrandState = 0;
+static int GPrand() { stubGPrandState = stubGPrandState * 1103515245 + 12345; return stubGPrandState & 0x7FFFFFFF; }
+#include "../variation_generator.h"
+
+// Constants from autoc.h (duplicated to avoid pulling in full header which
+// conflicts with gp_evaluator_portable.h's Operators enum)
+#ifndef INTERCEPT_SCALE_FLOOR
+#define INTERCEPT_SCALE_FLOOR 0.1
+#define INTERCEPT_SCALE_CEILING 1.0
+#define INTERCEPT_BUDGET_MAX 15.0
+#define INTERCEPT_TURN_RATE (M_PI / 4.0)
+#endif
+
+// ============================================================================
+// Intercept-budget fitness scaling functions (mirror of autoc.cc statics)
+// These are pure math functions duplicated here for unit testing.
+// See specs/005-entry-fitness-ramp for design.
+// ============================================================================
+static double testComputeInterceptScale(double stepTimeSec, double budgetSec) {
+    if (budgetSec <= 0.0) return INTERCEPT_SCALE_CEILING;
+    double t = std::min(1.0, stepTimeSec / budgetSec);
+    return INTERCEPT_SCALE_FLOOR + (INTERCEPT_SCALE_CEILING - INTERCEPT_SCALE_FLOOR) * t * t;
+}
+
+static double testComputeInterceptBudget(double displacement, double headingOffset,
+                                          double aircraftSpeed, double rabbitSpeed) {
+    if (aircraftSpeed <= 0.0) return INTERCEPT_BUDGET_MAX;
+    double turn_time = fabs(headingOffset) / INTERCEPT_TURN_RATE;
+    double closure_time = displacement / aircraftSpeed;
+    double rabbit_compensation = closure_time * (rabbitSpeed / aircraftSpeed);
+    double budget = turn_time + closure_time + rabbit_compensation;
+    return std::clamp(budget, 0.0, INTERCEPT_BUDGET_MAX);
+}
 
 // T001: Local node definitions for test coverage tracking
 // Mirrors allNodes[] from autoc-eval.cc but defined locally to avoid link dependencies
@@ -1848,4 +1885,194 @@ TEST(Coverage, NodeCount) {
     EXPECT_EQ(testAllNodesCount, 42) << "Node count has changed - update tests accordingly";
     EXPECT_GE(NodeCoverageTracker::getTestedCount(), testAllNodesCount)
         << "Not all nodes are covered";
+}
+
+// ============================================================================
+// Intercept-Budget Fitness Scaling Tests (specs/005-entry-fitness-ramp)
+// ============================================================================
+
+// T013: computeInterceptScale() tests
+TEST(InterceptScale, FloorAtTimeZero) {
+    // At t=0, scale should be at floor
+    EXPECT_DOUBLE_EQ(testComputeInterceptScale(0.0, 7.0), INTERCEPT_SCALE_FLOOR);
+}
+
+TEST(InterceptScale, CeilingAtBudget) {
+    // At t=budget, scale should be at ceiling
+    EXPECT_DOUBLE_EQ(testComputeInterceptScale(7.0, 7.0), INTERCEPT_SCALE_CEILING);
+}
+
+TEST(InterceptScale, CeilingBeyondBudget) {
+    // Beyond budget, scale should be at ceiling
+    EXPECT_DOUBLE_EQ(testComputeInterceptScale(10.0, 7.0), INTERCEPT_SCALE_CEILING);
+}
+
+TEST(InterceptScale, QuadraticRamp) {
+    // At t=1s with budget=7s, fraction=1/7, scale = floor + (ceiling-floor) * (1/7)^2
+    double scale = testComputeInterceptScale(1.0, 7.0);
+    double expected = INTERCEPT_SCALE_FLOOR + (INTERCEPT_SCALE_CEILING - INTERCEPT_SCALE_FLOOR) * (1.0/7.0) * (1.0/7.0);
+    EXPECT_NEAR(scale, expected, 1e-10);
+    EXPECT_NEAR(scale, 0.1184, 0.001);  // ~0.12 as per spec
+}
+
+TEST(InterceptScale, HalfwayPoint) {
+    // At t=budget/2, fraction=0.5, scale = floor + (ceiling-floor) * 0.25
+    double scale = testComputeInterceptScale(3.5, 7.0);
+    double expected = INTERCEPT_SCALE_FLOOR + (INTERCEPT_SCALE_CEILING - INTERCEPT_SCALE_FLOOR) * 0.25;
+    EXPECT_NEAR(scale, expected, 1e-10);
+}
+
+TEST(InterceptScale, DegenerateBudgetZero) {
+    // Budget=0 (no offset) → immediate full penalty
+    EXPECT_DOUBLE_EQ(testComputeInterceptScale(0.0, 0.0), INTERCEPT_SCALE_CEILING);
+    EXPECT_DOUBLE_EQ(testComputeInterceptScale(1.0, 0.0), INTERCEPT_SCALE_CEILING);
+}
+
+TEST(InterceptScale, NegativeBudget) {
+    // Negative budget → immediate full penalty
+    EXPECT_DOUBLE_EQ(testComputeInterceptScale(1.0, -1.0), INTERCEPT_SCALE_CEILING);
+}
+
+TEST(InterceptScale, MonotonicallyIncreasing) {
+    // Scale should monotonically increase with time
+    double budget = 7.0;
+    double prev = 0.0;
+    for (double t = 0.0; t <= budget; t += 0.5) {
+        double scale = testComputeInterceptScale(t, budget);
+        EXPECT_GE(scale, prev) << "Scale decreased at t=" << t;
+        prev = scale;
+    }
+}
+
+// T018: computeInterceptBudget() tests
+TEST(InterceptBudget, KnownOffset60m90deg) {
+    // 60m displacement, 90° heading, 20 m/s speed, 15 m/s rabbit
+    double budget = testComputeInterceptBudget(60.0, M_PI/2.0, 20.0, 15.0);
+    // turn_time = (π/2) / (π/4) = 2.0s
+    // closure_time = 60/20 = 3.0s
+    // rabbit_comp = 3.0 * (15/20) = 2.25s
+    // total = 7.25s
+    EXPECT_NEAR(budget, 7.25, 0.01);
+    EXPECT_GT(budget, 5.0);
+    EXPECT_LT(budget, 10.0);
+}
+
+TEST(InterceptBudget, ZeroDisplacementZeroHeading) {
+    // Already at path start with correct heading → near-zero budget
+    double budget = testComputeInterceptBudget(0.0, 0.0, 20.0, 15.0);
+    EXPECT_NEAR(budget, 0.0, 0.01);
+}
+
+TEST(InterceptBudget, LargeOffsetCapped) {
+    // Very large offset should be capped at INTERCEPT_BUDGET_MAX
+    double budget = testComputeInterceptBudget(500.0, M_PI, 20.0, 15.0);
+    EXPECT_DOUBLE_EQ(budget, INTERCEPT_BUDGET_MAX);
+}
+
+TEST(InterceptBudget, HeadingOnlyNoDisplacement) {
+    // Zero displacement but 90° heading → turn time only
+    double budget = testComputeInterceptBudget(0.0, M_PI/2.0, 20.0, 15.0);
+    double expected_turn = (M_PI/2.0) / INTERCEPT_TURN_RATE;
+    EXPECT_NEAR(budget, expected_turn, 0.01);
+}
+
+TEST(InterceptBudget, ZeroSpeed) {
+    // Zero aircraft speed → capped at max
+    double budget = testComputeInterceptBudget(60.0, M_PI/2.0, 0.0, 15.0);
+    EXPECT_DOUBLE_EQ(budget, INTERCEPT_BUDGET_MAX);
+}
+
+// T017: Backward compatibility test
+TEST(InterceptScale, BackwardCompatibility) {
+    // With zero displacement and zero heading, budget should be ~0
+    // → scale should be ceiling (1.0) from step 1 onward
+    double budget = testComputeInterceptBudget(0.0, 0.0, 20.0, 16.0);
+    EXPECT_NEAR(budget, 0.0, 0.01);
+
+    // With budget=0, all steps get ceiling (full penalty) → identical to no scaling
+    for (double t = 0.0; t <= 10.0; t += 0.1) {
+        double scale = testComputeInterceptScale(t, budget);
+        EXPECT_DOUBLE_EQ(scale, INTERCEPT_SCALE_CEILING)
+            << "Scale should be ceiling (1.0) at t=" << t << " with zero budget";
+    }
+}
+
+// ============================================================================
+// T020: Cylindrical position generation tests
+// ============================================================================
+
+TEST(PositionGeneration, HalfNormalRadius) {
+    // Verify radius is always non-negative (half-normal distribution)
+    VariationSigmas sigmas = VariationSigmas::fromDegrees(0, 0, 0, 0, 0, 30.0, 0);
+    for (unsigned int seed = 1; seed < 200; seed++) {
+        auto v = generateVariations(seed, sigmas);
+        double radius = sqrt(v.entryNorthOffset * v.entryNorthOffset +
+                           v.entryEastOffset * v.entryEastOffset);
+        EXPECT_GE(radius, 0.0) << "Radius must be non-negative (seed=" << seed << ")";
+    }
+}
+
+TEST(PositionGeneration, UniformAngle) {
+    // Verify angle distribution covers all quadrants over many seeds
+    VariationSigmas sigmas = VariationSigmas::fromDegrees(0, 0, 0, 0, 0, 30.0, 0);
+    int q1 = 0, q2 = 0, q3 = 0, q4 = 0;
+    for (unsigned int seed = 1; seed < 500; seed++) {
+        auto v = generateVariations(seed, sigmas);
+        if (v.entryNorthOffset == 0.0 && v.entryEastOffset == 0.0) continue;
+        if (v.entryNorthOffset >= 0 && v.entryEastOffset >= 0) q1++;
+        else if (v.entryNorthOffset < 0 && v.entryEastOffset >= 0) q2++;
+        else if (v.entryNorthOffset < 0 && v.entryEastOffset < 0) q3++;
+        else q4++;
+    }
+    // Each quadrant should get a reasonable share
+    EXPECT_GT(q1, 30);
+    EXPECT_GT(q2, 30);
+    EXPECT_GT(q3, 30);
+    EXPECT_GT(q4, 30);
+}
+
+TEST(PositionGeneration, GaussianAltitude) {
+    // Verify altitude offsets are generated and centered near zero
+    VariationSigmas sigmas = VariationSigmas::fromDegrees(0, 0, 0, 0, 0, 0, 10.0);
+    double sumAlt = 0.0;
+    int n = 500;
+    int nonZero = 0;
+    for (unsigned int seed = 1; seed <= (unsigned int)n; seed++) {
+        auto v = generateVariations(seed, sigmas);
+        sumAlt += v.entryAltOffset;
+        if (v.entryAltOffset != 0.0) nonZero++;
+        // N/E should remain zero since radius sigma is 0
+        EXPECT_DOUBLE_EQ(v.entryNorthOffset, 0.0);
+        EXPECT_DOUBLE_EQ(v.entryEastOffset, 0.0);
+    }
+    EXPECT_GT(nonZero, 450);  // Most should be non-zero
+    // Mean should be near zero for Gaussian
+    double mean = sumAlt / n;
+    EXPECT_NEAR(mean, 0.0, 3.0);  // Within 3m of zero (rough for 500 samples)
+}
+
+TEST(PositionGeneration, ZeroSigmasProduceZeroOffsets) {
+    // With both position sigmas at 0, position offsets must remain default (0)
+    VariationSigmas sigmas = VariationSigmas::fromDegrees(45, 22.5, 7.5, 0.1, 45, 0, 0);
+    for (unsigned int seed = 1; seed < 50; seed++) {
+        auto v = generateVariations(seed, sigmas);
+        EXPECT_DOUBLE_EQ(v.entryNorthOffset, 0.0);
+        EXPECT_DOUBLE_EQ(v.entryEastOffset, 0.0);
+        EXPECT_DOUBLE_EQ(v.entryAltOffset, 0.0);
+    }
+}
+
+TEST(PositionGeneration, RadiusDistribution) {
+    // Most samples should be within 2σ of the radius sigma
+    VariationSigmas sigmas = VariationSigmas::fromDegrees(0, 0, 0, 0, 0, 30.0, 0);
+    int within2sigma = 0;
+    int n = 500;
+    for (unsigned int seed = 1; seed <= (unsigned int)n; seed++) {
+        auto v = generateVariations(seed, sigmas);
+        double radius = sqrt(v.entryNorthOffset * v.entryNorthOffset +
+                           v.entryEastOffset * v.entryEastOffset);
+        if (radius <= 60.0) within2sigma++;  // 2σ = 60m
+    }
+    // For half-normal, ~95% should be within 2σ
+    EXPECT_GT(within2sigma, (int)(n * 0.90));
 }

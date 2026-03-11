@@ -96,8 +96,8 @@ Computed once per scenario at start of fitness evaluation. Not serialized.
 
 ```
 startup:
-  config_manager reads EntryPositionSigma from autoc.ini
-  → stored in ExtraConfig.entryPositionSigma
+  config_manager reads EntryPositionRadiusSigma + EntryPositionAltSigma from autoc.ini
+  → stored in ExtraConfig.entryPositionRadiusSigma / .entryPositionAltSigma
 
 prefetch (per wind variant):
   generateVariationsFromGPrand(sigmas)

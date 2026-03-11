@@ -33,16 +33,21 @@ struct VariationSigmas {
     double pitchSigma;        // radians
     double speedSigma;        // fraction (0.1 = ±10% at 1σ)
     double windDirectionSigma; // radians
+    double positionRadiusSigma = 0.0; // meters (horizontal, half-normal)
+    double positionAltSigma = 0.0;    // meters (vertical/Down, Gaussian)
 
     // Construct from degrees (for convenience when reading from config)
     static VariationSigmas fromDegrees(double headingDeg, double rollDeg, double pitchDeg,
-                                        double speedFrac, double windDirDeg) {
+                                        double speedFrac, double windDirDeg,
+                                        double posRadiusM = 0.0, double posAltM = 0.0) {
         return VariationSigmas{
             headingDeg * M_PI / 180.0,
             rollDeg * M_PI / 180.0,
             pitchDeg * M_PI / 180.0,
             speedFrac,
-            windDirDeg * M_PI / 180.0
+            windDirDeg * M_PI / 180.0,
+            posRadiusM,
+            posAltM
         };
     }
 };
@@ -54,6 +59,9 @@ struct VariationOffsets {
     double entryPitchOffset;    // radians
     double entrySpeedFactor;    // multiplier (1.0 = nominal)
     double windDirectionOffset; // radians
+    double entryNorthOffset = 0.0;  // meters (NED North)
+    double entryEastOffset = 0.0;   // meters (NED East)
+    double entryAltOffset = 0.0;    // meters (NED Down, negative=up)
 };
 
 /**
@@ -87,6 +95,17 @@ inline VariationOffsets generateVariations(unsigned int seed, const VariationSig
     v.entryPitchOffset = gaussian(sigmas.pitchSigma);
     v.entrySpeedFactor = 1.0 + gaussian(sigmas.speedSigma);
     v.windDirectionOffset = gaussian(sigmas.windDirectionSigma);
+
+    // Cylindrical position generation (see specs/005-entry-fitness-ramp)
+    if (sigmas.positionRadiusSigma > 0.0) {
+        double radius = fabs(gaussian(sigmas.positionRadiusSigma)); // half-normal
+        double angle = nextDouble() * 2.0 * M_PI;                  // uniform [0, 2π)
+        v.entryNorthOffset = radius * cos(angle);
+        v.entryEastOffset = radius * sin(angle);
+    }
+    if (sigmas.positionAltSigma > 0.0) {
+        v.entryAltOffset = gaussian(sigmas.positionAltSigma);       // Gaussian, NED Down
+    }
 
     return v;
 }
@@ -256,6 +275,18 @@ inline VariationOffsets generateVariationsFromGPrand(const VariationSigmas& sigm
     v.entryPitchOffset = gaussian(sigmas.pitchSigma);
     v.entrySpeedFactor = 1.0 + gaussian(sigmas.speedSigma);
     v.windDirectionOffset = gaussian(sigmas.windDirectionSigma);
+
+    // Cylindrical position generation (see specs/005-entry-fitness-ramp)
+    // Half-normal radius + uniform angle → N/E offsets, Gaussian altitude
+    if (sigmas.positionRadiusSigma > 0.0) {
+        double radius = fabs(gaussian(sigmas.positionRadiusSigma)); // half-normal
+        double angle = nextDouble() * 2.0 * M_PI;                  // uniform [0, 2π)
+        v.entryNorthOffset = radius * cos(angle);
+        v.entryEastOffset = radius * sin(angle);
+    }
+    if (sigmas.positionAltSigma > 0.0) {
+        v.entryAltOffset = gaussian(sigmas.positionAltSigma);       // Gaussian, NED Down
+    }
 
     return v;
 }

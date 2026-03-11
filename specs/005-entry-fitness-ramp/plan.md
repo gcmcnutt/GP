@@ -49,14 +49,14 @@ autoc/
 ├── autoc.h              # MODIFY: Add INTERCEPT_SCALE_FLOOR/CEILING, ENTRY_SAFE_* constants
 ├── autoc.cc             # MODIFY: Add intercept budget estimation, apply scaling in fitness loop
 ├── variation_generator.h # MODIFY: Add entryNorthOffset, entryEastOffset, entryAltOffset; cylindrical generation
-├── config_manager.cc    # MODIFY: Add EntryPositionSigma config parameter
+├── config_manager.cc    # MODIFY: Add EntryPositionRadiusSigma, EntryPositionAltSigma config parameters
 ├── minisim.h            # MODIFY: Add position offset fields to ScenarioMetadata (version bump to 6)
 ├── minisim.cc           # VERIFY: Compiles/runs cleanly with ScenarioMetadata v6 (does NOT apply variations)
 └── tests/
     └── gp_evaluator_tests.cc  # MODIFY: Add intercept budget and scaling function tests
 
 ~/crsim/crrcsim-0.9.13/
-├── src/global.h         # MODIFY: Add entryNorthOffset, entryEastOffset
+├── src/global.h         # MODIFY: Add entryNorthOffset, entryEastOffset, entryAltOffset
 ├── src/global.cpp       # MODIFY: Initialize position offset globals
 ├── src/crrc_main.cpp    # MODIFY: Apply position offsets to posX, posY in initAirplaneState
 └── src/mod_inputdev/inputdev_autoc/

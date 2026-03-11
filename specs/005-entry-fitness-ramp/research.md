@@ -66,7 +66,7 @@ SIM_INITIAL_LOCATION_DITHER = 30m  (path waypoint spread)
 - `ScenarioMetadata`: Add same three fields, bump to version 6
 - `generateVariationsFromGPrand()`: Generate Gaussian radius + uniform angle → N/E, plus Gaussian altitude offset. Clamp to safe bounds.
 - crrcsim: `posX += entryNorthOffset`, `posY += entryEastOffset`, altitude offset in `crrc_main.cpp`
-- minisim: Add to `initialPosition` before creating AircraftState
+- minisim: Must deserialize ScenarioMetadata v6 without error (does NOT apply position offsets — only crrcsim applies entry variations)
 
 **Position generation**:
 ```
@@ -105,7 +105,7 @@ attitude_sum += pow(intercept_scale * attitude_delta / ATTITUDE_NORM, ATTITUDE_P
 
 ## R5: Backward Compatibility
 
-**Decision**: When `EntryPositionSigma=0` (default), no position offsets are generated and intercept budget computes to near-zero (degenerate case), resulting in immediate full penalty from step 1 — identical to current behavior.
+**Decision**: When `EntryPositionRadiusSigma=0` and `EntryPositionAltSigma=0` (defaults), no position offsets are generated and intercept budget computes to near-zero (degenerate case), resulting in immediate full penalty from step 1 — identical to current behavior.
 
 **Verification**: The scaling function with budget=0 produces `scale = floor + (ceiling - floor) * min(1, (t/0.001))² = ceiling` for all t > 0, which is 1.0 (full penalty). Test this explicitly.
 

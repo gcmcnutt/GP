@@ -126,6 +126,44 @@ static double computeVariationScale() {
 }
 
 // ============================================================================
+// Intercept-Budget Fitness Scaling (see specs/005-entry-fitness-ramp)
+// ============================================================================
+
+/**
+ * Compute per-step intercept scale factor.
+ * Quadratic ramp from FLOOR to CEILING over the intercept budget.
+ *
+ * @param stepTimeSec  Current simulation step time in seconds
+ * @param budgetSec    Estimated intercept budget in seconds
+ * @return Scale factor in [FLOOR, CEILING]
+ */
+static double computeInterceptScale(double stepTimeSec, double budgetSec) {
+    if (budgetSec <= 0.0) return INTERCEPT_SCALE_CEILING;  // No budget → full penalty
+    double t = std::min(1.0, stepTimeSec / budgetSec);
+    return INTERCEPT_SCALE_FLOOR + (INTERCEPT_SCALE_CEILING - INTERCEPT_SCALE_FLOOR) * t * t;
+}
+
+/**
+ * Estimate time-to-intercept from initial conditions.
+ * Crude geometric estimate: turn_time + closure_time + rabbit_compensation.
+ *
+ * @param displacement    Horizontal distance to path start (meters)
+ * @param headingOffset   Heading offset from path tangent (radians)
+ * @param aircraftSpeed   Aircraft speed (m/s)
+ * @param rabbitSpeed     Rabbit (target) speed (m/s)
+ * @return Estimated budget in seconds, clamped to [0, INTERCEPT_BUDGET_MAX]
+ */
+static double computeInterceptBudget(double displacement, double headingOffset,
+                                      double aircraftSpeed, double rabbitSpeed) {
+    if (aircraftSpeed <= 0.0) return INTERCEPT_BUDGET_MAX;
+    double turn_time = fabs(headingOffset) / INTERCEPT_TURN_RATE;
+    double closure_time = displacement / aircraftSpeed;
+    double rabbit_compensation = closure_time * (rabbitSpeed / aircraftSpeed);
+    double budget = turn_time + closure_time + rabbit_compensation;
+    return std::clamp(budget, 0.0, INTERCEPT_BUDGET_MAX);
+}
+
+// ============================================================================
 // Single PRNG Architecture: Pre-fetched scenario variations
 // See specs/SINGLE_PRNG.md for design
 // ============================================================================
@@ -203,12 +241,18 @@ static void prefetchAllVariations(int numScenarios, const VariationSigmas& sigma
             sv.entryOffsets.entryRollOffset = generated.entryRollOffset;
             sv.entryOffsets.entryPitchOffset = generated.entryPitchOffset;
             sv.entryOffsets.entrySpeedFactor = generated.entrySpeedFactor;
+            sv.entryOffsets.entryNorthOffset = generated.entryNorthOffset;
+            sv.entryOffsets.entryEastOffset = generated.entryEastOffset;
+            sv.entryOffsets.entryAltOffset = generated.entryAltOffset;
         } else {
             // Defaults: no offset
             sv.entryOffsets.entryHeadingOffset = 0.0;
             sv.entryOffsets.entryRollOffset = 0.0;
             sv.entryOffsets.entryPitchOffset = 0.0;
             sv.entryOffsets.entrySpeedFactor = 1.0;
+            sv.entryOffsets.entryNorthOffset = 0.0;
+            sv.entryOffsets.entryEastOffset = 0.0;
+            sv.entryOffsets.entryAltOffset = 0.0;
         }
 
         if (enableWind) {
@@ -238,8 +282,8 @@ static void logPrefetchedVariations(int numScenarios, long gpSeed) {
     *logger.info() << "Scenarios: " << numScenarios << endl;
     *logger.info() << endl;
 
-    *logger.info() << "Scenario  WindSeed    Heading°   Roll°   Pitch°  Speed%  WindDir°  RabbitSpd" << endl;
-    *logger.info() << "--------  ----------  --------  ------  ------  ------  --------  ---------" << endl;
+    *logger.info() << "Scenario  WindSeed    Heading°   Roll°   Pitch°  Speed%  WindDir°  RabbitSpd      North°  East°  Down°" << endl;
+    *logger.info() << "--------  ----------  --------  ------  ------  ------  --------  ---------      ------  -----  -----" << endl;
 
     for (int i = 0; i < numScenarios; i++) {
         const auto& sv = gScenarioVariations[i];
@@ -254,6 +298,10 @@ static void logPrefetchedVariations(int numScenarios, long gpSeed) {
         }
         double avgSpd = sv.rabbitProfile.empty() ? 0 : sumSpd / sv.rabbitProfile.size();
 
+        // Format rabbit speed as min/avg/max with 1 decimal
+        std::ostringstream rabbitStr;
+        rabbitStr << std::fixed << std::setprecision(1) << minSpd << "/" << avgSpd << "/" << maxSpd;
+
         std::ostringstream line;
         line << std::setw(4) << i << "      "
              << "0x" << std::hex << std::setw(8) << std::setfill('0') << sv.windSeed
@@ -263,7 +311,14 @@ static void logPrefetchedVariations(int numScenarios, long gpSeed) {
              << "  " << std::setw(6) << radToDeg(sv.entryOffsets.entryPitchOffset)
              << "  " << std::setw(5) << std::setprecision(1) << ((sv.entryOffsets.entrySpeedFactor - 1.0) * 100) << "%"
              << "  " << std::setw(7) << std::setprecision(2) << radToDeg(sv.entryOffsets.windDirectionOffset)
-             << "  " << std::setprecision(1) << minSpd << "/" << avgSpd << "/" << maxSpd;
+             << "  " << std::setw(9) << rabbitStr.str();
+
+        // Position offsets columns
+        const auto& o = sv.entryOffsets;
+        line << "    " << std::setprecision(1)
+             << std::setw(6) << o.entryNorthOffset
+             << std::setw(7) << o.entryEastOffset
+             << std::setw(7) << o.entryAltOffset;
         *logger.info() << line.str() << endl;
     }
     *logger.info() << endl;
@@ -290,6 +345,28 @@ static void populateVariationOffsets(ScenarioMetadata& meta) {
     // Speed factor: interpolate from 1.0 toward pre-computed value
     // At scale=0: factor=1.0 (nominal), at scale=1: factor=pre-computed
     meta.entrySpeedFactor = 1.0 + scale * (v.entrySpeedFactor - 1.0);
+
+    // Position offsets: scale and clamp to safe arena bounds
+    // RAMP_LANDSCAPE scaling applies here too (gradual introduction)
+    double northScaled = v.entryNorthOffset * scale;
+    double eastScaled = v.entryEastOffset * scale;
+    double altScaled = v.entryAltOffset * scale;
+
+    // Clamp horizontal to safe radius
+    double horizDist = sqrt(northScaled * northScaled + eastScaled * eastScaled);
+    if (horizDist > ENTRY_SAFE_RADIUS) {
+      double clampFactor = ENTRY_SAFE_RADIUS / horizDist;
+      northScaled *= clampFactor;
+      eastScaled *= clampFactor;
+    }
+
+    // Clamp altitude to safe NED bounds (ENTRY_SAFE_ALT_MAX < ENTRY_SAFE_ALT_MIN since NED Down)
+    if (altScaled < ENTRY_SAFE_ALT_MAX) altScaled = ENTRY_SAFE_ALT_MAX;
+    if (altScaled > ENTRY_SAFE_ALT_MIN) altScaled = ENTRY_SAFE_ALT_MIN;
+
+    meta.entryNorthOffset = northScaled;
+    meta.entryEastOffset = eastScaled;
+    meta.entryAltOffset = altScaled;
   }
   // If windIdx out of range, leave defaults (shouldn't happen)
 }
@@ -1142,6 +1219,21 @@ void MyGP::evalTask(WorkerContext& context)
     gp_fitness attitude_sum = 0.0;
     int simulation_steps = 0;
 
+    // Intercept-budget scaling: compute budget from initial displacement + heading
+    double interceptBudget = 0.0;
+    {
+      gp_vec3 initialPos = aircraftState.at(0).getPosition();
+      gp_vec3 pathStart = path.at(0).start;
+      gp_vec3 offset3d = initialPos - pathStart;
+      double displacement = sqrt(offset3d[0] * offset3d[0] + offset3d[1] * offset3d[1]);
+      double headingOffset = 0.0;
+      if (i < context.evalResults.scenarioList.size()) {
+        headingOffset = context.evalResults.scenarioList.at(i).entryHeadingOffset;
+      }
+      interceptBudget = computeInterceptBudget(displacement, headingOffset,
+                                                SIM_INITIAL_VELOCITY, gRabbitSpeedConfig.nominal);
+    }
+
     // Attitude delta tracking
     gp_fitness prev_roll = 0.0, prev_pitch = 0.0;
     bool first_attitude_sample = true;
@@ -1190,14 +1282,17 @@ void MyGP::evalTask(WorkerContext& context)
       gp_scalar distance = craftOffset.norm();
 
       // Accumulate with normalized nonlinear penalty per step
-      distance_sum += pow(distance / DISTANCE_NORM, DISTANCE_POWER);
-      attitude_sum += pow(attitude_delta / ATTITUDE_NORM, ATTITUDE_POWER);
+      // Intercept-budget scaling: ramp penalty from floor→ceiling over budget
+      double stepTimeSec = stepAircraftState.getSimTimeMsec() / 1000.0;
+      double interceptScale = computeInterceptScale(stepTimeSec, interceptBudget);
+      distance_sum += pow(interceptScale * distance / DISTANCE_NORM, DISTANCE_POWER);
+      attitude_sum += pow(interceptScale * attitude_delta / ATTITUDE_NORM, ATTITUDE_POWER);
       simulation_steps++;
 
       // Per-step logging to data.dat
       if (printEval) {
         if (printHeader) {
-          fout << "Scn    Bake   Pth/Wnd:Step:   Time Idx  totDist   pathX    pathY    pathZ        X        Y        Z       dr       dp       dy   relVel     roll    pitch    power      qw      qx      qy      qz   vxBody   vyBody   vzBody    alpha     beta   dtheta    dphi   dhome     dist   attDlt  rabVel\n";
+          fout << "Scn    Bake   Pth/Wnd:Step:   Time Idx  totDist   pathX    pathY    pathZ        X        Y        Z       dr       dp       dy   relVel     roll    pitch    power      qw      qx      qy      qz   vxBody   vyBody   vzBody    alpha     beta   dtheta    dphi   dhome     dist   attDlt  rabVel intScl\n";
           printHeader = false;
         }
 
@@ -1259,7 +1354,7 @@ void MyGP::evalTask(WorkerContext& context)
         gp_quat q = craftOrientation;
 
         char outbuf[1600];
-        sprintf(outbuf, "%06llu %06llu %03d/%02d:%04d: %06ld %3d % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.4f % 7.4f % 7.4f % 7.4f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.3f % 6.4f % 6.1f\n",
+        sprintf(outbuf, "%06llu %06llu %03d/%02d:%04d: %06ld %3d % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.4f % 7.4f % 7.4f % 7.4f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.3f % 6.4f % 6.1f %5.3f\n",
           static_cast<unsigned long long>(scenarioSequence),
           static_cast<unsigned long long>(bakeoffSequence),
           pathVariantIndex, windVariantIndex, simulation_steps,
@@ -1281,9 +1376,10 @@ void MyGP::evalTask(WorkerContext& context)
           alpha_deg, beta_deg,
           dtheta_deg, dphi_deg,
           dhome,
-          distance,        // New: distance to rabbit
-          attitude_delta,  // New: attitude change this step
-          rabbitVel
+          distance,        // distance to rabbit
+          attitude_delta,  // attitude change this step
+          rabbitVel,
+          interceptScale   // intercept-budget scaling factor
         );
         fout << outbuf;
       }
@@ -1415,7 +1511,9 @@ int main(int argc, char** argv)
       extraCfg.entryRollSigma,
       extraCfg.entryPitchSigma,
       extraCfg.entrySpeedSigma,  // already a fraction
-      extraCfg.windDirectionSigma
+      extraCfg.windDirectionSigma,
+      extraCfg.entryPositionRadiusSigma,  // meters (no conversion needed)
+      extraCfg.entryPositionAltSigma      // meters (no conversion needed)
   );
 
   // Initialize global rabbit speed config
@@ -1714,6 +1812,21 @@ int main(int argc, char** argv)
           gp_fitness attitude_sum = 0.0;
           int simulation_steps = 0;
 
+          // Intercept-budget scaling: compute budget from initial displacement + heading
+          double interceptBudget = 0.0;
+          {
+            gp_vec3 initialPos = aircraftState.at(0).getPosition();
+            gp_vec3 pathStart = path.at(0).start;
+            gp_vec3 offset3d = initialPos - pathStart;
+            double displacement = sqrt(offset3d[0] * offset3d[0] + offset3d[1] * offset3d[1]);
+            double headingOffset = 0.0;
+            if (i < context.evalResults.scenarioList.size()) {
+              headingOffset = context.evalResults.scenarioList.at(i).entryHeadingOffset;
+            }
+            interceptBudget = computeInterceptBudget(displacement, headingOffset,
+                                                      SIM_INITIAL_VELOCITY, gRabbitSpeedConfig.nominal);
+          }
+
           // Attitude delta tracking
           gp_fitness prev_roll = 0.0, prev_pitch = 0.0;
           bool first_attitude_sample = true;
@@ -1761,8 +1874,11 @@ int main(int argc, char** argv)
             gp_scalar distance = craftOffset.norm();
 
             // Accumulate with normalized nonlinear penalty per step
-            distance_sum += pow(distance / DISTANCE_NORM, DISTANCE_POWER);
-            attitude_sum += pow(attitude_delta / ATTITUDE_NORM, ATTITUDE_POWER);
+            // Intercept-budget scaling: ramp penalty from floor→ceiling over budget
+            double stepTimeSec = stepAircraftState.getSimTimeMsec() / 1000.0;
+            double interceptScale = computeInterceptScale(stepTimeSec, interceptBudget);
+            distance_sum += pow(interceptScale * distance / DISTANCE_NORM, DISTANCE_POWER);
+            attitude_sum += pow(interceptScale * attitude_delta / ATTITUDE_NORM, ATTITUDE_POWER);
             simulation_steps++;
 
             // Per-step logging
