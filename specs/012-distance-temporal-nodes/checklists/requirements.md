@@ -1,7 +1,7 @@
 # Specification Quality Checklist: Distance Temporal Sensor Nodes
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning
-**Created**: 2026-03-12
+**Created**: 2026-03-12 (updated)
 **Feature**: [spec.md](../spec.md)
 
 ## Content Quality
@@ -31,6 +31,7 @@
 
 ## Notes
 
-- Spec closely mirrors the proven TEMPORAL_STATE pattern (GETDPHI_PREV/RATE) which was successfully implemented
-- SC-002 (mean distance closer to 7.5m) is aspirational — the temporal nodes provide building blocks but GP evolution may or may not discover the optimal PD strategy
-- FR-004 specifies raw distance buffering (meters) rather than GETDTARGET output — this is intentional since GETDTARGET applies a nonlinear transformation that would obscure the physical distance signal
+- Implementation Touchpoints table included as reference for planning phase — lists all 15 files that need updating
+- GETDTARGET deprecation is soft: remove from TrainingNodes, keep opcode/evaluation code for backward compatibility
+- Units consistency verified: GETDIST returns meters, GETDIST_RATE returns m/s, dt computation identical to GETDPHI_RATE (timestamp-based, not constant)
+- Distance history shares timeHistory_ and index with dPhi/dTheta — single ring buffer index, three value arrays

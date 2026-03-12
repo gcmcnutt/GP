@@ -3,98 +3,138 @@
 **Feature Branch**: `012-distance-temporal-nodes`
 **Created**: 2026-03-12
 **Status**: Draft
-**Input**: User description: "Add temporal distance sensor nodes (GETDTARGET_PREV, GETDTARGET_RATE) to give GP controllers derivative and historical distance-to-rabbit awareness for PD/PID-like throttle control"
+**Input**: User description: "Add raw distance sensor with temporal nodes (GETDIST, GETDIST_PREV, GETDIST_RATE) as clean primitives for PD/PID-like throttle control. Deprecate composite GETDTARGET node."
+
+## Context
+
+The GP controller's distance-to-rabbit oscillates between 10-55m because it only has a composite distance signal (GETDTARGET) that bakes in a 10m offset and speed normalization: `CLAMP((distance - 10) / relVel, -1, 1)`. This pre-computed signal:
+- Mixes distance and speed into one dimensionless value, preventing the GP from reasoning about them independently
+- Hard-codes a 10m offset assumption that may not be optimal
+- Has no temporal derivative, so the GP cannot sense closing/opening rate
+
+The existing temporal nodes (GETDPHI_PREV/RATE, GETDTHETA_PREV/RATE) proved that clean primitives in radians with history and derivatives unlock PD-like control for attitude. This feature extends the same pattern to distance using raw meters.
 
 ## User Scenarios & Testing *(mandatory)*
 
-### User Story 1 - GP Evolves Distance Derivative Control (Priority: P1)
+### User Story 1 - Raw Distance Sensor with Derivative Control (Priority: P1)
 
-The GP evolution engine has access to new temporal distance nodes (GETDTARGET_PREV and GETDTARGET_RATE) alongside existing nodes. During evolution, GP trees can use GETDTARGET_RATE to sense whether the aircraft is closing on or falling behind the rabbit, enabling proportional-derivative throttle control that damps the current 10-55m distance oscillation.
+The GP evolution engine has access to GETDIST (raw distance to rabbit in meters), GETDIST_RATE (closing/opening rate in m/s), and GETDIST_PREV(n) (distance n ticks ago). Combined with existing GETVEL (airspeed), the GP can compose its own distance-to-throttle mapping and damp oscillation using the rate signal — without being constrained by GETDTARGET's hard-coded assumptions.
 
-**Why this priority**: This is the core value — without the rate signal, the GP can only do proportional distance control, which produces undamped oscillation around the target following distance. The existing GETDPHI_RATE/GETDTHETA_RATE nodes proved that temporal derivatives unlock PD-like control for attitude; this extends the same pattern to distance.
+**Why this priority**: This is the core value. Raw distance + derivative gives the GP the building blocks to evolve PD throttle control from primitives, just as GETDPHI + GETDPHI_RATE enabled PD roll/pitch control.
 
-**Independent Test**: Can be fully tested by running a short evolution (10-20 generations) and verifying that GP trees incorporate GETDTARGET_RATE nodes in their throttle control expressions.
+**Independent Test**: Run a short evolution (10-20 generations) with GETDIST, GETDIST_RATE, GETDIST_PREV, and GETVEL in TrainingNodes (without GETDTARGET). Verify GP trees use the new nodes.
 
 **Acceptance Scenarios**:
 
-1. **Given** a GP configuration with GETDTARGET_RATE in TrainingNodes, **When** evolution runs for 20+ generations, **Then** at least some individuals in the population use GETDTARGET_RATE in their trees
-2. **Given** a GP tree using GETDTARGET_RATE for throttle, **When** the aircraft is closing on the rabbit (distance decreasing), **Then** GETDTARGET_RATE returns a negative value (closing rate)
-3. **Given** a GP tree using GETDTARGET_RATE for throttle, **When** the aircraft is falling behind (distance increasing), **Then** GETDTARGET_RATE returns a positive value (opening rate)
+1. **Given** GETDIST in TrainingNodes, **When** the aircraft is 20m from the rabbit, **Then** GETDIST returns 20.0 (meters)
+2. **Given** GETDIST_RATE available, **When** the aircraft is closing on the rabbit at 3 m/s, **Then** GETDIST_RATE returns -3.0 (negative = closing)
+3. **Given** GETDIST_RATE available, **When** the aircraft is falling behind at 5 m/s, **Then** GETDIST_RATE returns +5.0 (positive = opening)
+4. **Given** GETDIST_PREV available, **When** queried with n=3, **Then** returns the raw distance from 3 ticks (~300ms) ago
 
 ---
 
-### User Story 2 - Distance History Enables Integral-Like Control (Priority: P2)
+### User Story 2 - GETDTARGET Deprecation (Priority: P1)
 
-The GP evolution engine has access to GETDTARGET_PREV(n), which returns the distance-to-rabbit value from n ticks ago. This enables the GP to compute error accumulation patterns (how long has the aircraft been too far/too close), supporting integral-like control strategies that eliminate steady-state distance offset.
+GETDTARGET is removed from the active TrainingNodes configuration with a comment explaining why: it's a composite signal that prevents the GP from reasoning about distance and speed independently. The node remains functional in the codebase (for backward compatibility with existing evolved GPs) but is not offered to new evolution runs.
 
-**Why this priority**: Historical distance awareness complements the rate signal. While GETDTARGET_RATE addresses oscillation damping, GETDTARGET_PREV enables the GP to detect persistent distance bias and evolve corrective strategies. This mirrors the proven GETDPHI_PREV/GETDTHETA_PREV pattern.
+**Why this priority**: Keeping GETDTARGET in the training set alongside GETDIST would create redundancy and dilute selection pressure. Removing it focuses GP search on the cleaner primitives.
 
-**Independent Test**: Can be tested by verifying GETDTARGET_PREV(n) returns the correct historical distance value for indices 0 through the buffer depth, using unit tests with known distance sequences.
+**Independent Test**: Verify GETDTARGET is commented out in autoc.ini TrainingNodes with explanatory comment. Verify existing bytecode files using GETDTARGET still evaluate correctly.
 
 **Acceptance Scenarios**:
 
-1. **Given** the aircraft has been tracking at 20m distance for 5 ticks, **When** GETDTARGET_PREV(0) through GETDTARGET_PREV(4) are queried, **Then** all return approximately 20m distance
-2. **Given** the aircraft distance changed from 30m to 15m over 5 ticks, **When** GETDTARGET_PREV(0) and GETDTARGET_PREV(4) are queried, **Then** GETDTARGET_PREV(0) returns ~15m and GETDTARGET_PREV(4) returns ~30m
-3. **Given** fewer than n ticks have elapsed since simulation start, **When** GETDTARGET_PREV(n) is queried, **Then** the system returns a safe default (zero or the oldest available value)
+1. **Given** updated autoc.ini, **When** TrainingNodes is parsed, **Then** GETDTARGET is not in the active node set
+2. **Given** an existing GP tree or bytecode using GETDTARGET, **When** evaluated, **Then** it produces identical results (backward compatibility preserved)
 
 ---
 
 ### User Story 3 - Cross-Platform Consistency (Priority: P2)
 
-The new distance temporal nodes produce identical results across all evaluation paths: GP tree evaluation during training, bytecode interpretation during deployment, and the portable evaluator for embedded targets. A GP controller evolved during training behaves identically when extracted to bytecode and run on a different platform.
+All new nodes produce identical results across all evaluation paths: GP tree evaluator, bytecode interpreter, portable evaluator, and bytecode-to-C++ code generator. History buffers reset identically across all paths when starting a new simulation path.
 
-**Why this priority**: Cross-platform consistency is a hard requirement for the dual-mode evaluation architecture. Any divergence between training and deployment would make evolved controllers unreliable.
+**Why this priority**: Cross-platform consistency is a hard requirement. The bytecode2cpp code generator and gpextractor must also handle the new opcodes.
 
-**Independent Test**: Can be tested by evolving a GP that uses GETDTARGET_PREV/GETDTARGET_RATE, extracting to bytecode, and comparing per-step outputs between GP tree and bytecode evaluation modes.
+**Independent Test**: Evolve a GP using GETDIST_RATE, extract to bytecode, compare per-step outputs between GP tree and bytecode modes.
 
 **Acceptance Scenarios**:
 
-1. **Given** a GP tree using GETDTARGET_RATE, **When** evaluated as GP tree and as bytecode on the same scenario, **Then** all control outputs match to floating-point precision
-2. **Given** the portable evaluator with GETDTARGET_PREV support, **When** compiled with GP_BUILD and GP_TEST defines, **Then** unit tests confirm identical output to the full evaluator for known input sequences
+1. **Given** a GP tree using GETDIST_RATE, **When** evaluated as GP tree and as bytecode, **Then** all outputs match to floating-point precision
+2. **Given** the bytecode2cpp generator, **When** processing bytecode with GETDIST_PREV/GETDIST_RATE opcodes, **Then** it generates correct C++ code with proper stack depth analysis
+3. **Given** a new simulation path starts, **When** the distance history buffer resets, **Then** GETDIST_PREV returns 0.0 and GETDIST_RATE returns 0.0 (same reset behavior as GETDPHI_PREV/GETDPHI_RATE)
 
 ---
 
 ### Edge Cases
 
-- What happens when GETDTARGET_PREV(n) is called with n larger than the history buffer depth (10)? Clamp n to buffer size, return oldest available value.
-- What happens when GETDTARGET_PREV is called with a negative or fractional n? Cast to integer, clamp to [0, buffer_depth-1] — same behavior as existing GETDPHI_PREV.
-- What happens when GETDTARGET_RATE is computed on the first simulation tick (no prior value)? Return 0.0 — same as existing GETDTHETA_RATE behavior.
-- How does the distance history buffer interact with the intercept budget? The buffer stores raw distance values regardless of intercept scaling — the temporal signal reflects actual aircraft-to-rabbit distance, not fitness-weighted distance.
+- GETDIST_PREV(n) with n > buffer depth (10): clamp to buffer size, return oldest available value
+- GETDIST_PREV with negative or fractional n: cast to integer, clamp to [0, depth-1] — same as GETDPHI_PREV
+- GETDIST_RATE on first tick (no prior value): return 0.0 — same as GETDPHI_RATE
+- GETDIST when aircraft has crashed or is at origin: returns actual Euclidean distance (may be 0 or very large)
+- Distance history buffer reset: cleared via clearHistory() at start of each new path, same as dPhi/dTheta buffers
 
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
 
-- **FR-001**: System MUST provide a GETDTARGET_PREV(n) node that returns the distance-to-rabbit value from n simulation ticks ago, using the same circular buffer pattern as GETDPHI_PREV
-- **FR-002**: System MUST provide a GETDTARGET_RATE node (zero arguments) that returns the rate of change of distance-to-rabbit in meters per second
-- **FR-003**: GETDTARGET_RATE MUST return negative values when distance is decreasing (closing) and positive values when distance is increasing (opening)
-- **FR-004**: The distance history buffer MUST store raw distance-to-rabbit values (meters), not the normalized/powered fitness values
-- **FR-005**: Both nodes MUST be implemented in all three evaluation paths: GP tree evaluator, bytecode interpreter, and portable evaluator
-- **FR-006**: Both nodes MUST be registered as new opcodes in the opcode enumeration with unique bytecode instruction encodings
-- **FR-007**: GETDTARGET_RATE MUST be clamped to a reasonable range to prevent extreme values from dominating GP fitness (consistent with GETDPHI_RATE/GETDTHETA_RATE clamping)
-- **FR-008**: The distance history buffer MUST use the same depth (10 samples) and ring buffer implementation pattern as the existing phi/theta history buffers
-- **FR-009**: Both nodes MUST be configurable in TrainingNodes in autoc.ini (opt-in, not added to all existing configurations by default)
-- **FR-010**: Unit tests MUST verify correctness of both nodes for known input sequences, buffer wraparound, edge cases (first tick, buffer overflow), and cross-evaluator consistency
+- **FR-001**: System MUST provide GETDIST, a nullary node returning raw Euclidean distance from aircraft to rabbit position in meters
+- **FR-002**: System MUST provide GETDIST_PREV(n), a unary node returning the buffered GETDIST value from n simulation ticks ago
+- **FR-003**: System MUST provide GETDIST_RATE, a nullary node returning rate of change of distance in meters per second, computed as `(dist[0] - dist[1]) / dt` using actual timestamp deltas from the history buffer (same time computation as GETDPHI_RATE/GETDTHETA_RATE)
+- **FR-004**: GETDIST_RATE MUST use the same dt computation as GETDPHI_RATE: actual timestamp delta from ring buffer divided by 1000 to convert ms to seconds, with 0.1s default when dt < 0.001s
+- **FR-005**: GETDIST_RATE MUST be clamped to [-10, 10] m/s, consistent with GETDPHI_RATE/GETDTHETA_RATE clamping range
+- **FR-006**: The distance history buffer MUST use the same ring buffer depth (10 samples), indexing, and reset behavior as the existing dPhi/dTheta history buffers in AircraftState
+- **FR-007**: All three nodes MUST be implemented in all evaluation paths: GP tree evaluator (autoc-eval.cc), bytecode interpreter (gp_bytecode.cc), portable evaluator (gp_evaluator_portable.cc), bytecode-to-C++ generator (bytecode2cpp.cc), and GP-to-bytecode extractor (gpextractor.cc)
+- **FR-008**: All three nodes MUST be registered as new opcodes in the enum (autoc.h AND gp_evaluator_portable.h), appended before the `_END` marker to preserve backward compatibility
+- **FR-009**: All three nodes MUST be added to the allNodes[] registration table in autoc-eval.cc with correct name strings and argument counts
+- **FR-010**: GETDTARGET MUST be removed from TrainingNodes in autoc.ini and autoc-eval.ini with an explanatory comment noting it as deprecated in favor of the cleaner GETDIST primitives. The opcode and evaluation code MUST remain for backward compatibility.
+- **FR-011**: The node set reference comment block in autoc.ini and autoc-eval.ini MUST be updated to document the new nodes and the GETDTARGET deprecation
+- **FR-012**: CLAUDE.md GP Operators section MUST be updated with the new node descriptions and GETDTARGET deprecation note
+- **FR-013**: Unit tests MUST verify all three nodes for: known input sequences, buffer wraparound, first-tick behavior, reset/clearHistory behavior, cross-evaluator consistency (GP tree vs bytecode), and index clamping
+- **FR-014**: Both nodes MUST be opt-in via TrainingNodes configuration (not silently added to existing configurations)
 
 ### Key Entities
 
-- **Distance History Buffer**: Circular buffer storing the last 10 distance-to-rabbit measurements (raw meters). One buffer per evaluation context. Updated each simulation tick after distance computation.
-- **GETDTARGET_PREV Node**: Unary GP node (1 argument: history index n). Returns buffered distance value at index n. Argument cast to integer, clamped to [0, buffer_depth-1].
-- **GETDTARGET_RATE Node**: Nullary GP node (0 arguments). Computes `(distance[0] - distance[1]) / dt` where dt is the simulation tick interval. Clamped to [-10, 10] m/s.
+- **Distance History Buffer**: Third ring buffer in AircraftState alongside dPhiHistory_ and dThetaHistory_. Stores last 10 raw distance-to-rabbit values in meters. Shares the same historyIndex_, historyCount_, and timeHistory_ as existing buffers. Updated each tick by recording distance before GP evaluation. Cleared on new path via clearHistory().
+- **GETDIST Node**: Nullary GP node (0 arguments). Returns current Euclidean distance to rabbit in meters.
+- **GETDIST_PREV Node**: Unary GP node (1 argument: history index n). Returns buffered distance at index n. Clamped to [0, buffer_depth-1].
+- **GETDIST_RATE Node**: Nullary GP node (0 arguments). Computes `(dist[0] - dist[1]) / dt` using timestamp-based dt. Clamped to [-10, 10] m/s. Returns 0.0 when insufficient history.
+
+### Implementation Touchpoints
+
+All files requiring updates when adding new GP nodes (derived from existing GETDPHI_PREV/RATE pattern):
+
+| Category | File | What to update |
+|----------|------|---------------|
+| Opcode enum | autoc.h | Add GETDIST, GETDIST_PREV, GETDIST_RATE before _END |
+| Opcode enum (portable) | gp_evaluator_portable.h | Mirror autoc.h enum additions |
+| Node registration | autoc-eval.cc | Add to allNodes[] with name strings and arg counts |
+| Evaluation dispatch | gp_evaluator_portable.cc | Add switch cases in evaluateGPOperator() |
+| Function implementation | gp_evaluator_portable.cc | Implement executeGetDist(), executeGetDistPrev(), executeGetDistRate() |
+| Function declarations | gp_evaluator_portable.h | Declare new execute functions |
+| Bytecode dispatch | gp_evaluator_portable.cc | Add cases in evaluateBytecodePortable() |
+| Bytecode extraction | gpextractor.cc | Add cases for child processing |
+| Code generation | bytecode2cpp.cc | Update analyzeStackDepth(), getOperatorName(), generateInstruction() |
+| History storage | aircraft_state.h | Add distHistory_[] buffer, extend recordErrorHistory(), clearHistory(), add getHistoricalDist() |
+| History recording | minisim.cc | Compute and record distance before GP evaluation |
+| Config (train) | autoc.ini | Update TrainingNodes, comment block, deprecate GETDTARGET |
+| Config (eval) | autoc-eval.ini | Same as autoc.ini |
+| Documentation | CLAUDE.md | Add node descriptions, deprecation note |
+| Unit tests | tests/gp_evaluator_tests.cc | Add test cases for all three nodes |
 
 ## Success Criteria *(mandatory)*
 
 ### Measurable Outcomes
 
-- **SC-001**: Evolution runs using the new nodes produce GP trees that incorporate GETDTARGET_RATE in throttle control expressions within 20 generations
-- **SC-002**: Mean following distance in a 200-generation training run with the new nodes available is closer to the 7.5m target than the current 20.7m baseline
-- **SC-003**: Distance standard deviation (currently 7.1m) decreases, indicating reduced oscillation amplitude
-- **SC-004**: All existing unit tests continue to pass; new unit tests cover both nodes across all evaluator paths with 100% pass rate
-- **SC-005**: Bytecode evaluation of GP trees using the new nodes produces identical per-step control outputs compared to GP tree evaluation (zero divergence in elite re-eval)
+- **SC-001**: Evolution runs with GETDIST, GETDIST_PREV, GETDIST_RATE (and without GETDTARGET) produce GP trees that use the distance nodes in throttle control within 20 generations
+- **SC-002**: Mean following distance in a 200-generation run with the new primitives is closer to 7.5m target than the current 20.7m baseline
+- **SC-003**: Distance standard deviation (currently 7.1m) decreases, indicating reduced oscillation
+- **SC-004**: All existing unit tests pass; new tests cover all three nodes across GP tree and bytecode evaluators with 100% pass rate
+- **SC-005**: Bytecode evaluation produces identical per-step outputs to GP tree evaluation (zero divergence)
+- **SC-006**: Existing GP trees/bytecode files using GETDTARGET continue to evaluate correctly (backward compatibility)
 
 ## Assumptions
 
-- The simulation tick rate remains ~10Hz (100ms intervals), consistent with the existing temporal node design
-- The distance-to-rabbit value is already computed each tick in the evaluation loop before the GP tree is evaluated, so buffering it requires no additional computation
-- The existing ring buffer infrastructure (used by GETDPHI_PREV/GETDTHETA_PREV) can be extended with a third buffer for distance without significant memory impact
-- GETDTARGET_RATE clamping range of [-10, 10] m/s is appropriate (aircraft closing at 10 m/s relative to rabbit would be an extreme maneuver)
+- The simulation tick rate remains ~10Hz (100ms), consistent with existing temporal nodes
+- Raw distance to rabbit is already computed each tick in the evaluation loop (used for fitness), so buffering adds negligible cost
+- The AircraftState ring buffer can share timeHistory_ and index tracking with the existing dPhi/dTheta buffers (one index, one timestamp array, three value arrays)
+- GETDIST_RATE clamping at [-10, 10] m/s is appropriate — aircraft closing at 10 m/s relative to rabbit is extreme (rabbit speed ~16 m/s, aircraft max ~25 m/s)
+- GETDIST returns distance to rabbit at current path index (lookahead=0), not a future path point. The GP can combine GETDIST with path lookahead via other nodes if needed.
