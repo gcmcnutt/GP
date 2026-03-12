@@ -15,21 +15,41 @@ struct WorkerContext;
 // See specs/FITNESS_SIMPLIFY_20260221.md for rationale.
 // ========================================================================
 
-// Nonlinear fitness: values are normalized so pow(x/NORM, POWER) has its
-// linear crossover at x=NORM.  Below NORM the cost compresses (tolerated),
-// above NORM it amplifies (penalized disproportionately).
-
-// Distance: 2m nominal — aggressive tightening for <10m tracking (was 5.0/1.5)
-#define DISTANCE_NORM 2.0
-#define DISTANCE_POWER 2.0
+// Nonlinear fitness uses pow(x/NORM, POWER).  Below NORM the cost compresses
+// (tolerated), above NORM it amplifies (penalized disproportionately).
+//
+// Distance uses a V-shaped function centered on a TARGET following distance:
+//   pow(fabs(distance - TARGET) / NORM, POWER)
+// This directly encodes the desired 5-10m trailing position:
+//   - At TARGET: zero cost (perfect following)
+//   - Too close (<5m): penalty rises — discourages overshooting on turns
+//   - Too far (>10m): penalty rises — pressures controller to close gap
+//   - Fractional power keeps far-tail (55m+) from dominating the sum
+// With TARGET=7.5, NORM=5, POWER=0.75:
+//   5m → 0.60  |  7.5m → 0  |  10m → 0.60  |  15m → 1.36  |  24m → 2.45
+#define DISTANCE_TARGET 7.5
+#define DISTANCE_NORM 5.0
+#define DISTANCE_POWER 0.75
 
 // Attitude delta: 200 deg/s nominal at 10Hz → 0.349 rad/step
-// Below this rate is normal maneuvering; above is jerk
+// Keep higher power to still crush tumbles/flips (was 1.5, tested 0.75)
 #define ATTITUDE_NORM 0.349
 #define ATTITUDE_POWER 1.5
 
 // Attitude scaling: computed per-path from path geometry (no manual tuning)
 // attitude_scale = path_distance / path_turn_rad (meters per radian)
+
+// Intercept-budget fitness scaling (see specs/005-entry-fitness-ramp)
+// Ramps distance+attitude penalty from floor to ceiling over estimated intercept time
+#define INTERCEPT_SCALE_FLOOR 0.1           // Minimum scale factor at t=0
+#define INTERCEPT_SCALE_CEILING 1.0         // Maximum scale factor (full penalty)
+#define INTERCEPT_BUDGET_MAX 15.0           // Maximum budget cap in seconds
+#define INTERCEPT_TURN_RATE (M_PI / 4.0)    // Estimated turn rate (rad/s) for budget calc (~45°/s)
+
+// Entry position safe bounds (~15m margin from crash boundaries)
+#define ENTRY_SAFE_RADIUS static_cast<gp_scalar>(55.0f)       // SIM_PATH_RADIUS_LIMIT - 15m
+#define ENTRY_SAFE_ALT_MIN static_cast<gp_scalar>(-22.0f)     // SIM_MIN_ELEVATION - 15m (NED, shallowest)
+#define ENTRY_SAFE_ALT_MAX static_cast<gp_scalar>(-105.0f)    // SIM_MAX_ELEVATION + 15m (NED, deepest)
 
 // Crash penalty: soft lexicographic multiplier
 // Completion dominates (1e6 scale), quality provides gradient within similar completion levels
@@ -74,6 +94,10 @@ public:
   double entryPitchSigma = 7.5;
   double entrySpeedSigma = 0.1;
   double windDirectionSigma = 45.0;
+
+  // Entry position variations (see specs/005-entry-fitness-ramp)
+  double entryPositionRadiusSigma = 0.0;  // meters, horizontal radius (0=disabled)
+  double entryPositionAltSigma = 0.0;     // meters, vertical offset (0=disabled)
 
   // Variation landscape ramp (see specs/RAMP_LANDSCAPE.md)
   // Scale variation sigmas from 0 to 1 over training

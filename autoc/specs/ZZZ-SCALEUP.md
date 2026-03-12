@@ -1,4 +1,4 @@
-# SCALEUP: Scaling AutoC for GPU-Accelerated Simulation
+# [TRANSFERRED to specs/011-gpu-native] SCALEUP: Scaling AutoC for GPU-Accelerated Simulation
 
 ## Executive Summary
 

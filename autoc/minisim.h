@@ -128,6 +128,11 @@ struct ScenarioMetadata {
   double entrySpeedFactor = 1.0;     // multiplier on reference speed
   double windDirectionOffset = 0.0;  // radians, offset from base wind direction
 
+  // Entry position offsets (version 6+, see specs/005-entry-fitness-ramp)
+  double entryNorthOffset = 0.0;     // meters, NED North
+  double entryEastOffset = 0.0;      // meters, NED East
+  double entryAltOffset = 0.0;       // meters, NED Down (negative=up)
+
   friend class boost::serialization::access;
 
   template<class Archive>
@@ -165,9 +170,19 @@ struct ScenarioMetadata {
       entrySpeedFactor = 1.0;
       windDirectionOffset = 0.0;
     }
+    // Entry position offset fields (version 6+)
+    if (version > 5) {
+      ar& entryNorthOffset;
+      ar& entryEastOffset;
+      ar& entryAltOffset;
+    } else if (Archive::is_loading::value) {
+      entryNorthOffset = 0.0;
+      entryEastOffset = 0.0;
+      entryAltOffset = 0.0;
+    }
   }
 };
-BOOST_CLASS_VERSION(ScenarioMetadata, 5)
+BOOST_CLASS_VERSION(ScenarioMetadata, 6)
 
 struct EvalData {
   std::vector<char> gp;

@@ -1,4 +1,4 @@
-# Unifying GP and Bytecode Evaluation Code Paths
+# [TRANSFERRED to specs/007-unify-eval] Unifying GP and Bytecode Evaluation Code Paths
 
 ## Executive Summary
 

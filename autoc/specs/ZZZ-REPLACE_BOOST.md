@@ -1,4 +1,4 @@
-# Replace boost with a platform independent faster/bespoke serialization strategy
+# [TRANSFERRED to specs/004-vacate-boost] Replace boost with a platform independent faster/bespoke serialization strategy
 Right now we are using boost to communicate between the main autoc program and the simulators; ~/crsim/crrcsim-0.9.13/src/mod_inputdev/inputdev_autoc and ~/GP/autoc/minisim.cc.  This library is relatively expensive and not compatible between ubuntu22/24 versions. We should replace this with a bespoke serialization strategy that is faster and platform independent.
 
 ---
