@@ -1285,7 +1285,8 @@ void MyGP::evalTask(WorkerContext& context)
       // Intercept-budget scaling: ramp penalty from floor→ceiling over budget
       double stepTimeSec = stepAircraftState.getSimTimeMsec() / 1000.0;
       double interceptScale = computeInterceptScale(stepTimeSec, interceptBudget);
-      distance_sum += pow(interceptScale * distance / DISTANCE_NORM, DISTANCE_POWER);
+      double distDelta = fabs(distance - DISTANCE_TARGET);
+      distance_sum += pow(interceptScale * distDelta / DISTANCE_NORM, DISTANCE_POWER);
       attitude_sum += pow(interceptScale * attitude_delta / ATTITUDE_NORM, ATTITUDE_POWER);
       simulation_steps++;
 
@@ -1877,7 +1878,8 @@ int main(int argc, char** argv)
             // Intercept-budget scaling: ramp penalty from floor→ceiling over budget
             double stepTimeSec = stepAircraftState.getSimTimeMsec() / 1000.0;
             double interceptScale = computeInterceptScale(stepTimeSec, interceptBudget);
-            distance_sum += pow(interceptScale * distance / DISTANCE_NORM, DISTANCE_POWER);
+            double distDelta = fabs(distance - DISTANCE_TARGET);
+            distance_sum += pow(interceptScale * distDelta / DISTANCE_NORM, DISTANCE_POWER);
             attitude_sum += pow(interceptScale * attitude_delta / ATTITUDE_NORM, ATTITUDE_POWER);
             simulation_steps++;
 

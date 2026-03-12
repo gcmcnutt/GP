@@ -15,13 +15,20 @@ struct WorkerContext;
 // See specs/FITNESS_SIMPLIFY_20260221.md for rationale.
 // ========================================================================
 
-// Nonlinear fitness: values are normalized so pow(x/NORM, POWER) has its
-// linear crossover at x=NORM.  Below NORM the cost compresses (tolerated),
-// above NORM it amplifies (penalized disproportionately).
-
-// Distance: 2m nominal — fractional power compresses large errors so many
-// small near-target deviations accumulate meaningful signal (was 2.0)
-#define DISTANCE_NORM 2.0
+// Nonlinear fitness uses pow(x/NORM, POWER).  Below NORM the cost compresses
+// (tolerated), above NORM it amplifies (penalized disproportionately).
+//
+// Distance uses a V-shaped function centered on a TARGET following distance:
+//   pow(fabs(distance - TARGET) / NORM, POWER)
+// This directly encodes the desired 5-10m trailing position:
+//   - At TARGET: zero cost (perfect following)
+//   - Too close (<5m): penalty rises — discourages overshooting on turns
+//   - Too far (>10m): penalty rises — pressures controller to close gap
+//   - Fractional power keeps far-tail (55m+) from dominating the sum
+// With TARGET=7.5, NORM=5, POWER=0.75:
+//   5m → 0.60  |  7.5m → 0  |  10m → 0.60  |  15m → 1.36  |  24m → 2.45
+#define DISTANCE_TARGET 7.5
+#define DISTANCE_NORM 5.0
 #define DISTANCE_POWER 0.75
 
 // Attitude delta: 200 deg/s nominal at 10Hz → 0.349 rad/step

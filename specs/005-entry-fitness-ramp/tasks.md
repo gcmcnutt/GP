@@ -111,6 +111,14 @@
 
 **Purpose**: Validation, build verification, integration testing
 
+- [ ] T029 [US2] Add entry condition sanity clamping to variation_generator.h: constrain combined entry position and orientation to survivable envelopes. Eval run showed 5/49 crashes from extreme combos (e.g., -66° heading + -32° roll + 39m displaced, or 10m high + pitch-up + 36m displaced). Specific constraints:
+  - Clamp pitch to ±15° (currently σ=7.5° but tails reach ±21°)
+  - Clamp roll to ±45° (currently σ=22.5° but tails reach ±67°)
+  - Reduce position altitude sigma or clamp altitude offset to ±8m (currently σ=10 allows ±17m tails, and starting low + pitch-down = ground impact)
+  - Consider coupling: when heading offset > 45°, reduce position displacement proportionally (large heading + large displacement = unrecoverable)
+  - Add compile-time constants for clamp bounds in autoc.h (ENTRY_MAX_PITCH, ENTRY_MAX_ROLL, ENTRY_MAX_ALT_OFFSET)
+  - Apply clamps after Gaussian generation, before safe-bounds check
+
 - [ ] T025 Verify build stability: GP `make` (from ~/GP/build), crrcsim `make` (from ~/crsim/crrcsim-0.9.13), xiao-gp `pio run` (from ~/xiao-gp) — MANUAL: user will verify crrcsim and xiao-gp builds
 - [x] T026 Run all GoogleTest tests: `./build/autoc_tests` passes (101 tests)
 - [ ] T027 Integration validation: run short evolution (5 generations) with EntryPositionRadiusSigma=30, EntryPositionAltSigma=10, and verify fitness differentiates between good and bad intercept behavior (SC-004: variance > 10% in gen 1) — MANUAL

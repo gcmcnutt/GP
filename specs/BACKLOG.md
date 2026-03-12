@@ -31,6 +31,12 @@
 
 ### [SPEC] GP Library Fitness Serialization Precision → `specs/006-fitness-precision`
 
+### [NEXT] Separate data.dat/data.stc Filenames for Train vs Eval Mode
+- Currently both training and evaluation modes write to the same `data.dat` and `data.stc`
+- Running eval after training silently overwrites the training output files
+- Fix: prefix or suffix filenames based on mode (e.g. `train-data.dat` / `eval-data.dat`)
+- Low effort, high annoyance factor — prevents accidental data loss
+
 ---
 
 ## Evolution & GP Engine
@@ -74,6 +80,18 @@
 
 ### [SPEC] Layered Controller Safety Layer → `specs/010-safety-layer`
 
+### [DEFERRED] Upper-Level Intercept Director
+- Current GP controller assumes "intercept and track" — it just flies toward the rabbit
+- With entry position/orientation variations, the aircraft may start pointed away, inverted, etc.
+- A higher-level controller (or pre-intercept phase) should *judge* the appropriate initial
+  maneuver based on current position and orientation before engaging track mode
+- Examples: if starting 90° off-heading, first turn toward path; if starting inverted, first
+  recover wings-level; if starting far displaced, fly direct intercept rather than chasing rabbit
+- This is distinct from the current intercept-budget *fitness scaling* (005), which merely
+  reduces penalties during intercept — it doesn't guide the aircraft's approach strategy
+- Could be a separate GP program, a hand-coded state machine, or a learned policy
+- Depends on: entry variation training (005) reaching maturity, safety layer (010) for guardrails
+
 ### [DONE] Path Interpolation → `specs/002-path-interpolation`
 
 ### [DEFERRED] Control Command Smoothness Fitness Objective
@@ -87,6 +105,19 @@
   the search space. Revisit only if bang-bang becomes dominant when variations are enabled.
 
 ### [SPEC] Fix LongSequential Path Immelman Segment → `specs/009-immelman-path`
+
+### [DEFERRED] 4D Positional Fitness Surface
+- Current V-shaped distance fitness uses scalar dist-to-rabbit with a target offset (7.5m)
+- Future: map aircraft position relative to rabbit into a 4D fitness surface where
+  directional deviations have different costs:
+  - **Behind** (along path direction): lowest cost — natural following position
+  - **Ahead** (overshooting): higher cost — risks missing turns
+  - **Lateral** (sideways offset): higher cost — off the path entirely
+  - **Below** (altitude error): highest cost — terrain/crash risk
+- Would use path tangent vector to decompose position error into along-track, cross-track,
+  and vertical components, each with its own power function and norm
+- Enables GP to learn that "10m behind" is much better than "10m to the side"
+- Depends on: stable scalar fitness function first, path tangent availability
 
 ### [DEFERRED] Error Cone for Future Path Points
 - The further ahead we look from rabbit's current position, the less accurate the target point becomes
@@ -117,6 +148,13 @@
 - **Fix**: Add bucket+profile to GPBytecodeHeader (or a separate provenance struct),
   embed in bytecode files and generated code, use consistent fixed-point formatting
 - Relevant for xiao-gp codebase (not yet in this repo)
+
+### [NEXT] Configurable Output File Prefixes for Train vs Eval
+- `data.dat` and `data.stc` are hardcoded in `autoc.cc:1586-1587`
+- Both training and eval modes write to the same filenames, causing overwrites
+- Need: configurable prefix or suffix in `autoc.ini` (e.g., `OutputFilePrefix = eval-`)
+- At minimum: auto-prefix based on `EvaluateMode` (e.g., `eval-data.dat` vs `train-data.dat`)
+- Files affected: `autoc.cc` (`strOutFile`, `strStatFile` construction)
 
 ### [NEXT] Export RC Commands to Xiao Log
 - Currently: GP Output (rc=[...]) only logged during autoc=Y test spans
