@@ -1,69 +1,104 @@
-# Implementation Plan: Distance Temporal Sensor Nodes
+# Implementation Plan: [FEATURE]
 
-**Branch**: `012-distance-temporal-nodes` | **Date**: 2026-03-12 | **Spec**: [spec.md](spec.md)
-**Input**: Feature specification from `/specs/012-distance-temporal-nodes/spec.md`
+**Branch**: `[###-feature-name]` | **Date**: [DATE] | **Spec**: [link]
+**Input**: Feature specification from `/specs/[###-feature-name]/spec.md`
+
+**Note**: This template is filled in by the `/speckit.plan` command. See `.specify/templates/plan-template.md` for the execution workflow.
 
 ## Summary
 
-Add three new GP sensor nodes (GETDIST, GETDIST_PREV, GETDIST_RATE) providing raw distance-to-rabbit in meters with temporal history and derivative, following the proven GETDPHI_PREV/RATE pattern. Deprecate the composite GETDTARGET node from active training sets. Implementation touches 15 files across opcode enums, evaluators, bytecode tools, config, docs, and tests.
+[Extract from feature spec: primary requirement + technical approach from research]
 
 ## Technical Context
 
-**Language/Version**: C++17 (g++, CMake 3.10+)
-**Primary Dependencies**: Eigen3 (vectors), Boost (serialization, logging), GoogleTest 1.14.0
-**Storage**: N/A (in-memory ring buffers, S3 for evolution artifacts)
-**Testing**: GoogleTest — existing suite at `autoc/tests/gp_evaluator_tests.cc` (101+ tests)
-**Target Platform**: Linux (desktop training), Arduino/XIAO BLE (embedded deployment via portable evaluator)
-**Project Type**: Library + simulation system
-**Performance Goals**: No measurable overhead — distance already computed each tick for fitness; buffering adds one float write per tick
-**Constraints**: Ring buffer must fit embedded memory (<100 bytes); opcodes must append to enum end for bytecode backward compatibility
-**Scale/Scope**: 15 files modified, ~200 lines of new code, ~50 lines of test code
+<!--
+  ACTION REQUIRED: Replace the content in this section with the technical details
+  for the project. The structure here is presented in advisory capacity to guide
+  the iteration process.
+-->
+
+**Language/Version**: [e.g., Python 3.11, Swift 5.9, Rust 1.75 or NEEDS CLARIFICATION]  
+**Primary Dependencies**: [e.g., FastAPI, UIKit, LLVM or NEEDS CLARIFICATION]  
+**Storage**: [if applicable, e.g., PostgreSQL, CoreData, files or N/A]  
+**Testing**: [e.g., pytest, XCTest, cargo test or NEEDS CLARIFICATION]  
+**Target Platform**: [e.g., Linux server, iOS 15+, WASM or NEEDS CLARIFICATION]
+**Project Type**: [e.g., library/cli/web-service/mobile-app/compiler/desktop-app or NEEDS CLARIFICATION]  
+**Performance Goals**: [domain-specific, e.g., 1000 req/s, 10k lines/sec, 60 fps or NEEDS CLARIFICATION]  
+**Constraints**: [domain-specific, e.g., <200ms p95, <100MB memory, offline-capable or NEEDS CLARIFICATION]  
+**Scale/Scope**: [domain-specific, e.g., 10k users, 1M LOC, 50 screens or NEEDS CLARIFICATION]
 
 ## Constitution Check
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-| Principle | Status | Notes |
-|-----------|--------|-------|
-| **I. Testing-First** | PASS | Unit tests for all 3 nodes across GP tree + bytecode evaluators (FR-013) |
-| **II. Build Stability** | PASS | Incremental — new opcodes appended to enum end, no breaking changes. Build verified via `cd ~/GP && make` |
-| **III. Dual-Mode Parity** | PASS | All nodes implemented in GP tree evaluator AND bytecode interpreter AND portable evaluator (FR-007). Bytecode parity verified via EvaluateMode=1 (SC-005) |
-
-No violations. No complexity tracking needed.
+[Gates determined based on constitution file]
 
 ## Project Structure
 
 ### Documentation (this feature)
 
 ```text
-specs/012-distance-temporal-nodes/
-├── spec.md              # Feature specification
-├── plan.md              # This file
-├── research.md          # Phase 0: no unknowns, documents pattern analysis
-├── data-model.md        # Phase 1: ring buffer and opcode data model
-└── checklists/
-    └── requirements.md  # Spec quality checklist
+specs/[###-feature]/
+├── plan.md              # This file (/speckit.plan command output)
+├── research.md          # Phase 0 output (/speckit.plan command)
+├── data-model.md        # Phase 1 output (/speckit.plan command)
+├── quickstart.md        # Phase 1 output (/speckit.plan command)
+├── contracts/           # Phase 1 output (/speckit.plan command)
+└── tasks.md             # Phase 2 output (/speckit.tasks command - NOT created by /speckit.plan)
 ```
 
-### Source Code (modified files)
+### Source Code (repository root)
+<!--
+  ACTION REQUIRED: Replace the placeholder tree below with the concrete layout
+  for this feature. Delete unused options and expand the chosen structure with
+  real paths (e.g., apps/admin, packages/something). The delivered plan must
+  not include Option labels.
+-->
 
 ```text
-autoc/
-├── autoc.h                          # Opcode enum: +GETDIST, GETDIST_PREV, GETDIST_RATE
-├── autoc.ini                        # TrainingNodes: +GETDIST nodes, -GETDTARGET (deprecated)
-├── autoc-eval.ini                   # Mirror autoc.ini changes
-├── autoc-eval.cc                    # allNodes[] registration table
-├── aircraft_state.h                 # distHistory_[] buffer, recordErrorHistory(), clearHistory(), getHistoricalDist()
-├── minisim.cc                       # Record distance to history buffer before GP eval
-├── gp_evaluator_portable.h          # Opcode enum mirror, function declarations
-├── gp_evaluator_portable.cc         # evaluateGPOperator() + evaluateBytecodePortable() switch cases, execute functions
-├── gp_bytecode.cc                   # (delegates to portable — verify no direct dispatch)
-├── gpextractor.cc                   # GP-to-bytecode: child processing for GETDIST_PREV (unary)
-├── bytecode2cpp.cc                  # Stack analysis, operator names, code generation
-└── tests/
-    └── gp_evaluator_tests.cc        # Unit tests for all 3 nodes
+# [REMOVE IF UNUSED] Option 1: Single project (DEFAULT)
+src/
+├── models/
+├── services/
+├── cli/
+└── lib/
 
-CLAUDE.md                            # GP Operators documentation update
+tests/
+├── contract/
+├── integration/
+└── unit/
+
+# [REMOVE IF UNUSED] Option 2: Web application (when "frontend" + "backend" detected)
+backend/
+├── src/
+│   ├── models/
+│   ├── services/
+│   └── api/
+└── tests/
+
+frontend/
+├── src/
+│   ├── components/
+│   ├── pages/
+│   └── services/
+└── tests/
+
+# [REMOVE IF UNUSED] Option 3: Mobile + API (when "iOS/Android" detected)
+api/
+└── [same as backend above]
+
+ios/ or android/
+└── [platform-specific structure: feature modules, UI flows, platform tests]
 ```
 
-**Structure Decision**: No new files created. All changes are additions to existing files, following the exact pattern established by GETDPHI_PREV/GETDPHI_RATE in the same files.
+**Structure Decision**: [Document the selected structure and reference the real
+directories captured above]
+
+## Complexity Tracking
+
+> **Fill ONLY if Constitution Check has violations that must be justified**
+
+| Violation | Why Needed | Simpler Alternative Rejected Because |
+|-----------|------------|-------------------------------------|
+| [e.g., 4th project] | [current need] | [why 3 projects insufficient] |
+| [e.g., Repository pattern] | [specific problem] | [why direct DB access insufficient] |

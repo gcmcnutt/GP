@@ -1,8 +1,9 @@
 # Spec: Unify Evaluation Pipelines
 
 **Feature ID**: 007-unify-eval
-**Status**: Draft
+**Status**: Obsolete — absorbed into [013-neuroevolution](../013-neuroevolution/spec.md) Phase 1
 **Created**: 2026-03-10
+**Obsoleted**: 2026-03-12
 
 ## Overview
 
@@ -30,3 +31,10 @@ Two parallel evaluation pipelines maintain identical fitness computation, scenar
 
 - **Reference**: `autoc/specs/UNIFY.md` (detailed analysis, phase plan)
 - Bug fixes documented: temporal history wipe, -ffast-math NaN guard, path interpolator float precision
+
+## Obsolescence Notice
+
+This feature has been absorbed into **013-neuroevolution** as Phase 1 (eval pipeline unification).
+The 013 spec requires a unified `ControllerBackend` interface before adding the NN evaluation
+backend as a third mode. All four phases listed above are covered by 013's Phase 1 tasks.
+This spec will not be revisited independently.

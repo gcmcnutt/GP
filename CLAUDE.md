@@ -214,10 +214,15 @@ The PROGN bytecode instruction preserves GP tree semantics for operations with s
 
 **Navigation Sensors:**
 - `GETDPHI(steps)` - Roll angle to target at path step offset
-- `GETDTHETA(steps)` - Pitch angle to target at path step offset  
-- `GETDTARGET(steps)` - Distance-based throttle estimate to target
+- `GETDTHETA(steps)` - Pitch angle to target at path step offset
+- `GETDTARGET(steps)` - *(deprecated)* Composite throttle estimate: `CLAMP((distance-10)/speed, -1, 1)`. Replaced by GETDIST primitives. Opcode retained for backward compatibility.
 - `GETDHOME` - Distance to home/origin point
 - `GETVEL` - Current aircraft speed magnitude
+
+**Distance Sensors** (see specs/012-distance-temporal-nodes):
+- `GETDIST` - Raw Euclidean distance to rabbit (meters, nullary)
+- `GETDIST_PREV(n)` - Buffered distance at history index n (meters, unary)
+- `GETDIST_RATE` - Rate of distance change (m/s, nullary, clamped [-10,10])
 
 **Attitude Sensors:**
 - `GETROLL_RAD` - Current roll angle in radians

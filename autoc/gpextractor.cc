@@ -162,11 +162,12 @@ void generateBytecode(MyGene* gene, std::vector<GPBytecode>& program) {
     case GETDTARGET:
     case GETDPHI_PREV:
     case GETDTHETA_PREV:
+    case GETDIST_PREV:
       if (gene->containerSize() >= 1) {
         generateBytecode(gene->NthMyChild(0), program);
       }
       break;
-      
+
     // Terminals and constants - no children to process
     case OP_PI:
     case ZERO:
@@ -186,6 +187,8 @@ void generateBytecode(MyGene* gene, std::vector<GPBytecode>& program) {
     case GETPITCH_RAD:
     case GETDPHI_RATE:
     case GETDTHETA_RATE:
+    case GETDIST:
+    case GETDIST_RATE:
       // No children to process
       break;
       

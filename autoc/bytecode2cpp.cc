@@ -35,14 +35,16 @@ private:
                 case GETVELX: case GETVELY: case GETVELZ:
                 case GETROLL_RAD: case GETPITCH_RAD:
                 case GETDPHI_RATE: case GETDTHETA_RATE:
+                case GETDIST: case GETDIST_RATE:
                     currentStack += 1;
                     break;
-                    
+
                 // Unary operations - pop 1, push 1 (net 0)
                 case SIN: case COS: case ABS: case SQRT:
                 case SETPITCH: case SETROLL: case SETTHROTTLE:
                 case GETDPHI: case GETDTHETA: case GETDTARGET:
                 case GETDPHI_PREV: case GETDTHETA_PREV:
+                case GETDIST_PREV:
                     // net 0
                     break;
                     
@@ -111,6 +113,9 @@ private:
             case GETDTHETA_PREV: return "GETDTHETA_PREV";
             case GETDPHI_RATE: return "GETDPHI_RATE";
             case GETDTHETA_RATE: return "GETDTHETA_RATE";
+            case GETDIST: return "GETDIST";
+            case GETDIST_PREV: return "GETDIST_PREV";
+            case GETDIST_RATE: return "GETDIST_RATE";
             case CLAMP: return "CLAMP";
             case ATAN2: return "ATAN2";
             case ABS: return "ABS";
@@ -147,6 +152,7 @@ private:
             case SETPITCH: case SETROLL: case SETTHROTTLE:
             case GETDPHI: case GETDTHETA: case GETDTARGET:
             case GETDPHI_PREV: case GETDTHETA_PREV:
+            case GETDIST_PREV:
                 code << "    // " << opName << "\n";
                 code << "    {\n";
                 code << "        gp_scalar args[1] = {stack[sp-1]};\n";

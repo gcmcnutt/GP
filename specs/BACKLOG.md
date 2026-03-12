@@ -101,20 +101,14 @@
   solutions on its own. A smoothness penalty may be unnecessary overhead that constrains
   the search space. Revisit only if bang-bang becomes dominant when variations are enabled.
 
+### [SPEC] Neuroevolution Controller → `specs/013-neuroevolution`
+
 ### [SPEC] Fix LongSequential Path Immelman Segment → `specs/009-immelman-path`
 
-### [DEFERRED] 4D Positional Fitness Surface
-- Current V-shaped distance fitness uses scalar dist-to-rabbit with a target offset (7.5m)
-- Future: map aircraft position relative to rabbit into a 4D fitness surface where
-  directional deviations have different costs:
-  - **Behind** (along path direction): lowest cost — natural following position
-  - **Ahead** (overshooting): higher cost — risks missing turns
-  - **Lateral** (sideways offset): higher cost — off the path entirely
-  - **Below** (altitude error): highest cost — terrain/crash risk
-- Would use path tangent vector to decompose position error into along-track, cross-track,
-  and vertical components, each with its own power function and norm
-- Enables GP to learn that "10m behind" is much better than "10m to the side"
-- Depends on: stable scalar fitness function first, path tangent availability
+### [SPEC] 4D Positional Fitness Surface → `specs/013-neuroevolution`
+- Superseded by neuroevolution approach: NN can discover directional control from existing
+  angular sensors (GETDPHI, GETDTHETA) × distance without encoding assumptions in fitness
+- See 013 spec for analysis of why sensor-side representation is preferred over fitness encoding
 
 ### [DEFERRED] Error Cone for Future Path Points
 - The further ahead we look from rabbit's current position, the less accurate the target point becomes
@@ -162,7 +156,7 @@
 
 ## Scale & Performance
 
-### [SPEC] Unify Evaluation Pipelines → `specs/007-unify-eval`
+### [SPEC] Unify Evaluation Pipelines → absorbed into `specs/013-neuroevolution` Phase 1
 
 ### [SPEC] GB10 GPU Native Evaluation → `specs/011-gpu-native`
 

@@ -137,6 +137,10 @@ enum Operators {
   // Temporal state terminals (added 2026-02) - see specs/TEMPORAL_STATE.md
   GETDPHI_PREV, GETDTHETA_PREV,   // History lookback (1 arg: tick index)
   GETDPHI_RATE, GETDTHETA_RATE,   // Error derivatives (nullary)
+  // Distance temporal nodes (added 2026-03) - see specs/012-distance-temporal-nodes
+  GETDIST,                         // Raw distance to rabbit (nullary, meters)
+  GETDIST_PREV,                    // Distance history lookback (1 arg: tick index)
+  GETDIST_RATE,                    // Rate of distance change (nullary, m/s)
   _END
 };
 const int OPERATORS_NR_ITEM = _END;
