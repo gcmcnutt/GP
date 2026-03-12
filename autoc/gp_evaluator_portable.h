@@ -27,6 +27,8 @@ enum Operators {
   // Temporal state terminals (added 2026-02)
   GETDPHI_PREV, GETDTHETA_PREV,
   GETDPHI_RATE, GETDTHETA_RATE,
+  // Distance temporal nodes (added 2026-03)
+  GETDIST, GETDIST_PREV, GETDIST_RATE,
   _END  // Renamed PI to OP_PI to avoid Arduino macro conflict
 };
 
@@ -62,6 +64,11 @@ gp_scalar executeGetDPhiPrev(AircraftState& aircraftState, gp_scalar arg);
 gp_scalar executeGetDThetaPrev(AircraftState& aircraftState, gp_scalar arg);
 gp_scalar executeGetDPhiRate(AircraftState& aircraftState);
 gp_scalar executeGetDThetaRate(AircraftState& aircraftState);
+
+// Distance temporal nodes - raw distance (meters) and derivative (m/s)
+gp_scalar executeGetDist(PathProvider& pathProvider, AircraftState& aircraftState);
+gp_scalar executeGetDistPrev(AircraftState& aircraftState, gp_scalar arg);
+gp_scalar executeGetDistRate(AircraftState& aircraftState);
 
 // Range limiting - identical across platforms
 inline gp_scalar applyRangeLimit(gp_scalar value) {

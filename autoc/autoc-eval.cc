@@ -129,6 +129,10 @@ const NodeDef allNodes[] = {
   {GETDTHETA_PREV, "GETDTHETA_PREV", 1}, // 1 arg: history tick index
   {GETDPHI_RATE, "GETDPHI_RATE", 0},     // 0 args: nullary terminal
   {GETDTHETA_RATE, "GETDTHETA_RATE", 0}, // 0 args: nullary terminal
+  // Distance temporal nodes - see specs/012-distance-temporal-nodes
+  {GETDIST, "GETDIST", 0},               // 0 args: nullary (meters)
+  {GETDIST_PREV, "GETDIST_PREV", 1},     // 1 arg: history tick index
+  {GETDIST_RATE, "GETDIST_RATE", 0},     // 0 args: nullary (m/s)
 };
 const int allNodesCount = sizeof(allNodes) / sizeof(allNodes[0]);
 

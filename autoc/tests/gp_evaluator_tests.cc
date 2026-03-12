@@ -1521,8 +1521,8 @@ TEST(TemporalOps, GetDPhiPrevIndex0) {
     AircraftState state = makeState();
 
     // Record some history
-    state.recordErrorHistory(0.5f, 0.3f, 100);
-    state.recordErrorHistory(0.6f, 0.4f, 200);
+    state.recordErrorHistory(0.5f, 0.3f, 0.0f, 100);
+    state.recordErrorHistory(0.6f, 0.4f, 0.0f, 200);
 
     gp_scalar args[1] = {0.0f};  // Index 0 = most recent
     gp_scalar result = evaluateGPOperator(GETDPHI_PREV, provider, state, args, 1);
@@ -1538,11 +1538,11 @@ TEST(TemporalOps, GetDPhiPrevIndex2) {
     AircraftState state = makeState();
 
     // Record 5 history entries
-    state.recordErrorHistory(0.1f, 0.1f, 100);
-    state.recordErrorHistory(0.2f, 0.2f, 200);
-    state.recordErrorHistory(0.3f, 0.3f, 300);
-    state.recordErrorHistory(0.4f, 0.4f, 400);
-    state.recordErrorHistory(0.5f, 0.5f, 500);
+    state.recordErrorHistory(0.1f, 0.1f, 0.0f, 100);
+    state.recordErrorHistory(0.2f, 0.2f, 0.0f, 200);
+    state.recordErrorHistory(0.3f, 0.3f, 0.0f, 300);
+    state.recordErrorHistory(0.4f, 0.4f, 0.0f, 400);
+    state.recordErrorHistory(0.5f, 0.5f, 0.0f, 500);
 
     gp_scalar args[1] = {2.0f};  // Index 2 = 3rd most recent
     gp_scalar result = evaluateGPOperator(GETDPHI_PREV, provider, state, args, 1);
@@ -1557,8 +1557,8 @@ TEST(TemporalOps, GetDThetaPrev) {
     TestPathProvider provider;
     AircraftState state = makeState();
 
-    state.recordErrorHistory(0.1f, 0.2f, 100);
-    state.recordErrorHistory(0.3f, 0.4f, 200);
+    state.recordErrorHistory(0.1f, 0.2f, 0.0f, 100);
+    state.recordErrorHistory(0.3f, 0.4f, 0.0f, 200);
 
     gp_scalar args[1] = {0.0f};
     gp_scalar result = evaluateGPOperator(GETDTHETA_PREV, provider, state, args, 1);
@@ -1590,7 +1590,7 @@ TEST(TemporalOps, HistoryIndexOutOfBounds) {
     TestPathProvider provider;
     AircraftState state = makeState();
 
-    state.recordErrorHistory(0.5f, 0.6f, 100);
+    state.recordErrorHistory(0.5f, 0.6f, 0.0f, 100);
 
     // Index way beyond history size - should clamp to last valid
     gp_scalar args[1] = {100.0f};
@@ -1608,8 +1608,8 @@ TEST(TemporalOps, GetDPhiRate) {
     AircraftState state = makeState();
 
     // Record history with known time delta
-    state.recordErrorHistory(0.0f, 0.0f, 0);
-    state.recordErrorHistory(0.5f, 0.3f, 100);  // 100ms later
+    state.recordErrorHistory(0.0f, 0.0f, 0.0f, 0);
+    state.recordErrorHistory(0.5f, 0.3f, 0.0f, 100);  // 100ms later
 
     gp_scalar rate = evaluateGPOperator(GETDPHI_RATE, provider, state, nullptr, 0);
 
@@ -1624,8 +1624,8 @@ TEST(TemporalOps, GetDThetaRate) {
     TestPathProvider provider;
     AircraftState state = makeState();
 
-    state.recordErrorHistory(0.0f, 0.0f, 0);
-    state.recordErrorHistory(0.2f, 0.4f, 100);  // 100ms later
+    state.recordErrorHistory(0.0f, 0.0f, 0.0f, 0);
+    state.recordErrorHistory(0.2f, 0.4f, 0.0f, 100);  // 100ms later
 
     gp_scalar rate = evaluateGPOperator(GETDTHETA_RATE, provider, state, nullptr, 0);
 
@@ -1641,8 +1641,8 @@ TEST(TemporalOps, RateWithZeroDt) {
     AircraftState state = makeState();
 
     // Same timestamp - dt would be 0, should use default
-    state.recordErrorHistory(0.0f, 0.0f, 100);
-    state.recordErrorHistory(0.1f, 0.1f, 100);  // Same time!
+    state.recordErrorHistory(0.0f, 0.0f, 0.0f, 100);
+    state.recordErrorHistory(0.1f, 0.1f, 0.0f, 100);  // Same time!
 
     gp_scalar dPhiRate = evaluateGPOperator(GETDPHI_RATE, provider, state, nullptr, 0);
     gp_scalar dThetaRate = evaluateGPOperator(GETDTHETA_RATE, provider, state, nullptr, 0);
@@ -1660,8 +1660,8 @@ TEST(BytecodeTemporal, GetPrevNodes) {
     TestPathProvider provider;
     AircraftState state = makeState();
 
-    state.recordErrorHistory(0.1f, 0.2f, 100);
-    state.recordErrorHistory(0.3f, 0.4f, 200);
+    state.recordErrorHistory(0.1f, 0.2f, 0.0f, 100);
+    state.recordErrorHistory(0.3f, 0.4f, 0.0f, 200);
 
     // GETDPHI_PREV(0)
     GPBytecode dPhiPrevProg[] = {{ZERO, 0, 0}, {GETDPHI_PREV, 1, 0}};
@@ -1679,8 +1679,8 @@ TEST(BytecodeTemporal, GetRateNodes) {
     TestPathProvider provider;
     AircraftState state = makeState();
 
-    state.recordErrorHistory(0.0f, 0.0f, 0);
-    state.recordErrorHistory(0.5f, 0.4f, 100);
+    state.recordErrorHistory(0.0f, 0.0f, 0.0f, 0);
+    state.recordErrorHistory(0.5f, 0.4f, 0.0f, 100);
 
     GPBytecode dPhiRateProg[] = {{GETDPHI_RATE, 0, 0}};
     GPBytecode dThetaRateProg[] = {{GETDTHETA_RATE, 0, 0}};
@@ -1690,6 +1690,278 @@ TEST(BytecodeTemporal, GetRateNodes) {
 
     TEST_NODE(GETDPHI_RATE);
     TEST_NODE(GETDTHETA_RATE);
+}
+
+// =============================================================================
+// Distance Temporal Nodes (012-distance-temporal-nodes)
+// =============================================================================
+
+// T005: GETDIST returns Euclidean distance to interpolated rabbit position
+TEST(DistanceOps, GetDistReturnsDistance) {
+    // Place rabbit at (10, 0, SIM_INITIAL_ALTITUDE) and aircraft at origin altitude
+    TestPathProvider provider;
+    provider.paths.clear();
+    provider.paths.push_back(makePath(10.0f, 0.0f, SIM_INITIAL_ALTITUDE, 0.0f));
+    provider.paths.push_back(makePath(10.0f, 0.0f, SIM_INITIAL_ALTITUDE, 1000.0f));
+
+    // Aircraft at (0, 0, SIM_INITIAL_ALTITUDE) with time=0
+    AircraftState state = makeStateWithTime(
+        gp_vec3(0.0f, 0.0f, SIM_INITIAL_ALTITUDE),
+        gp_quat::Identity(), 0);
+
+    gp_scalar result = evaluateGPOperator(GETDIST, provider, state, nullptr, 0);
+    // Distance = ||(10,0,alt) - (0,0,alt)|| = 10m
+    EXPECT_NEAR(result, 10.0f, 0.5f);
+
+    TEST_NODE(GETDIST);
+}
+
+// T006: GETDIST_PREV returns buffered distance values
+TEST(DistanceOps, GetDistPrevMostRecent) {
+    TestPathProvider provider;
+    AircraftState state = makeState();
+
+    // Record history with known distance values
+    state.recordErrorHistory(0.1f, 0.1f, 15.0f, 100);
+    state.recordErrorHistory(0.2f, 0.2f, 20.0f, 200);
+
+    gp_scalar args[1] = {0.0f};  // Index 0 = most recent
+    gp_scalar result = evaluateGPOperator(GETDIST_PREV, provider, state, args, 1);
+    EXPECT_FLOAT_EQ(result, 20.0f);
+
+    TEST_NODE(GETDIST_PREV);
+}
+
+TEST(DistanceOps, GetDistPrevOlderIndex) {
+    TestPathProvider provider;
+    AircraftState state = makeState();
+
+    state.recordErrorHistory(0.1f, 0.1f, 10.0f, 100);
+    state.recordErrorHistory(0.2f, 0.2f, 15.0f, 200);
+    state.recordErrorHistory(0.3f, 0.3f, 20.0f, 300);
+    state.recordErrorHistory(0.4f, 0.4f, 25.0f, 400);
+    state.recordErrorHistory(0.5f, 0.5f, 30.0f, 500);
+
+    gp_scalar args[1] = {2.0f};  // Index 2 = 3rd most recent
+    gp_scalar result = evaluateGPOperator(GETDIST_PREV, provider, state, args, 1);
+    EXPECT_FLOAT_EQ(result, 20.0f);
+
+    TEST_NODE(GETDIST_PREV);
+}
+
+TEST(DistanceOps, GetDistPrevEmptyHistory) {
+    TestPathProvider provider;
+    AircraftState state = makeState();
+
+    gp_scalar args[1] = {0.0f};
+    gp_scalar result = evaluateGPOperator(GETDIST_PREV, provider, state, args, 1);
+    EXPECT_FLOAT_EQ(result, 0.0f);
+
+    TEST_NODE(GETDIST_PREV);
+}
+
+TEST(DistanceOps, GetDistPrevIndexClamping) {
+    TestPathProvider provider;
+    AircraftState state = makeState();
+
+    state.recordErrorHistory(0.1f, 0.1f, 42.0f, 100);
+
+    // Index way beyond history — should clamp to last valid
+    gp_scalar args[1] = {100.0f};
+    gp_scalar result = evaluateGPOperator(GETDIST_PREV, provider, state, args, 1);
+    EXPECT_FLOAT_EQ(result, 42.0f);
+
+    // Negative index — should clamp to 0
+    gp_scalar args2[1] = {-5.0f};
+    gp_scalar result2 = evaluateGPOperator(GETDIST_PREV, provider, state, args2, 1);
+    EXPECT_FLOAT_EQ(result2, 42.0f);
+
+    TEST_NODE(GETDIST_PREV);
+}
+
+TEST(DistanceOps, GetDistPrevWraparound) {
+    TestPathProvider provider;
+    AircraftState state = makeState();
+
+    // Fill buffer past HISTORY_SIZE to test ring buffer wraparound
+    for (int i = 0; i < 12; i++) {
+        state.recordErrorHistory(0.0f, 0.0f, static_cast<gp_scalar>(i * 5.0f), i * 100);
+    }
+
+    // Most recent is i=11 → distance=55
+    gp_scalar args0[1] = {0.0f};
+    EXPECT_FLOAT_EQ(evaluateGPOperator(GETDIST_PREV, provider, state, args0, 1), 55.0f);
+
+    // 9 ticks ago is i=2 → distance=10 (oldest in buffer after wraparound)
+    gp_scalar args9[1] = {9.0f};
+    EXPECT_FLOAT_EQ(evaluateGPOperator(GETDIST_PREV, provider, state, args9, 1), 10.0f);
+
+    TEST_NODE(GETDIST_PREV);
+}
+
+// T007: GETDIST_RATE returns rate of distance change in m/s
+TEST(DistanceOps, GetDistRateClosing) {
+    TestPathProvider provider;
+    AircraftState state = makeState();
+
+    // Distance decreasing: closing rate should be negative
+    state.recordErrorHistory(0.0f, 0.0f, 20.0f, 0);
+    state.recordErrorHistory(0.0f, 0.0f, 18.0f, 100);  // 100ms later
+
+    gp_scalar rate = evaluateGPOperator(GETDIST_RATE, provider, state, nullptr, 0);
+    // Rate = (18 - 20) / 0.1 = -20 → clamped to -10
+    EXPECT_FLOAT_EQ(rate, -10.0f);
+
+    TEST_NODE(GETDIST_RATE);
+}
+
+TEST(DistanceOps, GetDistRateOpening) {
+    TestPathProvider provider;
+    AircraftState state = makeState();
+
+    // Distance increasing: opening rate should be positive
+    state.recordErrorHistory(0.0f, 0.0f, 10.0f, 0);
+    state.recordErrorHistory(0.0f, 0.0f, 10.5f, 100);  // 100ms later
+
+    gp_scalar rate = evaluateGPOperator(GETDIST_RATE, provider, state, nullptr, 0);
+    // Rate = (10.5 - 10) / 0.1 = 5.0 m/s
+    EXPECT_NEAR(rate, 5.0f, 0.1f);
+
+    TEST_NODE(GETDIST_RATE);
+}
+
+TEST(DistanceOps, GetDistRateFirstTick) {
+    TestPathProvider provider;
+    AircraftState state = makeState();
+
+    // Only one sample — not enough for rate
+    state.recordErrorHistory(0.0f, 0.0f, 15.0f, 100);
+
+    gp_scalar rate = evaluateGPOperator(GETDIST_RATE, provider, state, nullptr, 0);
+    EXPECT_FLOAT_EQ(rate, 0.0f);
+
+    TEST_NODE(GETDIST_RATE);
+}
+
+TEST(DistanceOps, GetDistRateNoHistory) {
+    TestPathProvider provider;
+    AircraftState state = makeState();
+
+    gp_scalar rate = evaluateGPOperator(GETDIST_RATE, provider, state, nullptr, 0);
+    EXPECT_FLOAT_EQ(rate, 0.0f);
+
+    TEST_NODE(GETDIST_RATE);
+}
+
+TEST(DistanceOps, GetDistRateZeroDt) {
+    TestPathProvider provider;
+    AircraftState state = makeState();
+
+    // Same timestamp — should use default dt=0.1
+    state.recordErrorHistory(0.0f, 0.0f, 10.0f, 100);
+    state.recordErrorHistory(0.0f, 0.0f, 10.5f, 100);  // Same time!
+
+    gp_scalar rate = evaluateGPOperator(GETDIST_RATE, provider, state, nullptr, 0);
+    // Rate = (10.5 - 10) / 0.1 = 5.0 m/s
+    EXPECT_NEAR(rate, 5.0f, 0.1f);
+
+    TEST_NODE(GETDIST_RATE);
+}
+
+TEST(DistanceOps, GetDistRateClamping) {
+    TestPathProvider provider;
+    AircraftState state = makeState();
+
+    // Huge distance change — should clamp to [-10, 10]
+    state.recordErrorHistory(0.0f, 0.0f, 0.0f, 0);
+    state.recordErrorHistory(0.0f, 0.0f, 100.0f, 100);
+
+    gp_scalar rate = evaluateGPOperator(GETDIST_RATE, provider, state, nullptr, 0);
+    // Rate = 100 / 0.1 = 1000 → clamped to 10
+    EXPECT_FLOAT_EQ(rate, 10.0f);
+
+    TEST_NODE(GETDIST_RATE);
+}
+
+// T021: Bytecode round-trip tests for distance nodes
+TEST(BytecodeDistance, GetDistBytecode) {
+    TestPathProvider provider;
+    provider.paths.clear();
+    provider.paths.push_back(makePath(10.0f, 0.0f, SIM_INITIAL_ALTITUDE, 0.0f));
+    provider.paths.push_back(makePath(10.0f, 0.0f, SIM_INITIAL_ALTITUDE, 1000.0f));
+
+    AircraftState state = makeStateWithTime(
+        gp_vec3(0.0f, 0.0f, SIM_INITIAL_ALTITUDE),
+        gp_quat::Identity(), 0);
+
+    // GP tree evaluation
+    gp_scalar gpResult = evaluateGPOperator(GETDIST, provider, state, nullptr, 0);
+
+    // Bytecode evaluation
+    GPBytecode prog[] = {{GETDIST, 0, 0}};
+    gp_scalar bcResult = evaluateBytecodePortable(prog, 1, provider, state, 0);
+
+    EXPECT_FLOAT_EQ(gpResult, bcResult);
+    TEST_NODE(GETDIST);
+}
+
+TEST(BytecodeDistance, GetDistPrevBytecode) {
+    TestPathProvider provider;
+    AircraftState state = makeState();
+
+    state.recordErrorHistory(0.0f, 0.0f, 15.0f, 100);
+    state.recordErrorHistory(0.0f, 0.0f, 25.0f, 200);
+
+    // GP tree: GETDIST_PREV(0) = most recent = 25.0
+    gp_scalar args[1] = {0.0f};
+    gp_scalar gpResult = evaluateGPOperator(GETDIST_PREV, provider, state, args, 1);
+
+    // Bytecode: push 0, then GETDIST_PREV pops it
+    GPBytecode prog[] = {{ZERO, 0, 0}, {GETDIST_PREV, 1, 0}};
+    gp_scalar bcResult = evaluateBytecodePortable(prog, 2, provider, state, 0);
+
+    EXPECT_FLOAT_EQ(gpResult, bcResult);
+    EXPECT_FLOAT_EQ(bcResult, 25.0f);
+    TEST_NODE(GETDIST_PREV);
+}
+
+TEST(BytecodeDistance, GetDistRateBytecode) {
+    TestPathProvider provider;
+    AircraftState state = makeState();
+
+    state.recordErrorHistory(0.0f, 0.0f, 10.0f, 0);
+    state.recordErrorHistory(0.0f, 0.0f, 10.5f, 100);
+
+    // GP tree
+    gp_scalar gpResult = evaluateGPOperator(GETDIST_RATE, provider, state, nullptr, 0);
+
+    // Bytecode
+    GPBytecode prog[] = {{GETDIST_RATE, 0, 0}};
+    gp_scalar bcResult = evaluateBytecodePortable(prog, 1, provider, state, 0);
+
+    EXPECT_FLOAT_EQ(gpResult, bcResult);
+    EXPECT_NEAR(bcResult, 5.0f, 0.1f);
+    TEST_NODE(GETDIST_RATE);
+}
+
+// T020: GETDTARGET backward compatibility — still evaluates correctly after deprecation
+TEST(DistanceOps, GetDTargetBackwardCompat) {
+    TestPathProvider provider;
+    provider.paths.clear();
+    provider.paths.push_back(makePath(20.0f, 0.0f, SIM_INITIAL_ALTITUDE, 0.0f));
+    provider.paths.push_back(makePath(20.0f, 0.0f, SIM_INITIAL_ALTITUDE, 1000.0f));
+
+    AircraftState state = makeStateWithTime(
+        gp_vec3(0.0f, 0.0f, SIM_INITIAL_ALTITUDE),
+        gp_quat::Identity(), 0);
+
+    // GETDTARGET returns CLAMP((distance - 10) / relVel, -1, 1)
+    // distance = 20m, relVel = 10 m/s → (20-10)/10 = 1.0
+    gp_scalar args[1] = {0.0f};
+    gp_scalar result = evaluateGPOperator(GETDTARGET, provider, state, args, 1);
+    EXPECT_NEAR(result, 1.0f, 0.1f);
+
+    TEST_NODE(GETDTARGET);
 }
 
 // =============================================================================

@@ -1583,8 +1583,9 @@ int main(int argc, char** argv)
   // First set up names for data file.  Remember we should delete the
   // string from the stream, well just a few bytes
   ostringstream strOutFile, strStatFile;
-  strOutFile << "data.dat" << ends;
-  strStatFile << "data.stc" << ends;
+  const char* filePrefix = ConfigManager::getExtraConfig().evaluateMode ? "eval-" : "";
+  strOutFile << filePrefix << "data.dat" << ends;
+  strStatFile << filePrefix << "data.stc" << ends;
   fout.open(strOutFile.str());
   bout.open(strStatFile.str());
 

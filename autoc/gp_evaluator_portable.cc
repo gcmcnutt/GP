@@ -170,6 +170,17 @@ gp_scalar evaluateGPOperator(int opcode, PathProvider& pathProvider,
             result = executeGetDThetaRate(aircraftState);
             break;
 
+        // Distance temporal nodes
+        case GETDIST:
+            result = executeGetDist(pathProvider, aircraftState);
+            break;
+        case GETDIST_PREV:
+            result = executeGetDistPrev(aircraftState, args ? args[0] : contextArg);
+            break;
+        case GETDIST_RATE:
+            result = executeGetDistRate(aircraftState);
+            break;
+
         // Trigonometry - use C math library (available on all platforms)
         case SIN: 
             result = fastSin(args[0]); 
@@ -437,6 +448,34 @@ gp_scalar executeGetDThetaRate(AircraftState& aircraftState) {
     return CLAMP_DEF(rate, -10.0f, 10.0f);
 }
 
+// Distance temporal nodes - see specs/012-distance-temporal-nodes
+gp_scalar executeGetDist(PathProvider& pathProvider, AircraftState& aircraftState) {
+    gp_vec3 targetPos = getInterpolatedTargetPosition(
+        pathProvider, static_cast<int32_t>(aircraftState.getSimTimeMsec()), 0.0f);
+    return (targetPos - aircraftState.getPosition()).norm();
+}
+
+gp_scalar executeGetDistPrev(AircraftState& aircraftState, gp_scalar arg) {
+    int n = CLAMP_DEF(static_cast<int>(arg), 0, AircraftState::HISTORY_SIZE - 1);
+    return aircraftState.getHistoricalDist(n);
+}
+
+gp_scalar executeGetDistRate(AircraftState& aircraftState) {
+    if (aircraftState.getHistoryCount() < 2) return 0.0f;
+
+    gp_scalar current = aircraftState.getHistoricalDist(0);
+    gp_scalar previous = aircraftState.getHistoricalDist(1);
+
+    unsigned long t0 = aircraftState.getHistoricalTime(0);
+    unsigned long t1 = aircraftState.getHistoricalTime(1);
+    gp_scalar dt = (t0 > t1) ? static_cast<gp_scalar>(t0 - t1) / 1000.0f : 0.1f;
+
+    if (dt < 0.001f) dt = 0.1f;
+
+    gp_scalar rate = (current - previous) / dt;
+    return CLAMP_DEF(rate, -10.0f, 10.0f);
+}
+
 // Portable bytecode evaluation implementation - works on all platforms
 gp_scalar evaluateBytecodePortable(const struct GPBytecode* program, int program_size, 
                                PathProvider& pathProvider, AircraftState& aircraftState, 
@@ -479,7 +518,8 @@ gp_scalar evaluateBytecodePortable(const struct GPBytecode* program, int program
             case GETDTHETA:
             case GETDTARGET:
             case GETDPHI_PREV:
-            case GETDTHETA_PREV: {
+            case GETDTHETA_PREV:
+            case GETDIST_PREV: {
                 if (stack_ptr < 1) return 0.0f;
                 gp_scalar args[1] = {stack[stack_ptr-1]};
                 stack_ptr -= 1;
