@@ -89,7 +89,7 @@ All new nodes produce identical results across all evaluation paths: GP tree eva
 - **FR-011**: The node set reference comment block in autoc.ini and autoc-eval.ini MUST be updated to document the new nodes and the GETDTARGET deprecation
 - **FR-012**: CLAUDE.md GP Operators section MUST be updated with the new node descriptions and GETDTARGET deprecation note
 - **FR-013**: Unit tests MUST verify all three nodes for: known input sequences, buffer wraparound, first-tick behavior, reset/clearHistory behavior, cross-evaluator consistency (GP tree vs bytecode), and index clamping
-- **FR-014**: Both nodes MUST be opt-in via TrainingNodes configuration (not silently added to existing configurations)
+- **FR-014**: All three nodes MUST be opt-in via TrainingNodes configuration (not silently added to existing configurations)
 
 ### Key Entities
 

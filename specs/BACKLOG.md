@@ -31,11 +31,8 @@
 
 ### [SPEC] GP Library Fitness Serialization Precision → `specs/006-fitness-precision`
 
-### [NEXT] Separate data.dat/data.stc Filenames for Train vs Eval Mode
-- Currently both training and evaluation modes write to the same `data.dat` and `data.stc`
-- Running eval after training silently overwrites the training output files
-- Fix: prefix or suffix filenames based on mode (e.g. `train-data.dat` / `eval-data.dat`)
-- Low effort, high annoyance factor — prevents accidental data loss
+### [DONE] Separate data.dat/data.stc Filenames for Train vs Eval Mode → `012-distance-temporal-nodes`
+- Eval mode now writes to `eval-data.dat` / `eval-data.stc`; training mode unchanged
 
 ---
 
@@ -149,12 +146,8 @@
   embed in bytecode files and generated code, use consistent fixed-point formatting
 - Relevant for xiao-gp codebase (not yet in this repo)
 
-### [NEXT] Configurable Output File Prefixes for Train vs Eval
-- `data.dat` and `data.stc` are hardcoded in `autoc.cc:1586-1587`
-- Both training and eval modes write to the same filenames, causing overwrites
-- Need: configurable prefix or suffix in `autoc.ini` (e.g., `OutputFilePrefix = eval-`)
-- At minimum: auto-prefix based on `EvaluateMode` (e.g., `eval-data.dat` vs `train-data.dat`)
-- Files affected: `autoc.cc` (`strOutFile`, `strStatFile` construction)
+### [DONE] Configurable Output File Prefixes for Train vs Eval → `012-distance-temporal-nodes`
+- Auto-prefix `eval-` based on EvaluateMode in `autoc.cc`
 
 ### [NEXT] Export RC Commands to Xiao Log
 - Currently: GP Output (rc=[...]) only logged during autoc=Y test spans

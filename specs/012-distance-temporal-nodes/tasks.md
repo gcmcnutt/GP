@@ -29,7 +29,7 @@
 - [ ] T001 Add GETDIST, GETDIST_PREV, GETDIST_RATE to Operators enum before _END marker in autoc/autoc.h
 - [ ] T002 Mirror enum additions in autoc/gp_evaluator_portable.h — same order, same values as autoc.h
 - [ ] T003 Add distHistory_[HISTORY_SIZE] array to AircraftState in autoc/aircraft_state.h. Extend recordErrorHistory() to accept and store distance parameter. Extend clearHistory() to zero distHistory_[]. Add getHistoricalDist(int n) accessor following getHistoricalDPhi() pattern.
-- [ ] T004 Update minisim.cc to compute distance-to-rabbit (Euclidean norm of craftPos - rabbitPos) and pass it to recordErrorHistory() before GP evaluation, at the same call site as existing dPhi/dTheta recording (~line 240)
+- [ ] T004 Update minisim.cc to compute distance-to-rabbit (Euclidean norm of craftPos minus interpolated rabbit position from PathProvider, same distance used in fitness calculation) and pass it to recordErrorHistory() before GP evaluation, at the same call site as existing dPhi/dTheta recording (~line 240)
 
 **Checkpoint**: Enum defined, history buffer records distance each tick. No evaluation yet.
 
@@ -109,8 +109,9 @@
 
 - [ ] T028 [P] Update CLAUDE.md GP Operators section: add GETDIST, GETDIST_PREV, GETDIST_RATE descriptions under new "Distance Sensors" category. Add deprecation note to GETDTARGET entry in "Navigation Sensors".
 - [ ] T029 [P] Update CLAUDE.md Active Technologies section for 012-distance-temporal-nodes
-- [ ] T030 Verify build stability: `cd ~/GP && make` succeeds, `./build/autoc_tests` passes all tests (existing + new)
-- [ ] T031 Run short evolution (5 generations) with updated TrainingNodes to verify GETDIST/GETDIST_PREV/GETDIST_RATE appear in evolved GP trees — MANUAL validation
+- [x] T030 [P] Prefix eval-mode output files: auto-prefix data.dat/data.stc with "eval-" when EvaluateMode=1 in autoc/autoc.cc (backlog item: Configurable Output File Prefixes)
+- [ ] T031 Verify build stability: `cd ~/GP && make` succeeds, `./build/autoc_tests` passes all tests (existing + new)
+- [ ] T032 Run short evolution (5 generations) with updated TrainingNodes to verify GETDIST/GETDIST_PREV/GETDIST_RATE appear in evolved GP trees — MANUAL validation
 
 ---
 
