@@ -76,7 +76,7 @@ All new nodes produce identical results across all evaluation paths: GP tree eva
 
 ### Functional Requirements
 
-- **FR-001**: System MUST provide GETDIST, a nullary node returning raw Euclidean distance from aircraft to rabbit position in meters
+- **FR-001**: System MUST provide GETDIST, a nullary node returning raw Euclidean distance from aircraft to rabbit's current interpolated position in meters (same distance value used in the fitness calculation)
 - **FR-002**: System MUST provide GETDIST_PREV(n), a unary node returning the buffered GETDIST value from n simulation ticks ago
 - **FR-003**: System MUST provide GETDIST_RATE, a nullary node returning rate of change of distance in meters per second, computed as `(dist[0] - dist[1]) / dt` using actual timestamp deltas from the history buffer (same time computation as GETDPHI_RATE/GETDTHETA_RATE)
 - **FR-004**: GETDIST_RATE MUST use the same dt computation as GETDPHI_RATE: actual timestamp delta from ring buffer divided by 1000 to convert ms to seconds, with 0.1s default when dt < 0.001s
@@ -131,10 +131,16 @@ All files requiring updates when adding new GP nodes (derived from existing GETD
 - **SC-005**: Bytecode evaluation produces identical per-step outputs to GP tree evaluation (zero divergence)
 - **SC-006**: Existing GP trees/bytecode files using GETDTARGET continue to evaluate correctly (backward compatibility)
 
+## Clarifications
+
+### Session 2026-03-12
+
+- Q: What position does GETDIST measure distance to? → A: Distance to rabbit's current interpolated position (same value used in fitness distance calculation). The discrete path interpolation is a simulation implementation detail — in real flight, a high-frequency estimator (~1000Hz) would provide much finer position estimates, so the GP should treat GETDIST as "estimated distance to target" regardless of update rate.
+
 ## Assumptions
 
 - The simulation tick rate remains ~10Hz (100ms), consistent with existing temporal nodes
 - Raw distance to rabbit is already computed each tick in the evaluation loop (used for fitness), so buffering adds negligible cost
 - The AircraftState ring buffer can share timeHistory_ and index tracking with the existing dPhi/dTheta buffers (one index, one timestamp array, three value arrays)
 - GETDIST_RATE clamping at [-10, 10] m/s is appropriate — aircraft closing at 10 m/s relative to rabbit is extreme (rabbit speed ~16 m/s, aircraft max ~25 m/s)
-- GETDIST returns distance to rabbit at current path index (lookahead=0), not a future path point. The GP can combine GETDIST with path lookahead via other nodes if needed.
+- GETDIST returns estimated distance to rabbit's current interpolated position (lookahead=0), not a future path point. In simulation this uses discrete path interpolation; in real flight a high-frequency estimator would provide finer resolution. The GP treats it as "distance to target" regardless of update rate.
