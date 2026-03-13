@@ -68,6 +68,12 @@ cd ~/GP/autoc && bash rebuild-perf.sh
 
 # Incremental build - just recompile changed files (fastest)
 cd ~/GP && make
+
+# Extract best NN weights from S3 archive
+./build/nnextractor -k keyname -o nn_weights.dat -i autoc.ini
+
+# Generate embedded C++ from NN weight file
+./build/nn2cpp -i nn_weights.dat -o ~/xiao-gp/generated/nn_program_generated.cpp
 ```
 
 **Key Build Commands:**
@@ -120,6 +126,14 @@ make clean && rm -rf build && mkdir build && cd build && cmake -DCMAKE_BUILD_TYP
 - AWS S3 integration for result storage
 - RPC-based distributed simulation
 
+**NN Evaluation (`autoc/`, spec 013-neuroevolution):**
+- NNGenome: topology + weights + fitness + generation metadata
+- Forward pass: feedforward with tanh activation, fast_tanh LUT (512 entries)
+- Input: 14 normalized sensor values (angular errors, distance, attitude, velocity)
+- Output: 3 control commands (pitch, roll, throttle) via tanh → [-1, 1]
+- Serialization: custom binary "NN01" format (not Boost), detected by magic bytes
+- S3 prefix: `nn-{timestamp}/` vs `autoc-{timestamp}/` for GP
+
 ## AutoC Bytecode System
 
 The AutoC system implements a sophisticated dual-mode evaluation architecture:
@@ -171,6 +185,12 @@ The PROGN bytecode instruction preserves GP tree semantics for operations with s
 - `EvaluateMode`: 0=normal GP evolution, 1=bytecode verification
 - `BytecodeFile`: Path to bytecode file for evaluation mode
 - `S3Bucket`/`S3Profile`: AWS S3 storage configuration
+- `ControllerType`: "GP" or "NN" (default: GP)
+- `NNTopology`: comma-separated layer sizes (e.g., 14,16,8,3)
+- `NNMutationSigma`: initial mutation sigma (default: 0.1)
+- `NNCrossoverAlpha`: BLX-alpha blend factor (-1 = uniform random)
+- `NNWeightFile`: weight file path for eval mode (default: nn_weights.dat)
+- `NNInitMethod`: xavier or uniform (default: xavier)
 
 ## Development Dependencies
 
@@ -277,6 +297,16 @@ All mathematical functions use platform-specific macros (e.g., `CLAMP_DEF`) to s
 2. Export display: `export DISPLAY=:99`
 3. Run renderer: `./build/renderer -k keyname`
 4. Controls: N/P for next/previous generation, mouse for camera
+
+**NN Evolution:**
+1. Configure `autoc.ini` with ControllerType=NN and NN params
+2. Run `./build/autoc` to evolve NN controllers
+3. Results stored in S3 with format: `nn-{timestamp}/gen{number}.dmp`
+
+**NN Deployment to Embedded:**
+1. Extract weights: `./build/nnextractor -k keyname -o nn_weights.dat`
+2. Generate code: `./build/nn2cpp -i nn_weights.dat -o ~/xiao-gp/generated/nn_program_generated.cpp`
+3. Build xiao-gp with NN env: `pio run -e xiaoblesense_nn`
 
 **Debugging Mode Differences:**
 - Both modes should produce identical fitness values

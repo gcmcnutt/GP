@@ -209,7 +209,19 @@ public:
                     << " (bytecode)"
                     << std::endl;
         } else if (isNeuralNetData) {
-          // NN logging — T103: revisit logging pattern for multi-process workers
+          std::ostringstream topo;
+          for (size_t i = 0; i < nnGenome.topology.size(); i++) {
+            if (i > 0) topo << "x";
+            topo << nnGenome.topology[i];
+          }
+          std::cerr << "[AUTOC_GP_STRING] worker=" << workerId
+                    << " eval=" << evalCounter
+                    << " hash=0x" << std::hex << evalData.gpHash << std::dec
+                    << " nn_bytes=" << evalData.gp.size()
+                    << " topology=" << topo.str()
+                    << " weights=" << nnGenome.weights.size()
+                    << " gen=" << nnGenome.generation
+                    << std::endl;
         }
       }
       

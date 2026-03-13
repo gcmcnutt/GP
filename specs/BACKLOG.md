@@ -108,7 +108,9 @@
   solutions on its own. A smoothness penalty may be unnecessary overhead that constrains
   the search space. Revisit only if bang-bang becomes dominant when variations are enabled.
 
-### [SPEC] Neuroevolution Controller → `specs/013-neuroevolution`
+### [ACTIVE] Neuroevolution Controller → `specs/013-neuroevolution`
+- Phases 1-7 complete (NN population, evaluator, fitness, serialization, S3, eval-mode, minisim integration)
+- Phase 8 (polish/cleanup) remaining
 
 ### [DEFERRED] GP/NN Architecture Decision: Refactor or Fork
 - Current: GP and NN code paths coexist with significant duplication (evalTask vs computeNNFitness, GPrand vs local RNG, parallel config parsing, format-aware branching in renderer/extractor/CRRCSim)
@@ -171,7 +173,7 @@
 
 ## Scale & Performance
 
-### [SPEC] Unify Evaluation Pipelines → absorbed into `specs/013-neuroevolution` Phase 1
+### [DONE] Unify Evaluation Pipelines → absorbed into `specs/013-neuroevolution` Phase 1
 
 ### [SPEC] GB10 GPU Native Evaluation → `specs/011-gpu-native`
 

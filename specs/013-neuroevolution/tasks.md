@@ -58,7 +58,7 @@
 - [ ] ~~T020 [P] [US1] Implement BytecodeBackend wrapper~~ — deferred (NN will have own eval path, not needed for critical path)
 - [ ] ~~T021 [US1] Merge evalTask() into single implementation~~ — deferred (too risky, NN will have own evalTask)
 - [x] T022 [US1] Update minisim.cc format detection: use ControllerType tag from EvalData instead of magic byte heuristics. ControllerType switch dispatch added.
-- [ ] T023 [US1] Verify parity: run GP tree mode and bytecode mode with same inputs, confirm identical fitness values — user will verify at integration time
+- [x] T023 [US1] Verify parity: run GP tree mode and bytecode mode with same inputs, confirm identical fitness values — verified
 - [x] T024 [US1] Verify build and tests: `cd ~/GP && make && cd build && ctest --output-on-failure`
 
 **Checkpoint**: Evaluation pipeline unified. Single evalTask() with shared scenario builder, FitnessComputer, EvalLogger, and ControllerBackend interface. BytecodeEvaluationGP inline class eliminated. Minisim uses explicit type tags. All existing tests pass. Ready for NN backend.
@@ -177,7 +177,7 @@
 - [ ] ~~T079 [US4] Update data.stc output~~ — deferred (NN gen stats logged to nn-data.stc inline)
 - [x] T080 [US4] Update S3 archive output: best NNGenome per generation saved to S3 with nn- prefix
 - [x] T081 [US4] Verify build and all tests: `cd ~/GP && make` — 174 tests pass
-- [ ] T082 [US4] Integration test: run autoc with ControllerType=NN for 5 generations — user will run
+- [x] T082 [US4] Integration test: run autoc with ControllerType=NN for 5 generations — done
 
 **Checkpoint**: Full NN evolution pipeline working. Can run `./build/autoc` with ControllerType=NN and see NN weights evolving, fitness improving, results stored in S3 with `nn-` prefix.
 
@@ -194,7 +194,7 @@
 ### Implementation for US6
 
 - [x] T083 [US6] Update renderer S3 browsing and fitness extraction: unified autoc- prefix, NN01 magic detection in extractFitnessFromGP()
-- [ ] T084 [US6] Add ControllerType-aware controller metadata display in autoc/renderer.cc: show NN weight summary instead of GP tree dump when format detected as NN
+- [ ] ~~T084 [US6] Add ControllerType-aware controller metadata display in autoc/renderer.cc~~ — deferred (renderer never dumped GP tree either, not needed for NN)
 - [x] T085 [US6] Update CRRCSim inputdev_autoc.cpp: replace magic-byte heuristic with evalData.controllerType enum dispatch, add NN controller path (include nn_serialization.h, nn_evaluator_portable.h, add isNeuralNetData flag, NNGenome storage, NNControllerBackend eval)
 - [x] T086 [US6] Verify CRRCSim build: `cd ~/crsim/crrcsim-0.9.13 && rm -rf build && mkdir build && cd build && cmake -DCMAKE_BUILD_TYPE=Debug .. && make`
 - [x] T087 [US6] Verify renderer build: `cd ~/GP && make`
@@ -233,14 +233,14 @@
 **Purpose**: Training validation, documentation, final integration
 
 - [ ] T098 [P] Run first full training comparison: NN (14-16-8-3, pop=500, 50 gen) vs GP on same scenario set, compare convergence curves and control smoothness
-- [ ] T099 [P] Update CLAUDE.md: add NN-related build commands, config options, new executables (nnextractor, nn2cpp), ControllerType param
-- [ ] T100 [P] Update specs/BACKLOG.md: mark 013 as in-progress/complete, update related deferred items (4D fitness, smoothness)
+- [x] T099 [P] Update CLAUDE.md: added NN build commands (nnextractor, nn2cpp), config options, NN eval architecture, NN workflows
+- [x] T100 [P] Update specs/BACKLOG.md: marked 013 as [ACTIVE], unify-eval as [DONE]
 - [ ] T101 Run release checklist from constitution: all tests pass, all three repo builds pass, CLAUDE.md updated
 - [ ] T102 Validate success criteria SC-001 through SC-005: lower fitness than GP, consistent convergence, <1ms embedded inference, smooth control outputs, cross-platform parity
-- [ ] T103 [P] Revisit minisim NN logging — current thread_local once-per-worker guard is wrong pattern for multi-process workers; align with existing GP/bytecode logging approach
+- [x] T103 [P] Revisit minisim NN logging — added [AUTOC_GP_STRING] stderr logging for NN (topology, weight count, generation) matching GP/bytecode pattern
 - [ ] T104 [P] Cleanup: eliminate gratuitous duplication between GP and NN code paths — e.g. GPrand() vs local RNG (GP should wrap a shared RNG, not the other way around), GP_BUILD/GP_TEST conditional compilation hacks in nn_evaluator_portable.cc and nn_population.cc
 - [ ] T105 [P] Cleanup: evaluate controller pluggability — can GP tree eval, bytecode eval, and NN eval share a common ControllerBackend interface more cleanly? Revisit eval_backend.h, the parallel evalTask/computeNNFitness fitness paths, and whether subclass polymorphism can replace the current if/else branching in minisim.cc and autoc.cc
-- [ ] T106 Add determinism checker to NN evolution loop — re-evaluate the elite individual and compare fitness to its stored value (must match exactly). GP path has this and it was critical for catching non-determinism that corrupts the small fitness gradient signal. Needs care around curriculum learning / variation ramp (environment changes between gens), but within a generation the re-eval of the same individual on the same scenarios with same seeds must produce bit-identical fitness. Early detection of non-determinism failures.
+- [x] T106 Add determinism checker to NN evolution loop — re-evaluate best individual at end of each generation, compare reeval fitness to stored fitness with bitwiseEqual(). Logs NN_ELITE_SAME or NN_ELITE_DIVERGED with delta.
 - [ ] T107 [P] Refactor: unify fitness computation into a single function shared by GP (evalTask) and NN (computeNNFitness) — both implement the identical formula (distance penalty + attitude penalty with intercept scaling + crash completion penalty). Extract into a standalone `computeFitness(pathList, aircraftStateList, crashReasonList, scenarioList)` that both code paths call, eliminating the duplication and ensuring they can never diverge.
 - [ ] T108 [P] Cleanup: consolidate xiao-gp platformio.ini GP/NN env duplication — currently 4 board envs (2 GP + 2 NN) with near-identical config. Consider using a build flag or env extension to select GP vs NN without duplicating the full env block. If NN replaces GP long-term, remove GP envs entirely.
 

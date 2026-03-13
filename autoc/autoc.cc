@@ -2015,6 +2015,21 @@ static void runNNEvolution(
 
       logEvalResults(fout, bestResults);
 
+      // Determinism check: re-eval fitness must match stored fitness exactly (T106)
+      double reevalFitness = computeNNFitness(bestResults);
+      double storedFitness = pop.individuals[bestIdx].fitness;
+      if (!bitwiseEqual(reevalFitness, storedFitness)) {
+        *logger.warn() << "NN_ELITE_DIVERGED: gen=" << gen
+                       << " stored=" << std::fixed << std::setprecision(6) << storedFitness
+                       << " reeval=" << reevalFitness
+                       << " delta=" << std::scientific << (reevalFitness - storedFitness)
+                       << endl;
+      } else {
+        *logger.info() << "NN_ELITE_SAME: gen=" << gen
+                       << " fitness=" << std::fixed << std::setprecision(6) << storedFitness
+                       << endl;
+      }
+
       // Embed serialized NN genome in bestResults.gp for S3 storage
       // (renderer uses .gp field to detect format and extract fitness)
       bestResults.gp.assign(reinterpret_cast<const char*>(nnData.data()),
