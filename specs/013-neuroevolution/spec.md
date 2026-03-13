@@ -412,8 +412,8 @@ crossover on the weight vector.
 ```
 weight[i] += N(0, sigma)
 ```
-Starting sigma = 0.1. Consider self-adaptive sigma (each individual carries its own
-sigma that also mutates) for automatic step-size control.
+Starting sigma = 0.1. Each individual carries its own sigma that also mutates
+(self-adaptive) for automatic step-size control.
 
 **Selection**: Tournament selection (reuse existing GPc++ tournament infrastructure).
 
@@ -424,6 +424,8 @@ sigma that also mutates) for automatic step-size control.
 Xavier/Glorot initialization: `weight[i] = uniform(-1/sqrt(fan_in), +1/sqrt(fan_in))`.
 This prevents saturation of tanh activations at initialization — critical for
 neuroevolution where there is no gradient signal to recover from saturation.
+Random samples use `GPrand()` (Numerical Recipes LCG from `gprand.cc`), the same
+RNG used for all GP stochastic operations, seeded via `GPSeed`.
 
 ---
 
@@ -588,11 +590,14 @@ compatibility with GP tree or bytecode archives is required.
 - Define `NNGenome` serialization format: magic number + topology + flat weight array
 - Implement Boost binary serialization for NNGenome (for RPC to minisim)
 - Add NN format detection in minisim alongside GP tree and bytecode detection
+- Define S3 archive naming: NN runs use `nn-{timestamp}/` prefix (vs GP's `autoc-{timestamp}/`)
+  with same `gen{number}.dmp` file pattern. Renderer regex updated to match both prefixes.
 - Define S3 archive format for NN populations: topology metadata + best weights per gen
-- Update `data.dat` output: replace GP tree S-expression dump with weight vector dump
-  (or summary statistics: weight mean/stdev per layer, activation distributions)
+- Update `data.dat` output: per-layer weight statistics (mean, stdev, min, max) each
+  generation for monitoring weight explosion/saturation. No full weight dump locally.
 - Update `data.stc` output: same fitness/distance/attitude columns, add NN-specific
   metrics (weight magnitude, gradient proxy = fitness delta / weight delta)
+- Full elite weight vectors saved to S3 only (enables offline replay without local bloat)
 - Implement `nnextractor` tool (sibling to `gpextractor`): extract best weights from
   S3 archive → standalone weight file for deployment
 
@@ -637,7 +642,14 @@ compatibility with GP tree or bytecode archives is required.
 
 ### FR-001: Forward Pass Evaluator
 The system shall implement a portable feedforward neural network forward pass that
-operates on float32 values and supports configurable layer topology.
+operates on float32 (`gp_scalar` / `float`) values and supports configurable layer
+topology. All NN weights, activations, and intermediate computations shall use
+`gp_scalar` (fp32) — no `double` anywhere in the NN path. Minor rounding differences
+across platforms are acceptable; no special FP mode configuration is required. All
+target platforms use IEEE 754 round-to-nearest-even natively:
+- Training: aarch64 ARMv8 NEON/ASIMD (native fp32)
+- Embedded: ARM Cortex-M4F VFPv4 (native fp32, single-precision only)
+- Desktop (if ever): x86_64 SSE2 (fp32 in SSE regs, no x87 extended precision)
 
 ### FR-002: Weight Evolution
 The system shall evolve NN weights using the existing population management, tournament
@@ -649,7 +661,9 @@ operators on flat weight vectors.
 
 ### FR-004: Sensor Integration
 The NN evaluator shall call the same sensor functions (executeGetDPhi, executeGetDist,
-etc.) as the GP evaluator, ensuring identical perception.
+etc.) as the GP evaluator, ensuring identical perception. All sensor values shall be
+normalized before input to the NN using fixed per-sensor constants: angles by π,
+distance by 50m, velocity by 16 m/s, rate sensors by 10. Commands are already [-1, 1].
 
 ### FR-005: Control Output
 The NN shall output three control commands (pitch, roll, throttle) in [-1, 1] via
@@ -659,7 +673,9 @@ tanh activation, set through the existing AircraftState setter functions.
 NN weight vectors shall be serializable via Boost binary archive for RPC transport to
 minisim. The format uses a magic number prefix to distinguish from GP tree and bytecode
 data. This is an incompatible format change — no backward compatibility with GP/bytecode
-archives is required.
+archives is required. Weight layout is row-major, layer-sequential:
+`[W1 weights, B1 biases, W2 weights, B2 biases, ...]` where W_l has shape
+`[fan_out × fan_in]` stored row-major.
 
 ### FR-007: Format Detection
 Minisim shall auto-detect NN weight format alongside GP tree and bytecode formats,
@@ -680,9 +696,10 @@ The evaluation loop shall be refactored into a shared core with a pluggable cont
 backend interface. GP tree, bytecode, and NN evaluation shall all use the same fitness
 computation, scenario handling, and logging paths. (Absorbs 007-unify-eval.)
 
-### FR-009: Configuration
-`autoc.ini` shall support a `ControllerType` option selecting between GP tree evolution
-and NN weight evolution.
+### FR-009: Configuration — ControllerType Switch
+`autoc.ini` shall support a `ControllerType` option (`GP` or `NN`) selecting between
+GP tree evolution and NN weight evolution. When `ControllerType=NN`, GP-only parameters
+are ignored (not an error to have them present — backward compatible).
 
 ### FR-010: Topology Configuration
 The NN topology (layer sizes) shall be configurable in `autoc.ini`, not hardcoded.
@@ -701,7 +718,62 @@ the baseline topology (14-16-8-3), using less than 1% of the 100 ms control budg
 
 ### FR-014: Weight Initialization
 Initial populations shall use Xavier/Glorot initialization to prevent activation
-saturation.
+saturation. All random number generation for NN weight initialization (and mutation)
+shall use the existing `GPrand()` RNG from the core GP library, seeded by the same
+`GPSeed` configuration parameter. This ensures reproducible evolution runs and avoids
+introducing additional RNG dependencies.
+
+### FR-015: NN-Specific Configuration Parameters
+When `ControllerType=NN`, the following parameters shall be read from `autoc.ini`:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `ControllerType` | `GP` | `GP` or `NN` — selects controller mode |
+| `NNTopology` | `14,16,8,3` | Comma-separated layer sizes |
+| `NNMutationSigma` | `0.1` | Gaussian mutation standard deviation |
+| `NNCrossoverAlpha` | `-1` | BLX-alpha blend factor (-1 = uniform [0,1]) |
+| `NNWeightFile` | `nn_weights.dat` | Weight file for eval/deployment mode |
+| `NNInitMethod` | `xavier` | Population initialization (`xavier`, `uniform`) |
+
+The following existing GP parameters are **ignored** when `ControllerType=NN`:
+
+| Parameter | Reason |
+|-----------|--------|
+| `CreationType` | GP tree creation method — NN uses weight init |
+| `CreationProbability` | GP random tree injection — not applicable |
+| `MaximumDepthForCreation` | GP tree depth — NN has fixed topology |
+| `MaximumDepthForCrossover` | GP tree depth — NN has fixed topology |
+| `DemeticGrouping`, `DemeSize`, `DemeticMigProbability` | GP deme structure — future work for NN |
+| `SwapMutationProbability` | GP swap mutation — NN uses Gaussian mutation |
+| `ShrinkMutationProbability` | GP shrink mutation — NN uses Gaussian mutation |
+| `SteadyState` | GP generational model — NN uses generational |
+| `TrainingNodes` | GP node set — NN uses fixed 14-sensor input vector |
+| `BytecodeFile` | GP bytecode — NN uses `NNWeightFile` instead |
+
+Shared parameters used by both modes: `PopulationSize`, `NumberOfGenerations`,
+`TournamentSize`, `CrossoverProbability` (same semantic: fraction of offspring via
+crossover vs clone+mutate — NN uses arithmetic crossover instead of subtree swap),
+`EvalThreads`, `SimNumPathsPerGeneration`, all scenario/variation params,
+`S3Bucket`/`S3Profile`, `MinisimProgram`, `GPSeed` (renamed conceptually to
+"evolution seed"), `EvaluateMode`, `AddBestToNewPopulation`, `PathGeneratorMethod`,
+`RandomPathSeedB`.
+
+**Note**: `EvaluateMode` semantics extend for NN: 0=train (GP or NN per ControllerType),
+1=verify (loads BytecodeFile or NNWeightFile per ControllerType).
+
+### FR-016: Renderer ControllerType Awareness
+The renderer shall read `ControllerType` from `autoc.ini` and handle NN archives alongside
+GP archives. When browsing S3, the renderer regex shall match both `autoc-*/gen*.dmp` (GP)
+and `nn-*/gen*.dmp` (NN) prefixes. NN `EvalResults` contain the same flight trajectory and
+fitness data as GP results (same `EvalResults` struct, same visualization), but the
+controller metadata (tree dump vs weight summary) differs. The renderer shall display
+appropriate controller info based on the detected format.
+
+### FR-017: S3 Archive Naming Convention
+NN evolution runs shall use the S3 key prefix `nn-{timestamp}/` (e.g., `nn-20260312-1430/`)
+instead of the GP convention `autoc-{timestamp}/`. Generation files use the same
+`gen{number}.dmp` pattern. This distinguishes NN and GP archives in shared S3 buckets
+and avoids the renderer accidentally deserializing the wrong format.
 
 ---
 
@@ -812,29 +884,52 @@ not a code change.
 
 ---
 
+## Success Criteria
+
+- **SC-001**: NN controller achieves lower mean fitness than the best GP controller on the same scenario set within 100 generations
+- **SC-002**: NN convergence is more consistent across independent runs (less susceptibility to local minima than GP tree evolution)
+- **SC-003**: NN inference on XIAO nRF52840 completes within 1 ms (baseline topology)
+- **SC-004**: NN controller produces smooth (non-bang-bang) control outputs — the primary motivation for this feature
+- **SC-005**: All evaluation paths (training, minisim weight-file deployment, embedded codegen) produce identical control outputs for the same weights and inputs
+
+---
+
 ## Open Questions
 
 1. **Population size**: Weight-space evolution on 403 dimensions may need larger
    populations than tree GP. Start with existing 500-20K range and measure.
 
-2. **Mutation rate / sigma**: Self-adaptive sigma (CMA-ES style) vs fixed sigma?
-   Start simple with fixed sigma=0.1, tune empirically.
+2. **Mutation rate / sigma**: ~~Resolved~~ — Self-adaptive sigma: each individual
+   carries its own mutation_sigma that also mutates (see FR-014, data-model.md).
+   Initial sigma=0.1 via NNMutationSigma config.
 
-3. **Recurrence**: Should Phase 1 include simple recurrence (Elman network), or
-   start feedforward-only? Feedforward is simpler and may be sufficient given
-   the explicit rate inputs.
+3. **Recurrence**: ~~Resolved~~ — Feedforward-only for Phase 1. Recurrence (Elman/GRU)
+   deferred to optional Phase 6 (architecture search). Explicit _PREV/_RATE sensor
+   inputs provide temporal context without recurrent connections.
 
-4. **Input normalization**: Sensor values have different ranges (dPhi in [-pi, pi],
-   dist in [0, 100], vel in [0, 30]). Normalize inputs to [-1, 1]? Or let evolution
-   discover appropriate scaling in the first layer weights?
+4. **Input normalization**: ~~Resolved~~ — Use fixed per-sensor linear normalization
+   with named constants (see Clarifications). Angles by π, distance by 50m, velocity
+   by 16 m/s (nominal rabbit speed), rates by 10 (clamp bound). Commands already [-1,1].
 
-5. **Elitism**: Current GP uses elite store with re-evaluation. Same strategy for NN,
-   or different? NN fitness should be more stable (no structural changes between
-   generations) so elite divergence may be less of an issue.
+5. **Elitism**: ~~Resolved~~ — Reuse existing GP elite store with re-evaluation as-is.
+   Stochastic fitness (wind/entry variations) affects NN identically to GP.
 
 6. **Hybrid approach**: Could GP trees evolve alongside NN individuals in the same
    population? Probably not — the genome representations are incompatible. But
    could run GP and NN populations in parallel and compare.
+
+---
+
+## Clarifications
+
+### Session 2026-03-12
+
+- Q: What are the measurable success criteria for the NN controller? → A: NN must routinely achieve lower mean fitness than the best GP controller on the same scenario set, with more consistent convergence (less susceptibility to local minima). "Routinely" means across multiple independent runs, not a single lucky seed.
+- Q: Elitism strategy for NN evolution? → A: Reuse existing GP elite store with re-evaluation as-is. Stochastic fitness from wind/entry variations affects NN identically to GP — same infrastructure, no changes needed.
+- Q: NN training diagnostic output format? → A: Both summary and full: per-layer weight statistics (mean, stdev, min, max) to `data.dat` every generation for quick monitoring (catch weight explosion/saturation); full weight vector only for elite/best saved to S3 (enables offline replay without bloating local logs).
+- Q: Weight layout convention for flat genome vector? → A: Row-major, layer-sequential: [W1 weights, B1 biases, W2 weights, B2 biases, ...]. Standard convention matching NumPy/PyTorch. Forward pass: `sum += input[i] * W[j*fan_in + i]`. Doesn't matter much for embedded perf at this scale, but consistency across desktop/embedded/codegen is important.
+- Q: How should autoc.ini handle GP-only vs NN params? → A: Add `ControllerType=GP|NN` switch. GP-only params (CreationType, MaximumDepthFor*, Demetic*, SwapMutation*, ShrinkMutation*, SteadyState, TrainingNodes, BytecodeFile) are silently ignored when ControllerType=NN — not an error to have them present. CrossoverProbability is shared (same semantic: fraction via crossover vs clone+mutate). New NN params: NNTopology, NNMutationSigma, NNCrossoverAlpha, NNWeightFile, NNInitMethod. EvaluateMode=1 loads BytecodeFile or NNWeightFile per ControllerType.
+- Q: Should NN inputs be normalized, and how? → A: Fixed per-sensor linear normalization to ~[-1, 1] using named constants: `NORM_ANGLE = π` (angles), `NORM_DIST = 50.0` (distance, meters), `NORM_VEL = 16.0` (velocity, nominal rabbit speed), `NORM_RATE = 10.0` (rate sensors, already clamped). Commands already [-1, 1], no normalization needed. Positive-only sensors (dist, vel) will map to [0, ~1-2] which is fine — bias neurons handle the offset. GP doesn't need this because tree nodes don't share a weighted sum; this is specifically a NN concern.
 
 ---
 

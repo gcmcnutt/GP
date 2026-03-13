@@ -91,7 +91,8 @@ naturally with a magic number prefix.
 ```
 Magic: 4 bytes ("NN01")
 Topology: num_layers (uint32) + layer_sizes[] (uint32 × num_layers)
-Weights: float32[] (flattened, layer-major order)
+Weights: float32[] (row-major, layer-sequential: [W1, B1, W2, B2, ...])
+         W_l shape: [fan_out × fan_in] stored row-major
 Metadata: fitness (float64), generation (uint32), S3 key (string)
 ```
 
@@ -134,10 +135,43 @@ Adding cross-track sensors (GETCROSS_LAT, GETCROSS_VERT) would duplicate informa
 already available via angular sensors × distance. The NN can learn these cross-terms
 in one hidden layer — that's the whole point of switching from GP to NN.
 
-## R10: xiao-gp Code Generation Pattern
+**Input normalization**: Fixed per-sensor linear scaling to ~[-1, 1]:
+- `NORM_ANGLE = π` — angles (dPhi, dTheta, roll, pitch, alpha, beta)
+- `NORM_DIST = 50.0` — distance (meters)
+- `NORM_VEL = 16.0` — velocity (nominal rabbit speed, m/s)
+- `NORM_RATE = 10.0` — rate sensors (already clamped [-10, 10])
+- Commands: already [-1, 1], no normalization needed
+Positive-only sensors (dist, vel) map to [0, ~1-2]; bias neurons handle offset.
+
+## R10: Tanh LUT Implementation
+
+**Decision**: 512-entry LUT with linear interpolation, domain [-5, 5], matching
+existing sin LUT pattern in `gp_evaluator_portable.cc`.
+
+**Rationale**: The existing codebase has a proven 512-entry sin LUT (lines 18-50 of
+`gp_evaluator_portable.cc`) with linear interpolation and lazy initialization. A tanh
+LUT follows the same pattern exactly. On Cortex-M4F: LUT lookup + linear interpolation
+costs ~4-5 cycles vs ~20-30 cycles for polynomial (Padé) approximation. LUT is 4-6x
+faster. Memory: 2 KB for 512 float32 entries — negligible vs 256 KB RAM.
+
+Tanh saturates at |x| > 4 (tanh(4) ≈ 0.9993), so [-5, 5] covers the full useful range.
+Input clamped, mapped to [0, 512), interpolated between adjacent entries.
+
+**Accuracy**: ~0.5% max error — sufficient for evolutionary NN (no gradient sensitivity).
+Control outputs clamped to [-1, 1] anyway, and simulation stochasticity (wind, entry
+variations) dominates activation precision.
+
+**Alternatives considered**:
+- Padé polynomial: Higher accuracy but 4-6x slower, code complexity
+- Smaller LUT (256 entries): Works, but 512 matches sin LUT for consistency
+- No LUT (std::tanh): Correct but ~50+ cycles, no portability guarantee on embedded
+
+## R11: xiao-gp Code Generation Pattern
 
 **Decision**: nn2cpp generates `nn_program_generated.cpp` with identical function signature
 to `generatedGPProgram()`. Build selects GP or NN via file inclusion.
+
+(Renumbered from R10 after inserting tanh LUT research.)
 
 **Rationale**: The existing xiao-gp build includes `generated/gp_program_generated.cpp`
 which provides `generatedGPProgram(PathProvider&, AircraftState&, gp_scalar)`. The NN
@@ -149,3 +183,24 @@ The generated code embeds weights as `static const float[]` in flash, unrolls th
 layer loops for the specific topology, and calls `fast_tanh()` from the portable math
 module. Output is a standalone .cpp file with no dependencies beyond `aircraft_state.h`
 and `gp_evaluator_portable.h` (for sensor functions).
+
+## R12: S3 Archive Naming and Renderer Integration
+
+**Decision**: NN runs use `nn-{timestamp}/` S3 prefix. Renderer updated to match both
+`autoc-*/gen*.dmp` (GP) and `nn-*/gen*.dmp` (NN). Same `EvalResults` struct for both.
+
+**Rationale**: The renderer (`renderer.cc`) reads `autoc.ini`, fetches generation archives
+from S3, and deserializes `EvalResults` via Boost binary archive. Current regex
+`autoc-.*/gen(\d+)\.dmp` only matches GP archives. NN archives need a distinct prefix so:
+(1) shared S3 buckets don't mix GP and NN runs, (2) the renderer can present appropriate
+controller metadata (tree dump vs weight summary). The `EvalResults` struct itself is
+unchanged — it contains flight trajectories and fitness data that are controller-agnostic.
+Only the serialized controller payload inside it differs (GP tree vs NN weights).
+
+The renderer reads `ControllerType` from `autoc.ini` to know which format to expect, but
+the regex should match both prefixes for browsing historical runs of either type.
+
+**Alternatives considered**:
+- Same `autoc-` prefix for both: Simpler but loses the ability to distinguish run types
+  at the S3 key level. Would require opening each archive to detect format.
+- Separate S3 buckets: Overkill — prefix separation within one bucket is standard practice.

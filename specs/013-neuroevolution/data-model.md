@@ -22,11 +22,21 @@ feedforward neural network.
 - `topology[last]` = 3 (pitch, roll, throttle outputs)
 - All weights are finite (no NaN/Inf)
 
-**Weight layout** (layer-major, weights then biases):
+**Weight layout** (row-major, layer-sequential: [W1, B1, W2, B2, ...]):
 ```
-Layer 0→1: weights[0 .. input×hidden1-1], biases[.. hidden1-1]
-Layer 1→2: weights[.. hidden1×hidden2-1], biases[.. hidden2-1]
-Layer 2→3: weights[.. hidden2×output-1],  biases[.. output-1]
+Layer 0→1: W1[hidden1 × input] row-major, B1[hidden1]
+Layer 1→2: W2[hidden2 × hidden1] row-major, B2[hidden2]
+Layer 2→3: W3[output × hidden2] row-major, B3[output]
+```
+Forward pass: `sum += input[i] * W[j*fan_in + i]` (cache-friendly inner loop).
+
+**Input normalization constants** (applied before forward pass):
+```
+NORM_ANGLE = π       // angles: dPhi, dTheta, roll, pitch, alpha, beta
+NORM_DIST  = 50.0    // distance (meters)
+NORM_VEL   = 16.0    // velocity (nominal rabbit speed, m/s)
+NORM_RATE  = 10.0    // rate sensors (already clamped [-10, 10])
+// Commands (roll, pitch, throttle): already [-1, 1], no normalization
 ```
 
 ### NNPopulation
@@ -100,6 +110,11 @@ Extracted shared logging (data.dat, data.stc output).
 | logStep | Write per-timestep data row |
 | logGenerationStats | Write per-generation summary to data.stc |
 | logBestController | Write best controller representation (GP tree S-expr or NN weight summary) |
+| logNNWeightStats | Write per-layer weight statistics (mean, stdev, min, max) to data.dat |
+
+**NN diagnostics**: Per-layer weight stats to `data.dat` every generation (monitors
+weight explosion/saturation). Full elite weight vectors saved to S3 only (offline replay
+without local bloat).
 
 ## State Transitions
 

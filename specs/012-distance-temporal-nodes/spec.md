@@ -2,7 +2,7 @@
 
 **Feature Branch**: `012-distance-temporal-nodes`
 **Created**: 2026-03-12
-**Status**: Draft
+**Status**: Complete (merged PR #18, 2026-03-12)
 **Input**: User description: "Add raw distance sensor with temporal nodes (GETDIST, GETDIST_PREV, GETDIST_RATE) as clean primitives for PD/PID-like throttle control. Deprecate composite GETDTARGET node."
 
 ## Context
