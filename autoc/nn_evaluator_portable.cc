@@ -3,8 +3,11 @@
 #include <array>
 #include <algorithm>
 
-#if defined(GP_BUILD) && !defined(GP_TEST)
+#ifndef GP_TEST
 #include "gp_evaluator_portable.h"
+#endif
+
+#if defined(GP_BUILD) && !defined(GP_TEST)
 #include "gp_math_utils.h"
 #endif
 
@@ -177,7 +180,11 @@ void nn_xavier_init(NNGenome& genome) {
 
 void nn_gather_inputs(PathProvider& pathProvider, AircraftState& aircraftState,
                       float* inputs) {
-#if defined(GP_BUILD) && !defined(GP_TEST)
+#ifdef GP_TEST
+    // In test builds, zero-fill (sensor functions not available)
+    for (int i = 0; i < 14; i++) inputs[i] = 0.0f;
+#else
+    // Desktop (GP_BUILD) and embedded builds both have executeGet* available
     // 0-1: Navigation angles
     inputs[0] = static_cast<float>(executeGetDPhi(pathProvider, aircraftState, 0.0f) / NORM_ANGLE);
     inputs[1] = static_cast<float>(executeGetDTheta(pathProvider, aircraftState, 0.0f) / NORM_ANGLE);
@@ -213,9 +220,6 @@ void nn_gather_inputs(PathProvider& pathProvider, AircraftState& aircraftState,
     inputs[11] = static_cast<float>(aircraftState.getRollCommand());
     inputs[12] = static_cast<float>(aircraftState.getPitchCommand());
     inputs[13] = static_cast<float>(aircraftState.getThrottleCommand());
-#else
-    // In test/embedded builds, zero-fill (sensor functions not available)
-    for (int i = 0; i < 14; i++) inputs[i] = 0.0f;
 #endif
 }
 

@@ -94,12 +94,16 @@ add_executable(minisim minisim.cc)
 add_executable(renderer renderer.cc)
 add_executable(gpextractor gpextractor.cc)
 add_executable(bytecode2cpp bytecode2cpp.cc)
+add_executable(nnextractor nnextractor.cc)
+add_executable(nn2cpp nn2cpp.cc)
 
 target_link_libraries(autoc autoc_common ${AWSSDK_LIBRARIES})
 target_link_libraries(minisim autoc_common)
 target_link_libraries(renderer autoc_common ${VTK_LIBRARIES} ${AWSSDK_LIBRARIES})
 target_link_libraries(gpextractor autoc_common ${AWSSDK_LIBRARIES})
 target_link_libraries(bytecode2cpp autoc_common ${AWSSDK_LIBRARIES})
+target_link_libraries(nnextractor autoc_common ${AWSSDK_LIBRARIES})
+target_link_libraries(nn2cpp autoc_common)
 
 if(ENABLE_AUTOC_TESTS)
   # Tests need separate compilation with GP_TEST define, can't use autoc_common

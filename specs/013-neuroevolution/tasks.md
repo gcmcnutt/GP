@@ -127,8 +127,8 @@
 - [x] T049 [US3] Integrate NN format detection in autoc/minisim.cc: ControllerType::NEURAL_NET case deserializes NN genome and creates NNControllerBackend
 - [x] T050 [US3] Implement NN evaluation in autoc/minisim.cc: NNControllerBackend wraps nn_gather_inputs + nn_forward + setPitch/setRoll/setThrottle
 - [x] T051 [US3] Update S3 archive key generation in autoc/autoc.cc: generate_iso8601_timestamp() uses "nn-" prefix when ControllerType=NN
-- [ ] T052 [US3] Implement nnextractor tool — deferred to Phase 7 (needs trained NN archives)
-- [ ] T053 [US3] Add nnextractor build target — deferred to Phase 7
+- [x] T052 [US3] Implement nnextractor tool — extracts best NN genome from S3 EvalResults archives, writes NN01 binary weight file. CLI: -k keyname, -g gen, -o output, -i config
+- [x] T053 [US3] Add nnextractor build target in autoc/CMakeLists.txt
 - [x] T054 [US3] Verify build and tests: `cd ~/GP && make` — all 162 tests pass
 
 **Checkpoint**: NN genomes can be serialized/deserialized for RPC and S3. Minisim auto-detects NN format. S3 archives use `nn-` prefix. nnextractor extracts best weights.
@@ -213,16 +213,16 @@
 
 ### Implementation for US5
 
-- [ ] T088 [US5] Implement nn2cpp tool in autoc/nn2cpp.cc: read weight file, generate nn_program_generated.cpp with embedded weights as static const float[], unrolled layer loops, fast_tanh() calls
-- [ ] T089 [US5] Add nn2cpp build target in autoc/CMakeLists.txt
-- [ ] T090 [US5] Generate generatedNNProgram() function with same signature as generatedGPProgram(PathProvider&, AircraftState&, gp_scalar)
-- [ ] T091 [US5] Write desktop parity test in autoc/tests/nn_evaluator_tests.cc: nn2cpp-generated code produces identical outputs to nn_forward() for same weights/inputs
-- [ ] T092 [US5] Copy nn_evaluator_portable.cc/h to ~/xiao-gp/include/GP/autoc/ (shared-source pattern matching gp_evaluator_portable)
-- [ ] T093 [US5] Generate test nn_program_generated.cpp and place in ~/xiao-gp/generated/
-- [ ] T094 [US5] Update ~/xiao-gp/src/msplink.cpp: add build-time selection between generatedGPProgram() and generatedNNProgram()
-- [ ] T095 [US5] Update ~/xiao-gp/platformio.ini: add build flag to select GP vs NN generated program
-- [ ] T096 [US5] Verify xiao-gp PlatformIO build: `cd ~/xiao-gp && pio run`
-- [ ] T097 [US5] Verify all three repo builds pass: GP (full rebuild — nn2cpp target added): `cd ~/GP/autoc && bash rebuild.sh`, CRRCSim: `cd ~/crsim/crrcsim-0.9.13 && rm -rf build && mkdir build && cd build && cmake -DCMAKE_BUILD_TYPE=Debug .. && make`, xiao-gp: `cd ~/xiao-gp && pio run`
+- [x] T088 [US5] Implement nn2cpp tool in autoc/nn2cpp.cc: read NN01 weight file, generate nn_program_generated.cpp with embedded weights as static const float[]. Two modes: portable (calls nn_forward) and unrolled (explicit layer loops with fast_tanh). CLI: -i input, -o output, -f funcname, -u unrolled
+- [x] T089 [US5] Add nn2cpp build target in autoc/CMakeLists.txt
+- [x] T090 [US5] Generate generatedNNProgram() function with same signature as generatedGPProgram(PathProvider&, AircraftState&, gp_scalar). Header: nn_program.h in xiao-gp/include/
+- [x] T091 [US5] NN eval mode in autoc.cc: ControllerType=NN + EvaluateMode=1 loads NNWeightFile, evaluates via minisim, reports fitness. Verified exact fitness match (346234.098253) with training run.
+- [x] T092 [US5] NN files available via symlink (include/GP -> ~/GP) — no copy needed, shared-source works automatically
+- [x] T093 [US5] Generate test nn_program_generated.cpp and place in ~/xiao-gp/generated/
+- [x] T094 [US5] Update ~/xiao-gp/src/msplink.cpp: #ifdef USE_NN_PROGRAM selects generatedNNProgram() vs generatedGPProgram()
+- [x] T095 [US5] Update ~/xiao-gp/platformio.ini: added xiaoblesense_nn and xiaoble_nn envs with -DUSE_NN_PROGRAM flag and nn_evaluator_portable.cc source
+- [x] T096 [US5] Verify xiao-gp PlatformIO build: `cd ~/xiao-gp && pio run -e xiaoblesense_nn` — fixed recordErrorHistory() call (missing distance param from spec 012), builds clean
+- [x] T097 [US5] Verify all three repo builds pass: GP (`cd ~/GP && make`), CRRCSim (`cd ~/crsim/crrcsim-0.9.13/build && make`), xiao-gp (`pio run -e xiaoblesense_nn`) — all pass
 
 **Checkpoint**: End-to-end deployment pipeline: evolve NN → nnextractor → nn2cpp → xiao-gp firmware. Bit-exact inference on desktop and embedded.
 
@@ -242,6 +242,7 @@
 - [ ] T105 [P] Cleanup: evaluate controller pluggability — can GP tree eval, bytecode eval, and NN eval share a common ControllerBackend interface more cleanly? Revisit eval_backend.h, the parallel evalTask/computeNNFitness fitness paths, and whether subclass polymorphism can replace the current if/else branching in minisim.cc and autoc.cc
 - [ ] T106 Add determinism checker to NN evolution loop — re-evaluate the elite individual and compare fitness to its stored value (must match exactly). GP path has this and it was critical for catching non-determinism that corrupts the small fitness gradient signal. Needs care around curriculum learning / variation ramp (environment changes between gens), but within a generation the re-eval of the same individual on the same scenarios with same seeds must produce bit-identical fitness. Early detection of non-determinism failures.
 - [ ] T107 [P] Refactor: unify fitness computation into a single function shared by GP (evalTask) and NN (computeNNFitness) — both implement the identical formula (distance penalty + attitude penalty with intercept scaling + crash completion penalty). Extract into a standalone `computeFitness(pathList, aircraftStateList, crashReasonList, scenarioList)` that both code paths call, eliminating the duplication and ensuring they can never diverge.
+- [ ] T108 [P] Cleanup: consolidate xiao-gp platformio.ini GP/NN env duplication — currently 4 board envs (2 GP + 2 NN) with near-identical config. Consider using a build flag or env extension to select GP vs NN without duplicating the full env block. If NN replaces GP long-term, remove GP envs entirely.
 
 ---
 

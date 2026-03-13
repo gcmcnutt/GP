@@ -1703,6 +1703,126 @@ static void logEvalResults(std::ofstream& fout, EvalResults& results) {
   fout.flush();
 }
 
+// NN evaluation mode: load weight file, run through scenarios, report fitness
+static void runNNEvaluation(
+    const std::string& startTime,
+    std::ofstream& fout,
+    std::ofstream& bout
+) {
+  const ExtraConfig& extraCfg = ConfigManager::getExtraConfig();
+
+  *logger.info() << "NN Evaluation mode" << endl;
+  *logger.info() << "  Weight file: " << extraCfg.nnWeightFile << endl;
+
+  // Load NN weight file
+  std::ifstream weightFile(extraCfg.nnWeightFile, std::ios::binary | std::ios::ate);
+  if (!weightFile.is_open()) {
+    *logger.error() << "Cannot open NN weight file: " << extraCfg.nnWeightFile << endl;
+    exit(1);
+  }
+  std::streamsize fileSize = weightFile.tellg();
+  weightFile.seekg(0, std::ios::beg);
+  std::vector<uint8_t> fileData(fileSize);
+  if (!weightFile.read(reinterpret_cast<char*>(fileData.data()), fileSize)) {
+    *logger.error() << "Error reading NN weight file" << endl;
+    exit(1);
+  }
+  weightFile.close();
+
+  if (!nn_detect_format(fileData.data(), fileData.size())) {
+    *logger.error() << "Weight file is not in NN01 format" << endl;
+    exit(1);
+  }
+
+  NNGenome genome;
+  if (!nn_deserialize(fileData.data(), fileData.size(), genome)) {
+    *logger.error() << "Failed to deserialize NN genome" << endl;
+    exit(1);
+  }
+
+  {
+    std::ostringstream topo;
+    for (size_t i = 0; i < genome.topology.size(); i++) {
+      if (i > 0) topo << " -> ";
+      topo << genome.topology[i];
+    }
+    *logger.info() << "  Topology: " << topo.str() << " (" << genome.weights.size() << " weights)" << endl;
+  }
+  *logger.info() << "  Stored fitness: " << std::fixed << std::setprecision(6) << genome.fitness << endl;
+  *logger.info() << "  Stored generation: " << genome.generation << endl;
+
+  // Serialize genome for RPC (same format minisim expects)
+  std::vector<uint8_t> nnData;
+  nn_serialize(genome, nnData);
+
+  // Use scenario 0 (same as training)
+  const ScenarioDescriptor& scenario = scenarioForIndex(0);
+  uint64_t scenarioSequence = globalScenarioCounter.fetch_add(1, std::memory_order_relaxed) + 1;
+
+  EvalData evalData;
+  evalData.controllerType = ControllerType::NEURAL_NET;
+  evalData.gp.assign(reinterpret_cast<const char*>(nnData.data()),
+                     reinterpret_cast<const char*>(nnData.data() + nnData.size()));
+  evalData.gpHash = hashByteVector(evalData.gp);
+  evalData.isEliteReeval = false;
+  evalData.pathList = scenario.pathList;
+  evalData.scenario.scenarioSequence = scenarioSequence;
+  evalData.scenario.bakeoffSequence = 0;
+
+  evalData.scenarioList.clear();
+  evalData.scenarioList.reserve(scenario.pathList.size());
+  for (size_t idx = 0; idx < scenario.pathList.size(); ++idx) {
+    ScenarioMetadata meta;
+    meta.scenarioSequence = scenarioSequence;
+    meta.enableDeterministicLogging = false;
+    meta.bakeoffSequence = 0;
+    size_t numWindScenarios = scenario.windScenarios.size();
+    if (numWindScenarios > 0 && scenario.pathList.size() > 0) {
+      size_t pathIdx = idx / numWindScenarios;
+      size_t windIdx = idx % numWindScenarios;
+      meta.pathVariantIndex = static_cast<int>(pathIdx);
+      if (windIdx < scenario.windScenarios.size()) {
+        meta.windVariantIndex = scenario.windScenarios[windIdx].windVariantIndex;
+        meta.windSeed = scenario.windScenarios[windIdx].windSeed;
+      }
+    } else {
+      meta.pathVariantIndex = static_cast<int>(idx);
+    }
+    populateVariationOffsets(meta);
+    applySpeedProfileToPath(evalData.pathList[idx], meta.windVariantIndex);
+    evalData.scenarioList.push_back(meta);
+  }
+  if (!evalData.scenarioList.empty()) {
+    evalData.scenario = evalData.scenarioList.front();
+  }
+  evalData.sanitizePaths();
+
+  // Send to minisim and get results
+  auto evalDataPtr = std::make_shared<EvalData>(std::move(evalData));
+  EvalResults evalResults;
+  threadPool->enqueue([evalDataPtr, &evalResults](WorkerContext& context) {
+    sendRPC(*context.socket, *evalDataPtr);
+    evalResults = receiveRPC<EvalResults>(*context.socket);
+  });
+  threadPool->wait_for_tasks();
+
+  // Compute fitness
+  double fitness = computeNNFitness(evalResults);
+
+  // Log per-step data to data.dat
+  logEvalResults(fout, evalResults);
+
+  *logger.info() << "NN Eval fitness: " << std::fixed << std::setprecision(6) << fitness << endl;
+  *logger.info() << "Stored fitness:  " << std::fixed << std::setprecision(6) << genome.fitness << endl;
+
+  // Log to statistics file
+  bout << "#NNEval fitness=" << std::fixed << std::setprecision(6) << fitness
+       << " storedFitness=" << genome.fitness
+       << " weightFile=" << extraCfg.nnWeightFile
+       << " scenarios=" << evalResults.pathList.size()
+       << endl;
+}
+
 // NN evolution main loop — runs when ControllerType=NN
 static void runNNEvolution(
     const std::string& startTime,
@@ -2180,7 +2300,10 @@ int main(int argc, char** argv)
   // Check controller type: NN evolution gets its own dedicated loop
   bool isNNMode = (strcmp(ConfigManager::getExtraConfig().controllerType, "NN") == 0);
 
-  if (isNNMode) {
+  if (isNNMode && ConfigManager::getExtraConfig().evaluateMode) {
+    // NN evaluation mode: load weight file, evaluate, report fitness
+    runNNEvaluation(startTime, fout, bout);
+  } else if (isNNMode) {
     // NN evolution mode
     runNNEvolution(startTime, runStartTime, fout, bout, logGenerationStats);
   } else if (ConfigManager::getExtraConfig().evaluateMode) {
