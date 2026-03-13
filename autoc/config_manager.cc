@@ -127,6 +127,13 @@ GPConfigVarInformation* ConfigManager::createConfigArray() {
         {"RabbitSpeedMax", DATADOUBLE, &extraConfig->rabbitSpeedMax},
         {"RabbitSpeedCycleMin", DATADOUBLE, &extraConfig->rabbitSpeedCycleMin},
         {"RabbitSpeedCycleMax", DATADOUBLE, &extraConfig->rabbitSpeedCycleMax},
+        // Neural network evolution (see specs/013-neuroevolution)
+        {"ControllerType", DATASTRING, &extraConfig->controllerType},
+        {"NNTopology", DATASTRING, &extraConfig->nnTopology},
+        {"NNMutationSigma", DATADOUBLE, &extraConfig->nnMutationSigma},
+        {"NNCrossoverAlpha", DATADOUBLE, &extraConfig->nnCrossoverAlpha},
+        {"NNWeightFile", DATASTRING, &extraConfig->nnWeightFile},
+        {"NNInitMethod", DATASTRING, &extraConfig->nnInitMethod},
         {"", DATAINT, NULL}
     };
     return configArray;

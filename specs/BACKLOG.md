@@ -34,6 +34,13 @@
 ### [DONE] Separate data.dat/data.stc Filenames for Train vs Eval Mode → `012-distance-temporal-nodes`
 - Eval mode now writes to `eval-data.dat` / `eval-data.stc`; training mode unchanged
 
+### [DEFERRED] Unify S3 Archive Format for GP and NN Controllers
+- Current: GP archives use Boost-serialized GP trees (`.dmp`); NN archives use custom binary "NN01" format (`.dmp`)
+- S3 prefixes diverge: `autoc-*` (GP) vs `nn-*` (NN); both use INT64_MAX-epoch trick for descending time order
+- Issue: Two distinct serialization formats creates a fork — renderer, extractor, CRRCSim all need format-aware branching
+- Direction: GP path likely to be deprecated in favor of NN; consider a single envelope format (e.g., magic + type tag + payload) or converge on NN format only
+- Defer: Wait until NN pipeline is validated end-to-end and GP deprecation decision is made
+
 ---
 
 ## Evolution & GP Engine
@@ -102,6 +109,14 @@
   the search space. Revisit only if bang-bang becomes dominant when variations are enabled.
 
 ### [SPEC] Neuroevolution Controller → `specs/013-neuroevolution`
+
+### [DEFERRED] GP/NN Architecture Decision: Refactor or Fork
+- Current: GP and NN code paths coexist with significant duplication (evalTask vs computeNNFitness, GPrand vs local RNG, parallel config parsing, format-aware branching in renderer/extractor/CRRCSim)
+- Two paths forward:
+  1. **Big refactor**: Unify GP and NN behind a clean ControllerBackend polymorphic interface — shared fitness, shared eval pipeline, shared serialization envelope, pluggable controller backends
+  2. **Fork to NN-only**: Rip out GP tree evolution entirely, simplify codebase around NN-only workflow — bytecode/GP tree serialization, gpextractor, bytecode2cpp all become dead code
+- Decision depends on: whether GP tree evolution provides unique value not achievable by NN (e.g., interpretability, modular subtree transfer), or whether NN supersedes GP for all use cases
+- Defer until: 013-neuroevolution is fully validated end-to-end and comparative training runs (T098) inform the decision
 
 ### [SPEC] Fix LongSequential Path Immelman Segment → `specs/009-immelman-path`
 

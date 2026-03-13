@@ -113,6 +113,14 @@ public:
   double rabbitSpeedCycleMin = 0.5;   // seconds - min variation cycle duration
   double rabbitSpeedCycleMax = 5.0;   // seconds - max variation cycle duration
 
+  // Neural network evolution (see specs/013-neuroevolution)
+  char* controllerType = "GP";       // "GP" or "NN" — selects evolution mode
+  char* nnTopology = "14,16,8,3";    // Comma-separated layer sizes
+  double nnMutationSigma = 0.1;      // Initial mutation sigma for NN
+  double nnCrossoverAlpha = -1.0;    // BLX-alpha (-1 = uniform random per weight)
+  char* nnWeightFile = "nn_weights.dat"; // Weight file for eval mode
+  char* nnInitMethod = "xavier";     // "xavier" or "uniform"
+
   // // Custom implementation of the << operator for the extraCfg type
   // std::ostream& operator << (std::ostream& os) {
   //   os << "simNumPathsPerGen: " + simNumPathsPerGen;

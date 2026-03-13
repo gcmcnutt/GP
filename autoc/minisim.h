@@ -184,10 +184,18 @@ struct ScenarioMetadata {
 };
 BOOST_CLASS_VERSION(ScenarioMetadata, 6)
 
+// Controller type tag — replaces magic byte heuristics in minisim format detection
+enum class ControllerType : int {
+  GP_TREE = 0,     // Traditional GP tree (default, backward compatible)
+  BYTECODE = 1,    // GPBytecodeInterpreter
+  NEURAL_NET = 2   // NNGenome weight vector
+};
+
 struct EvalData {
   std::vector<char> gp;
   uint64_t gpHash = 0;  // FNV-1a hash of gp buffer for verification
   bool isEliteReeval = false;  // Enable detailed logging for elite re-evaluations
+  ControllerType controllerType = ControllerType::GP_TREE;  // Explicit type tag for format detection
   std::vector<std::vector<Path>> pathList;
   ScenarioMetadata scenario;
   std::vector<ScenarioMetadata> scenarioList;
@@ -207,6 +215,16 @@ struct EvalData {
     } else if (Archive::is_loading::value) {
       gpHash = 0;
       isEliteReeval = false;
+    }
+    // ControllerType field (version 6+)
+    if (version > 5) {
+      int ct = static_cast<int>(controllerType);
+      ar& ct;
+      if (Archive::is_loading::value) {
+        controllerType = static_cast<ControllerType>(ct);
+      }
+    } else if (Archive::is_loading::value) {
+      controllerType = ControllerType::GP_TREE;  // Legacy data is always GP tree
     }
     ar& pathList;
     if (version > 1) {
@@ -238,7 +256,7 @@ struct EvalData {
     }
   }
 };
-BOOST_CLASS_VERSION(EvalData, 5)  // Bumped for isEliteReeval field
+BOOST_CLASS_VERSION(EvalData, 6)  // Bumped for ControllerType field
 
 enum class CrashReason {
   None,

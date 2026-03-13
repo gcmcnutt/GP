@@ -19,6 +19,8 @@
 #include "autoc.h"
 #include "gp_bytecode.h"
 #include "gp_evaluator_portable.h"
+#include "nn_serialization.h"
+#include "nn_evaluator_portable.h"
 
 using namespace std;
 using boost::asio::ip::tcp;
@@ -103,49 +105,81 @@ public:
       evalResults.scenarioList.clear();
       evalResults.scenarioList.reserve(evalData.scenarioList.size());
 
-      // Detect if we have GP tree data or bytecode data
+      // Controller type dispatch using explicit ControllerType tag from EvalData
+      // Falls back to magic byte heuristics for legacy data (controllerType defaults to GP_TREE)
       bool isGPTreeData = false;
       bool isBytecodeData = false;
+      bool isNeuralNetData = false;
       MyGP gp;
       GPBytecodeInterpreter interpreter;
-      
-      // Check if the data starts with binary archive header (binary archives have specific magic bytes)
-      // Binary archives start with specific byte patterns, while GP tree data is typically text-based
-      bool looksLikeBinaryArchive = false;
-      if (evalData.gp.size() >= 4) {
-        // Check for binary archive magic bytes (boost binary archive typically starts with specific patterns)
-        unsigned char firstBytes[4] = {
-          (unsigned char)evalData.gp[0], 
-          (unsigned char)evalData.gp[1], 
-          (unsigned char)evalData.gp[2], 
-          (unsigned char)evalData.gp[3]
-        };
-        // Binary archives often start with version info in binary format
-        looksLikeBinaryArchive = (firstBytes[0] >= 0x16 && firstBytes[0] <= 0x20) && 
-                                (firstBytes[1] == 0x00 || firstBytes[2] == 0x00);
-      }
-      
-      if (looksLikeBinaryArchive) {
-        // This looks like Boost binary serialized bytecode data
-        try {
-          boost::iostreams::stream<boost::iostreams::array_source> bytecodeStream = charArrayToIstream(evalData.gp);
-          boost::archive::binary_iarchive archive(bytecodeStream);
-          archive >> interpreter;
-          isBytecodeData = true;
-        } catch (const std::exception& e) {
-          std::cerr << "Error loading bytecode data: " << e.what() << std::endl;
-          continue;
+      NNGenome nnGenome;
+
+      switch (evalData.controllerType) {
+        case ControllerType::BYTECODE: {
+          try {
+            boost::iostreams::stream<boost::iostreams::array_source> bytecodeStream = charArrayToIstream(evalData.gp);
+            boost::archive::binary_iarchive archive(bytecodeStream);
+            archive >> interpreter;
+            isBytecodeData = true;
+          } catch (const std::exception& e) {
+            std::cerr << "Error loading bytecode data: " << e.what() << std::endl;
+            continue;
+          }
+          break;
         }
-      } else {
-        // This looks like GP tree data
-        try {
-          boost::iostreams::stream<boost::iostreams::array_source> gpStream = charArrayToIstream(evalData.gp);
-          gp.load(gpStream);
-          gp.resolveNodeValues(adfNs);
-          isGPTreeData = true;
-        } catch (const std::exception& e) {
-          std::cerr << "Error loading GP tree data: " << e.what() << std::endl;
-          continue;
+        case ControllerType::NEURAL_NET: {
+          // Deserialize NN genome from payload
+          if (nn_detect_format(reinterpret_cast<const uint8_t*>(evalData.gp.data()), evalData.gp.size())) {
+            if (nn_deserialize(reinterpret_cast<const uint8_t*>(evalData.gp.data()), evalData.gp.size(), nnGenome)) {
+              isNeuralNetData = true;
+            } else {
+              std::cerr << "[MINISIM] Failed to deserialize NN genome" << std::endl;
+              continue;
+            }
+          } else {
+            std::cerr << "[MINISIM] NN payload missing magic bytes" << std::endl;
+            continue;
+          }
+          break;
+        }
+        case ControllerType::GP_TREE:
+        default: {
+          // Legacy fallback: check for binary archive magic bytes (bytecode)
+          // This handles pre-ControllerType data where controllerType defaults to GP_TREE
+          bool looksLikeBinaryArchive = false;
+          if (evalData.gp.size() >= 4) {
+            unsigned char firstBytes[4] = {
+              (unsigned char)evalData.gp[0],
+              (unsigned char)evalData.gp[1],
+              (unsigned char)evalData.gp[2],
+              (unsigned char)evalData.gp[3]
+            };
+            looksLikeBinaryArchive = (firstBytes[0] >= 0x16 && firstBytes[0] <= 0x20) &&
+                                    (firstBytes[1] == 0x00 || firstBytes[2] == 0x00);
+          }
+
+          if (looksLikeBinaryArchive) {
+            try {
+              boost::iostreams::stream<boost::iostreams::array_source> bytecodeStream = charArrayToIstream(evalData.gp);
+              boost::archive::binary_iarchive archive(bytecodeStream);
+              archive >> interpreter;
+              isBytecodeData = true;
+            } catch (const std::exception& e) {
+              std::cerr << "Error loading bytecode data: " << e.what() << std::endl;
+              continue;
+            }
+          } else {
+            try {
+              boost::iostreams::stream<boost::iostreams::array_source> gpStream = charArrayToIstream(evalData.gp);
+              gp.load(gpStream);
+              gp.resolveNodeValues(adfNs);
+              isGPTreeData = true;
+            } catch (const std::exception& e) {
+              std::cerr << "Error loading GP tree data: " << e.what() << std::endl;
+              continue;
+            }
+          }
+          break;
         }
       }
 
@@ -174,6 +208,8 @@ public:
                     << " bytecode_bytes=" << evalData.gp.size()
                     << " (bytecode)"
                     << std::endl;
+        } else if (isNeuralNetData) {
+          // NN logging — T103: revisit logging pattern for multi-process workers
         }
       }
       
@@ -248,15 +284,16 @@ public:
           gp_scalar pre_pitch = aircraftState.getPitchCommand();
           gp_scalar pre_throttle = aircraftState.getThrottleCommand();
 
-          // run the controller (GP tree or bytecode interpreter) - BOTH NOW HAVE SAME BASELINE
+          // run the controller (GP tree, bytecode interpreter, or neural net)
           gp_scalar evaluation_result = 0.0f;
           if (isGPTreeData) {
             evaluation_result = gp.NthMyGene(0)->evaluate(path, gp, 0);
           } else if (isBytecodeData) {
-            // Use bytecode interpreter to evaluate and set control commands
-            // NOTE: Bytecode interpreter now starts with proper baseline estimates set above
             evaluation_result = interpreter.evaluate(aircraftState, path, 0.0);
-            // Note: The bytecode interpreter can modify control commands via SETPITCH, SETROLL, SETTHROTTLE opcodes
+          } else if (isNeuralNetData) {
+            VectorPathProvider pathProvider(path, aircraftState.getThisPathIndex());
+            NNControllerBackend nnBackend(nnGenome);
+            nnBackend.evaluate(aircraftState, pathProvider);
           }
           
 

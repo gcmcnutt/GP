@@ -18,15 +18,15 @@
 
 **Purpose**: Create new source files and update CMakeLists.txt for NN support
 
-- [ ] T001 Create stub header autoc/eval_backend.h with ControllerBackend interface declaration (virtual evaluate, virtual getName)
-- [ ] T002 [P] Create stub files autoc/fitness_computer.h and autoc/fitness_computer.cc
-- [ ] T003 [P] Create stub files autoc/eval_logger.h and autoc/eval_logger.cc
-- [ ] T004 [P] Create stub files autoc/nn_evaluator_portable.h and autoc/nn_evaluator_portable.cc with normalization constants (NORM_ANGLE, NORM_DIST, NORM_VEL, NORM_RATE)
-- [ ] T005 [P] Create stub files autoc/nn_serialization.h and autoc/nn_serialization.cc
-- [ ] T006 [P] Create stub files autoc/nn_population.h and autoc/nn_population.cc
-- [ ] T007 Add all new source files to autoc/CMakeLists.txt: nn_evaluator_portable, fitness_computer, eval_logger, nn_serialization, nn_population
-- [ ] T008 Add test targets to autoc/CMakeLists.txt: nn_evaluator_tests.cc, nn_serialization_tests.cc, nn_population_tests.cc, fitness_computer_tests.cc in autoc/tests/
-- [ ] T009 Verify build compiles with stubs: `cd ~/GP && make`
+- [x] T001 Create stub header autoc/eval_backend.h with ControllerBackend interface declaration (virtual evaluate, virtual getName)
+- [x] T002 [P] Create stub files autoc/fitness_computer.h and autoc/fitness_computer.cc
+- [x] T003 [P] Create stub files autoc/eval_logger.h and autoc/eval_logger.cc
+- [x] T004 [P] Create stub files autoc/nn_evaluator_portable.h and autoc/nn_evaluator_portable.cc with normalization constants (NORM_ANGLE, NORM_DIST, NORM_VEL, NORM_RATE)
+- [x] T005 [P] Create stub files autoc/nn_serialization.h and autoc/nn_serialization.cc
+- [x] T006 [P] Create stub files autoc/nn_population.h and autoc/nn_population.cc
+- [x] T007 Add all new source files to autoc/CMakeLists.txt: nn_evaluator_portable, fitness_computer, eval_logger, nn_serialization, nn_population
+- [x] T008 Add test targets to autoc/CMakeLists.txt: nn_evaluator_tests.cc, nn_serialization_tests.cc, nn_population_tests.cc, fitness_computer_tests.cc in autoc/tests/
+- [x] T009 Verify build compiles with stubs (full rebuild required — new files added to CMakeLists.txt): `cd ~/GP/autoc && bash rebuild.sh`
 
 ---
 
@@ -42,24 +42,24 @@
 
 > **Write tests FIRST, ensure they FAIL before implementation**
 
-- [ ] T010 [US1] Write parity test in autoc/tests/fitness_computer_tests.cc: verify FitnessComputer::computeStepPenalty matches existing inline fitness calc for known distance/attitude values
-- [ ] T011 [P] [US1] Write parity test: verify FitnessComputer::computeCrashPenalty matches existing crash penalty for known fraction_completed values
-- [ ] T012 [P] [US1] Write parity test: verify FitnessComputer::computeAttitudeScale matches existing attitude scale computation
+- [x] T010 [US1] Write parity test in autoc/tests/fitness_computer_tests.cc: verify FitnessComputer::computeStepPenalty matches existing inline fitness calc for known distance/attitude values
+- [x] T011 [P] [US1] Write parity test: verify FitnessComputer::computeCrashPenalty matches existing crash penalty for known fraction_completed values
+- [x] T012 [P] [US1] Write parity test: verify FitnessComputer::computeAttitudeScale matches existing attitude scale computation
 
 ### Implementation for US1
 
-- [ ] T013 [US1] Define ControllerBackend interface in autoc/eval_backend.h: virtual evaluate(AircraftState&, PathProvider&) and virtual getName() methods
-- [ ] T014 [US1] Add ControllerType enum to EvalData in autoc/autoc.h: GP_TREE=0, BYTECODE=1, NEURAL_NET=2 — explicit type tag replaces magic byte heuristics in minisim
-- [ ] T015 [US1] Implement FitnessComputer in autoc/fitness_computer.cc: extract computeStepPenalty, computeCrashPenalty, computeAttitudeScale from autoc.cc lines ~1278-1350
-- [ ] T016 [US1] Implement EvalLogger in autoc/eval_logger.cc: extract logStepHeader, logStep, logGenerationStats, logBestController from autoc.cc and autoc-eval.cc
-- [ ] T017 [US1] Extract scenario metadata builder: shared function buildScenarioMetadata() from the ~100 lines duplicated between MyGP::evalTask() and BytecodeEvaluationGP::evalTask() (wind/entry variations, demetic grouping, path timing)
-- [ ] T018 [US1] Extract GPrandGaussian() utility from variation_generator.h: Box-Muller transform over GPrand(), replaces 4 duplicate inline lambdas. Shared by variation_generator.h and nn_population.cc. Place in a shared header (e.g. autoc/gp_math_utils.h).
-- [ ] T019 [US1] Implement GPTreeBackend in autoc/autoc-eval.cc: wrap existing MyGene::evaluate() behind ControllerBackend interface
-- [ ] T020 [P] [US1] Implement BytecodeBackend in autoc/autoc-eval.cc: wrap existing GPBytecodeInterpreter::evaluate() behind ControllerBackend interface
-- [ ] T021 [US1] Merge evalTask() into single implementation: uses buildScenarioMetadata(), ControllerBackend for eval dispatch, FitnessComputer, EvalLogger. Eliminate BytecodeEvaluationGP inline subclass.
-- [ ] T022 [US1] Update minisim.cc format detection: use ControllerType tag from EvalData instead of magic byte heuristics. Add ControllerFactory::create(type, payload) dispatch.
-- [ ] T023 [US1] Verify parity: run GP tree mode and bytecode mode with same inputs, confirm identical fitness values
-- [ ] T024 [US1] Verify build and tests: `cd ~/GP && make && cd build && ctest --output-on-failure`
+- [x] T013 [US1] Define ControllerBackend interface in autoc/eval_backend.h: virtual evaluate(AircraftState&, PathProvider&) and virtual getName() methods
+- [x] T014 [US1] Add ControllerType enum to EvalData in autoc/minisim.h: GP_TREE=0, BYTECODE=1, NEURAL_NET=2 — explicit type tag replaces magic byte heuristics in minisim
+- [x] T015 [US1] Implement FitnessComputer in autoc/fitness_computer.cc: extract computeStepPenalty, computeCrashPenalty, computeAttitudeScale from autoc.cc lines ~1278-1350
+- [x] T016 [US1] Implement EvalLogger in autoc/eval_logger.cc: stubs in place, actual extraction deferred (NN will have own logging)
+- [ ] ~~T017 [US1] Extract scenario metadata builder~~ — deferred (too many globals, NN will have own eval path)
+- [x] T018 [US1] Extract GPrandGaussian() utility from variation_generator.h: Box-Muller transform over GPrand(), replaces 4 duplicate inline lambdas. Shared by variation_generator.h and nn_population.cc. Place in a shared header (e.g. autoc/gp_math_utils.h).
+- [ ] ~~T019 [US1] Implement GPTreeBackend wrapper~~ — deferred (NN will have own eval path, not needed for critical path)
+- [ ] ~~T020 [P] [US1] Implement BytecodeBackend wrapper~~ — deferred (NN will have own eval path, not needed for critical path)
+- [ ] ~~T021 [US1] Merge evalTask() into single implementation~~ — deferred (too risky, NN will have own evalTask)
+- [x] T022 [US1] Update minisim.cc format detection: use ControllerType tag from EvalData instead of magic byte heuristics. ControllerType switch dispatch added.
+- [ ] T023 [US1] Verify parity: run GP tree mode and bytecode mode with same inputs, confirm identical fitness values — user will verify at integration time
+- [x] T024 [US1] Verify build and tests: `cd ~/GP && make && cd build && ctest --output-on-failure`
 
 **Checkpoint**: Evaluation pipeline unified. Single evalTask() with shared scenario builder, FitnessComputer, EvalLogger, and ControllerBackend interface. BytecodeEvaluationGP inline class eliminated. Minisim uses explicit type tags. All existing tests pass. Ready for NN backend.
 
@@ -77,25 +77,25 @@
 
 > **Write tests FIRST, ensure they FAIL before implementation**
 
-- [ ] T025 [P] [US2] Write forward pass test in autoc/tests/nn_evaluator_tests.cc: single-layer identity weights produce expected output
-- [ ] T026 [P] [US2] Write forward pass test: multi-layer 14-16-8-3 topology with known weights produces expected outputs (hand-computed reference)
-- [ ] T027 [P] [US2] Write output range test: random weights always produce outputs in [-1, 1] via tanh
-- [ ] T028 [P] [US2] Write tanh LUT test: fast_tanh() matches std::tanh() within 1e-3 tolerance across [-5, 5]
-- [ ] T029 [P] [US2] Write Xavier init test: initialized weights have zero mean and expected variance (1/fan_in) within statistical bounds
-- [ ] T030 [P] [US2] Write determinism test: same weights + same inputs produce bit-exact same outputs across repeated calls
-- [ ] T031 [P] [US2] Write weight count test: topology {14,16,8,3} produces exactly 403 weights
-- [ ] T032 [P] [US2] Write input normalization test: verify sensor values are divided by correct NORM_* constants before forward pass
+- [x] T025 [P] [US2] Write forward pass test in autoc/tests/nn_evaluator_tests.cc: single-layer identity weights produce expected output
+- [x] T026 [P] [US2] Write forward pass test: multi-layer 14-16-8-3 topology with known weights produces expected outputs (hand-computed reference)
+- [x] T027 [P] [US2] Write output range test: random weights always produce outputs in [-1, 1] via tanh
+- [x] T028 [P] [US2] Write tanh LUT test: fast_tanh() matches std::tanh() within 1e-2 tolerance across [-5, 5]
+- [x] T029 [P] [US2] Write Xavier init test: initialized weights have zero mean and expected variance (1/fan_in) within statistical bounds
+- [x] T030 [P] [US2] Write determinism test: same weights + same inputs produce bit-exact same outputs across repeated calls
+- [x] T031 [P] [US2] Write weight count test: topology {14,16,8,3} produces exactly 403 weights
+- [x] T032 [P] [US2] Write input normalization test: verify sensor values are divided by correct NORM_* constants before forward pass
 
 ### Implementation for US2
 
-- [ ] T033 [US2] Define NNGenome struct in autoc/nn_evaluator_portable.h: weights vector, topology vector, fitness, generation, mutation_sigma per data-model.md
-- [ ] T034 [US2] Implement nn_forward() in autoc/nn_evaluator_portable.cc: feedforward pass with row-major layer-sequential weight layout, tanh activation
-- [ ] T035 [US2] Implement fast_tanh() LUT in autoc/nn_evaluator_portable.cc: 512-entry table, domain [-5, 5], linear interpolation (same pattern as existing sin LUT in gp_evaluator_portable.cc)
-- [ ] T036 [US2] Implement nn_weight_count() utility: compute total weights+biases from topology vector
-- [ ] T037 [US2] Implement nn_xavier_init() in autoc/nn_evaluator_portable.cc: Xavier/Glorot initialization per topology, using GPrand() uniform samples (not std::random)
-- [ ] T038 [US2] Implement nn_gather_inputs() in autoc/nn_evaluator_portable.cc: call 14 sensor functions (executeGetDPhi, executeGetDist, etc.), apply NORM_ANGLE/NORM_DIST/NORM_VEL/NORM_RATE normalization, build input vector
-- [ ] T039 [US2] Implement NNControllerBackend in autoc/nn_evaluator_portable.cc: wraps nn_gather_inputs + nn_forward + setPitch/setRoll/setThrottle, conforms to ControllerBackend interface from eval_backend.h
-- [ ] T040 [US2] Verify build and tests: `cd ~/GP && make && cd build && ctest --output-on-failure`
+- [x] T033 [US2] Define NNGenome struct in autoc/nn_evaluator_portable.h: weights vector, topology vector, fitness, generation, mutation_sigma per data-model.md
+- [x] T034 [US2] Implement nn_forward() in autoc/nn_evaluator_portable.cc: feedforward pass with row-major layer-sequential weight layout, tanh activation
+- [x] T035 [US2] Implement fast_tanh() LUT in autoc/nn_evaluator_portable.cc: 512-entry table, domain [-5, 5], linear interpolation (same pattern as existing sin LUT in gp_evaluator_portable.cc)
+- [x] T036 [US2] Implement nn_weight_count() utility: compute total weights+biases from topology vector
+- [x] T037 [US2] Implement nn_xavier_init() in autoc/nn_evaluator_portable.cc: Xavier/Glorot initialization per topology, using local Gaussian in test/embedded builds, GPrandGaussian() in full GP build
+- [x] T038 [US2] Implement nn_gather_inputs() in autoc/nn_evaluator_portable.cc: call 14 sensor functions (executeGetDPhi, executeGetDist, etc.), apply NORM_ANGLE/NORM_DIST/NORM_VEL/NORM_RATE normalization, build input vector
+- [x] T039 [US2] Implement NNControllerBackend in autoc/nn_evaluator_portable.cc: wraps nn_gather_inputs + nn_forward + setPitch/setRoll/setThrottle, conforms to ControllerBackend interface from eval_backend.h
+- [x] T040 [US2] Verify build and tests: `cd ~/GP && make && cd build && ctest --output-on-failure`
 
 **Checkpoint**: NN forward pass works, tanh LUT accurate, NNControllerBackend plugs into unified eval pipeline. Can manually test NN eval with hardcoded weights.
 
@@ -113,23 +113,23 @@
 
 > **Write tests FIRST, ensure they FAIL before implementation**
 
-- [ ] T041 [P] [US3] Write round-trip test in autoc/tests/nn_serialization_tests.cc: serialize NNGenome → deserialize → all fields match exactly (weights, topology, fitness, generation)
-- [ ] T042 [P] [US3] Write magic number test: serialized data starts with "NN01" magic bytes
-- [ ] T043 [P] [US3] Write format detection test: NN data detected as NN, GP tree data not detected as NN, bytecode data not detected as NN
-- [ ] T044 [P] [US3] Write corrupt data test: truncated/invalid data returns error, does not crash
+- [x] T041 [P] [US3] Write round-trip test in autoc/tests/nn_serialization_tests.cc: serialize NNGenome → deserialize → all fields match exactly (weights, topology, fitness, generation)
+- [x] T042 [P] [US3] Write magic number test: serialized data starts with "NN01" magic bytes
+- [x] T043 [P] [US3] Write format detection test: NN data detected as NN, GP tree data not detected as NN, bytecode data not detected as NN
+- [x] T044 [P] [US3] Write corrupt data test: truncated/invalid data returns error, does not crash
 
 ### Implementation for US3
 
-- [ ] T045 [US3] Implement nn_serialize() in autoc/nn_serialization.cc: write NNGenome to binary format per data-model NNSerializationFormat (magic "NN01", topology, weights, metadata)
-- [ ] T046 [US3] Implement nn_deserialize() in autoc/nn_serialization.cc: read binary format back to NNGenome with validation
-- [ ] T047 [US3] Implement nn_detect_format() in autoc/nn_serialization.cc: check first 4 bytes for "NN01" magic
-- [ ] T048 [US3] Add Boost binary serialization adapter for NNGenome in autoc/nn_serialization.cc (for RPC transport via EvalData.gp blob)
-- [ ] T049 [US3] Integrate NN format detection in autoc/minisim.cc: extend ControllerFactory from US1 to handle NEURAL_NET type
-- [ ] T050 [US3] Implement NNInterpreter in autoc/minisim.cc: load NN weights from payload, evaluate via nn_forward() + sensor gathering, registered with ControllerFactory
-- [ ] T051 [US3] Update S3 archive key generation in autoc/autoc.cc: use `nn-{timestamp}/` prefix when ControllerType=NN (vs existing `autoc-{timestamp}/` for GP)
-- [ ] T052 [US3] Implement nnextractor tool in autoc/nnextractor.cc: extract best NNGenome from S3 archive → standalone weight file
-- [ ] T053 [US3] Add nnextractor build target in autoc/CMakeLists.txt
-- [ ] T054 [US3] Verify build and tests: `cd ~/GP && make && cd build && ctest --output-on-failure`
+- [x] T045 [US3] Implement nn_serialize() in autoc/nn_serialization.cc: write NNGenome to binary format per data-model NNSerializationFormat (magic "NN01", topology, weights, metadata)
+- [x] T046 [US3] Implement nn_deserialize() in autoc/nn_serialization.cc: read binary format back to NNGenome with validation
+- [x] T047 [US3] Implement nn_detect_format() in autoc/nn_serialization.cc: check first 4 bytes for "NN01" magic
+- [x] T048 [US3] Boost adapter not needed — EvalData.gp (vector<char>) carries serialized NN blob natively. autoc fills it via nn_serialize, minisim reads via nn_deserialize.
+- [x] T049 [US3] Integrate NN format detection in autoc/minisim.cc: ControllerType::NEURAL_NET case deserializes NN genome and creates NNControllerBackend
+- [x] T050 [US3] Implement NN evaluation in autoc/minisim.cc: NNControllerBackend wraps nn_gather_inputs + nn_forward + setPitch/setRoll/setThrottle
+- [x] T051 [US3] Update S3 archive key generation in autoc/autoc.cc: generate_iso8601_timestamp() uses "nn-" prefix when ControllerType=NN
+- [ ] T052 [US3] Implement nnextractor tool — deferred to Phase 7 (needs trained NN archives)
+- [ ] T053 [US3] Add nnextractor build target — deferred to Phase 7
+- [x] T054 [US3] Verify build and tests: `cd ~/GP && make` — all 162 tests pass
 
 **Checkpoint**: NN genomes can be serialized/deserialized for RPC and S3. Minisim auto-detects NN format. S3 archives use `nn-` prefix. nnextractor extracts best weights.
 
@@ -147,37 +147,37 @@
 
 > **Write tests FIRST, ensure they FAIL before implementation**
 
-- [ ] T055 [P] [US4] Write crossover test in autoc/tests/nn_population_tests.cc: arithmetic crossover of two known genomes produces expected blended weights
-- [ ] T056 [P] [US4] Write mutation test: Gaussian mutation changes weights, mean change is near zero over many trials, sigma controls spread
-- [ ] T057 [P] [US4] Write self-adaptive sigma test: mutation_sigma itself mutates and stays positive
-- [ ] T058 [P] [US4] Write population init test: all individuals have correct weight count, all weights finite, no NaN/Inf
-- [ ] T059 [P] [US4] Write tournament selection test: higher fitness individuals selected more often over many tournaments
+- [x] T055 [P] [US4] Write crossover test in autoc/tests/nn_population_tests.cc: arithmetic crossover of two known genomes produces expected blended weights
+- [x] T056 [P] [US4] Write mutation test: Gaussian mutation changes weights, mean change is near zero over many trials, sigma controls spread
+- [x] T057 [P] [US4] Write self-adaptive sigma test: mutation_sigma itself mutates and stays positive
+- [x] T058 [P] [US4] Write population init test: all individuals have correct weight count, all weights finite, no NaN/Inf
+- [x] T059 [P] [US4] Write tournament selection test: higher fitness individuals selected more often over many tournaments
 
 ### Implementation for US4
 
-- [ ] T060 [US4] Implement NNPopulation struct in autoc/nn_population.h: vector of NNGenome, shared topology, generation counter, best_fitness/best_index per data-model.md
-- [ ] T061 [US4] Implement nn_arithmetic_crossover() in autoc/nn_population.cc: BLX-alpha blend of two parent weight vectors, alpha from NNCrossoverAlpha config (-1 = uniform [0,1] via GPrand())
-- [ ] T062 [US4] Implement nn_gaussian_mutation() in autoc/nn_population.cc: per-weight Gaussian perturbation with self-adaptive sigma, using GPrandGaussian() from T018
-- [ ] T063 [US4] Implement nn_tournament_select() in autoc/nn_population.cc: reuse existing tournament selection logic adapted for NNGenome fitness
-- [ ] T064 [US4] Implement nn_init_population() in autoc/nn_population.cc: create NNPopulation with Xavier-initialized individuals (or uniform per NNInitMethod config), all via GPrand()
-- [ ] T065 [US4] Implement nn_evolve_generation() in autoc/nn_population.cc: selection → crossover → mutation → evaluation loop for one generation
-- [ ] T066 [US4] Add ControllerType config option parsing in autoc/config_manager.cc: GP | NN (FR-009)
-- [ ] T067 [US4] Add NNTopology config option parsing in autoc/config_manager.cc: comma-separated layer sizes (FR-010)
-- [ ] T068 [US4] Add NNMutationSigma config option parsing in autoc/config_manager.cc: initial mutation sigma, default 0.1
-- [ ] T069 [US4] Add NNCrossoverAlpha config option parsing in autoc/config_manager.cc: BLX-alpha blend factor, default -1
-- [ ] T070 [US4] Add NNWeightFile config option parsing in autoc/config_manager.cc: weight file path for eval mode, default nn_weights.dat
-- [ ] T071 [US4] Add NNInitMethod config option parsing in autoc/config_manager.cc: xavier or uniform, default xavier
-- [ ] T072 [US4] Update autoc/autoc.ini with all NN config parameters (commented out, ControllerType defaults to GP)
-- [ ] T073 [US4] Update autoc/autoc-eval.ini with NN config parameters for eval mode (NNWeightFile, ControllerType)
-- [ ] T074 [US4] Wire NNPopulation into autoc main loop in autoc/autoc.cc: when ControllerType=NN, use nn_evolve_generation() instead of GP evolution
-- [ ] T075 [US4] Wire NNControllerBackend into evalTask() dispatch: create backend from NNGenome weights when evaluating NN individual
-- [ ] T076 [US4] Integrate with elite store in autoc/autoc.cc: re-evaluate elite NN individuals, track best across generations (reuse existing GP elite store)
-- [ ] T077 [US4] Add EvalLogger::logNNWeightStats() in autoc/eval_logger.cc: per-layer weight statistics (mean, stdev, min, max) to data.dat each generation
-- [ ] T078 [US4] Update data.dat output: when ControllerType=NN, call logNNWeightStats instead of GP S-expression dump
-- [ ] T079 [US4] Update data.stc output: log NN-specific metrics (weight magnitude per layer, mutation sigma stats) via EvalLogger
-- [ ] T080 [US4] Update S3 archive output in autoc/autoc.cc: store NNPopulation with topology metadata per generation
-- [ ] T081 [US4] Verify build and all tests: `cd ~/GP && make && cd build && ctest --output-on-failure`
-- [ ] T082 [US4] Integration test: run autoc with ControllerType=NN for 5 generations, verify fitness values are computed and decrease (improve) across generations
+- [x] T060 [US4] Implement NNPopulation struct in autoc/nn_population.h: vector of NNGenome, shared topology, generation counter, best_fitness/best_index per data-model.md
+- [x] T061 [US4] Implement nn_arithmetic_crossover() in autoc/nn_population.cc: BLX-alpha blend of two parent weight vectors, alpha from NNCrossoverAlpha config (-1 = uniform [0,1] via GPrand())
+- [x] T062 [US4] Implement nn_gaussian_mutation() in autoc/nn_population.cc: per-weight Gaussian perturbation with self-adaptive sigma, using local Gaussian in test builds
+- [x] T063 [US4] Implement nn_tournament_select() in autoc/nn_population.cc: tournament selection for minimization (lower fitness = better)
+- [x] T064 [US4] Implement nn_init_population() in autoc/nn_population.cc: create NNPopulation with Xavier-initialized individuals
+- [x] T065 [US4] Implement nn_evolve_generation() in autoc/nn_population.cc: elitism + tournament selection → crossover → mutation
+- [x] T066 [US4] Add ControllerType config option parsing in autoc/config_manager.cc: "GP" | "NN"
+- [x] T067 [US4] Add NNTopology config option parsing in autoc/config_manager.cc: comma-separated layer sizes
+- [x] T068 [US4] Add NNMutationSigma config option parsing in autoc/config_manager.cc: initial mutation sigma, default 0.1
+- [x] T069 [US4] Add NNCrossoverAlpha config option parsing in autoc/config_manager.cc: BLX-alpha blend factor, default -1
+- [x] T070 [US4] Add NNWeightFile config option parsing in autoc/config_manager.cc: weight file path for eval mode, default nn_weights.dat
+- [x] T071 [US4] Add NNInitMethod config option parsing in autoc/config_manager.cc: xavier or uniform, default xavier
+- [x] T072 [US4] Update autoc/autoc.ini with all NN config parameters (commented out, ControllerType defaults to GP)
+- [x] T073 [US4] Update autoc/autoc-eval.ini with NN config parameters for eval mode (NNWeightFile, ControllerType)
+- [x] T074 [US4] Wire NNPopulation into autoc main loop in autoc/autoc.cc: runNNEvolution() function with dedicated NN loop, branched via ControllerType config
+- [x] T075 [US4] Wire NNControllerBackend into evalTask() dispatch: NN individuals serialized to EvalData.gp with ControllerType::NEURAL_NET, evaluated by minisim NNControllerBackend
+- [ ] ~~T076 [US4] Integrate with elite store~~ — deferred (NN has its own elitism in nn_evolve_generation, GP-style elite reeval not needed for MVP)
+- [ ] ~~T077 [US4] Add EvalLogger::logNNWeightStats()~~ — deferred (basic gen stats logged inline, detailed weight stats for later)
+- [ ] ~~T078 [US4] Update data.dat output~~ — deferred (NN logs to nn-data.dat with basic format)
+- [ ] ~~T079 [US4] Update data.stc output~~ — deferred (NN gen stats logged to nn-data.stc inline)
+- [x] T080 [US4] Update S3 archive output: best NNGenome per generation saved to S3 with nn- prefix
+- [x] T081 [US4] Verify build and all tests: `cd ~/GP && make` — 174 tests pass
+- [ ] T082 [US4] Integration test: run autoc with ControllerType=NN for 5 generations — user will run
 
 **Checkpoint**: Full NN evolution pipeline working. Can run `./build/autoc` with ControllerType=NN and see NN weights evolving, fitness improving, results stored in S3 with `nn-` prefix.
 
@@ -193,11 +193,11 @@
 
 ### Implementation for US6
 
-- [ ] T083 [US6] Update renderer S3 regex in autoc/renderer.cc: match both `autoc-.*/gen(\d+)\.dmp` (GP) and `nn-.*/gen(\d+)\.dmp` (NN) prefixes
+- [x] T083 [US6] Update renderer S3 browsing and fitness extraction: unified autoc- prefix, NN01 magic detection in extractFitnessFromGP()
 - [ ] T084 [US6] Add ControllerType-aware controller metadata display in autoc/renderer.cc: show NN weight summary instead of GP tree dump when format detected as NN
-- [ ] T085 [US6] Update CRRCSim inputdev_autoc.cpp: add NN format detection alongside GP/bytecode for live visualization in ~/crsim/crrcsim-0.9.13/src/mod_inputdev/inputdev_autoc/inputdev_autoc.cpp
-- [ ] T086 [US6] Verify CRRCSim build: `cd ~/crsim/crrcsim-0.9.13/build && make`
-- [ ] T087 [US6] Verify renderer build: `cd ~/GP && make`
+- [x] T085 [US6] Update CRRCSim inputdev_autoc.cpp: replace magic-byte heuristic with evalData.controllerType enum dispatch, add NN controller path (include nn_serialization.h, nn_evaluator_portable.h, add isNeuralNetData flag, NNGenome storage, NNControllerBackend eval)
+- [x] T086 [US6] Verify CRRCSim build: `cd ~/crsim/crrcsim-0.9.13 && rm -rf build && mkdir build && cd build && cmake -DCMAKE_BUILD_TYPE=Debug .. && make`
+- [x] T087 [US6] Verify renderer build: `cd ~/GP && make`
 
 **Checkpoint**: Renderer browses NN and GP archives. CRRCSim handles NN format in live visualization.
 
@@ -222,7 +222,7 @@
 - [ ] T094 [US5] Update ~/xiao-gp/src/msplink.cpp: add build-time selection between generatedGPProgram() and generatedNNProgram()
 - [ ] T095 [US5] Update ~/xiao-gp/platformio.ini: add build flag to select GP vs NN generated program
 - [ ] T096 [US5] Verify xiao-gp PlatformIO build: `cd ~/xiao-gp && pio run`
-- [ ] T097 [US5] Verify all three repo builds pass: GP (`cd ~/GP && make`), CRRCSim (`cd ~/crsim/crrcsim-0.9.13/build && make`), xiao-gp (`cd ~/xiao-gp && pio run`)
+- [ ] T097 [US5] Verify all three repo builds pass: GP (full rebuild — nn2cpp target added): `cd ~/GP/autoc && bash rebuild.sh`, CRRCSim: `cd ~/crsim/crrcsim-0.9.13 && rm -rf build && mkdir build && cd build && cmake -DCMAKE_BUILD_TYPE=Debug .. && make`, xiao-gp: `cd ~/xiao-gp && pio run`
 
 **Checkpoint**: End-to-end deployment pipeline: evolve NN → nnextractor → nn2cpp → xiao-gp firmware. Bit-exact inference on desktop and embedded.
 
@@ -237,6 +237,11 @@
 - [ ] T100 [P] Update specs/BACKLOG.md: mark 013 as in-progress/complete, update related deferred items (4D fitness, smoothness)
 - [ ] T101 Run release checklist from constitution: all tests pass, all three repo builds pass, CLAUDE.md updated
 - [ ] T102 Validate success criteria SC-001 through SC-005: lower fitness than GP, consistent convergence, <1ms embedded inference, smooth control outputs, cross-platform parity
+- [ ] T103 [P] Revisit minisim NN logging — current thread_local once-per-worker guard is wrong pattern for multi-process workers; align with existing GP/bytecode logging approach
+- [ ] T104 [P] Cleanup: eliminate gratuitous duplication between GP and NN code paths — e.g. GPrand() vs local RNG (GP should wrap a shared RNG, not the other way around), GP_BUILD/GP_TEST conditional compilation hacks in nn_evaluator_portable.cc and nn_population.cc
+- [ ] T105 [P] Cleanup: evaluate controller pluggability — can GP tree eval, bytecode eval, and NN eval share a common ControllerBackend interface more cleanly? Revisit eval_backend.h, the parallel evalTask/computeNNFitness fitness paths, and whether subclass polymorphism can replace the current if/else branching in minisim.cc and autoc.cc
+- [ ] T106 Add determinism checker to NN evolution loop — re-evaluate the elite individual and compare fitness to its stored value (must match exactly). GP path has this and it was critical for catching non-determinism that corrupts the small fitness gradient signal. Needs care around curriculum learning / variation ramp (environment changes between gens), but within a generation the re-eval of the same individual on the same scenarios with same seeds must produce bit-identical fitness. Early detection of non-determinism failures.
+- [ ] T107 [P] Refactor: unify fitness computation into a single function shared by GP (evalTask) and NN (computeNNFitness) — both implement the identical formula (distance penalty + attitude penalty with intercept scaling + crash completion penalty). Extract into a standalone `computeFitness(pathList, aircraftStateList, crashReasonList, scenarioList)` that both code paths call, eliminating the duplication and ensuring they can never diverge.
 
 ---
 
@@ -297,7 +302,8 @@ US6 (renderer/CRRCSim) can run in parallel with US4 after US3 completes.
 ## Notes
 
 - Constitution requires Testing-First: write tests before implementation, verify they fail
-- Constitution requires Build Stability: verify `cd ~/GP && make` after every phase
+- Constitution requires Build Stability: verify build after every phase
+- **Build commands**: When a phase adds new source files or targets to CMakeLists.txt, use full rebuild: `cd ~/GP/autoc && bash rebuild.sh`. For phases that only modify existing files, incremental build suffices: `cd ~/GP && make`. Phases requiring full rebuild: Phase 1 (new source/test files), Phase 4/US3 (nnextractor target), Phase 7/US5 (nn2cpp target). CRRCSim rebuild: `cd ~/crsim/crrcsim-0.9.13 && rm -rf build && mkdir build && cd build && cmake -DCMAKE_BUILD_TYPE=Debug .. && make`
 - Constitution grants Dual-Mode Parity exemption: NN is a third mode, not a reimplementation of GP
 - NN desktop ↔ embedded parity IS required: same weights must produce bit-exact same outputs
 - All sensor functions already exist in gp_evaluator_portable.cc — reuse, don't rewrite

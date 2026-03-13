@@ -75,6 +75,17 @@ add_library(autoc_common STATIC
     threadpool.h
     gp_types.h
     variation_generator.h
+    eval_backend.h
+    fitness_computer.cc
+    fitness_computer.h
+    eval_logger.cc
+    eval_logger.h
+    nn_evaluator_portable.cc
+    nn_evaluator_portable.h
+    nn_serialization.cc
+    nn_serialization.h
+    nn_population.cc
+    nn_population.h
 )
 target_link_libraries(autoc_common gp ${Boost_LIBRARIES} Eigen3::Eigen)
 
@@ -95,8 +106,41 @@ if(ENABLE_AUTOC_TESTS)
   add_executable(autoc_tests tests/gp_evaluator_tests.cc gp_evaluator_portable.cc)
   target_compile_definitions(autoc_tests PRIVATE GP_BUILD GP_TEST)
   target_link_libraries(autoc_tests GTest::gtest GTest::gtest_main Eigen3::Eigen)
+
+  # NN evaluator tests
+  add_executable(nn_evaluator_tests tests/nn_evaluator_tests.cc nn_evaluator_portable.cc gp_evaluator_portable.cc)
+  target_compile_definitions(nn_evaluator_tests PRIVATE GP_BUILD GP_TEST)
+  target_link_libraries(nn_evaluator_tests GTest::gtest GTest::gtest_main Eigen3::Eigen)
+
+  # NN serialization tests
+  add_executable(nn_serialization_tests tests/nn_serialization_tests.cc nn_serialization.cc nn_evaluator_portable.cc)
+  target_compile_definitions(nn_serialization_tests PRIVATE GP_BUILD GP_TEST)
+  target_link_libraries(nn_serialization_tests GTest::gtest GTest::gtest_main Eigen3::Eigen)
+
+  # NN population tests
+  add_executable(nn_population_tests tests/nn_population_tests.cc nn_population.cc nn_evaluator_portable.cc)
+  target_compile_definitions(nn_population_tests PRIVATE GP_BUILD GP_TEST)
+  target_link_libraries(nn_population_tests GTest::gtest GTest::gtest_main Eigen3::Eigen)
+
+  # Fitness computer tests
+  add_executable(fitness_computer_tests tests/fitness_computer_tests.cc fitness_computer.cc)
+  target_compile_definitions(fitness_computer_tests PRIVATE GP_BUILD GP_TEST)
+  target_link_libraries(fitness_computer_tests GTest::gtest GTest::gtest_main Eigen3::Eigen)
+
   enable_testing()
   add_test(NAME autoc_tests COMMAND autoc_tests)
+  add_test(NAME nn_evaluator_tests COMMAND nn_evaluator_tests)
+  add_test(NAME nn_serialization_tests COMMAND nn_serialization_tests)
+  add_test(NAME nn_population_tests COMMAND nn_population_tests)
+  add_test(NAME fitness_computer_tests COMMAND fitness_computer_tests)
+
   # --gtest_brief=1 only prints failures, not every test run
-  add_custom_target(run_autoc_tests ALL DEPENDS autoc_tests COMMAND autoc_tests --gtest_brief=1)
+  add_custom_target(run_autoc_tests ALL
+    DEPENDS autoc_tests nn_evaluator_tests nn_serialization_tests nn_population_tests fitness_computer_tests
+    COMMAND autoc_tests --gtest_brief=1
+    COMMAND nn_evaluator_tests --gtest_brief=1
+    COMMAND nn_serialization_tests --gtest_brief=1
+    COMMAND nn_population_tests --gtest_brief=1
+    COMMAND fitness_computer_tests --gtest_brief=1
+  )
 endif()

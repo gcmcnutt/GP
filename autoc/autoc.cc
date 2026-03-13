@@ -37,6 +37,9 @@ From skeleton/skeleton.cc
 #include "pathgen.h"
 #include "config_manager.h"
 #include "variation_generator.h"
+#include "nn_population.h"
+#include "nn_serialization.h"
+#include "nn_evaluator_portable.h"
 
 #include <aws/core/Aws.h>
 #include <aws/s3/S3Client.h>
@@ -1423,6 +1426,535 @@ void newHandler()
 }
 
 
+// Parse comma-separated topology string "14,16,8,3" into vector
+static std::vector<int> parseTopology(const char* str) {
+  std::vector<int> topology;
+  std::istringstream iss(str);
+  std::string token;
+  while (std::getline(iss, token, ',')) {
+    topology.push_back(std::stoi(token));
+  }
+  return topology;
+}
+
+// Compute fitness for an NN individual from EvalResults
+// Same formula as MyGP::evalTask() lines 1210-1417
+static double computeNNFitness(EvalResults& evalResults) {
+  double totalFitness = 0.0;
+
+  for (size_t i = 0; i < evalResults.pathList.size(); i++) {
+    auto& path = evalResults.pathList.at(i);
+    auto& aircraftStates = evalResults.aircraftStateList.at(i);
+    auto& crashReason = evalResults.crashReasonList.at(i);
+
+    if (path.empty() || aircraftStates.empty()) continue;
+
+    double distance_sum = 0.0;
+    double attitude_sum = 0.0;
+    int simulation_steps = 0;
+
+    // Intercept-budget scaling
+    double interceptBudget = 0.0;
+    {
+      gp_vec3 initialPos = aircraftStates.at(0).getPosition();
+      gp_vec3 pathStart = path.at(0).start;
+      gp_vec3 offset3d = initialPos - pathStart;
+      double displacement = sqrt(offset3d[0] * offset3d[0] + offset3d[1] * offset3d[1]);
+      double headingOffset = 0.0;
+      if (i < evalResults.scenarioList.size()) {
+        headingOffset = evalResults.scenarioList.at(i).entryHeadingOffset;
+      }
+      interceptBudget = computeInterceptBudget(displacement, headingOffset,
+                                                SIM_INITIAL_VELOCITY, gRabbitSpeedConfig.nominal);
+    }
+
+    // Attitude delta tracking
+    double prev_roll = 0.0, prev_pitch = 0.0;
+    bool first_attitude_sample = true;
+    int stepIndex = 0;
+
+    while (++stepIndex < static_cast<int>(aircraftStates.size())) {
+      auto& stepState = aircraftStates.at(stepIndex);
+      int pathIndex = std::clamp(stepState.getThisPathIndex(), 0, static_cast<int>(path.size()) - 1);
+
+      gp_vec3 aircraftPosition = stepState.getPosition();
+      gp_quat craftOrientation = stepState.getOrientation();
+
+      // Attitude delta
+      double qw = craftOrientation.w(), qx = craftOrientation.x();
+      double qy = craftOrientation.y(), qz = craftOrientation.z();
+      double roll = atan2(2.0 * (qw * qx + qy * qz), 1.0 - 2.0 * (qx * qx + qy * qy));
+      double sinp = std::clamp(2.0 * (qw * qy - qz * qx), -1.0, 1.0);
+      double pitch = asin(sinp);
+
+      double attitude_delta = 0.0;
+      if (first_attitude_sample) {
+        prev_roll = roll;
+        prev_pitch = pitch;
+        first_attitude_sample = false;
+      } else {
+        attitude_delta = fabs(roll - prev_roll) + fabs(pitch - prev_pitch);
+        prev_roll = roll;
+        prev_pitch = pitch;
+      }
+
+      // Distance to rabbit
+      gp_vec3 craftOffset = aircraftPosition - path.at(pathIndex).start;
+      double distance = craftOffset.norm();
+
+      // Accumulate penalties
+      double stepTimeSec = stepState.getSimTimeMsec() / 1000.0;
+      double interceptScale = computeInterceptScale(stepTimeSec, interceptBudget);
+      double distDelta = fabs(distance - DISTANCE_TARGET);
+      distance_sum += pow(interceptScale * distDelta / DISTANCE_NORM, DISTANCE_POWER);
+      attitude_sum += pow(interceptScale * attitude_delta / ATTITUDE_NORM, ATTITUDE_POWER);
+      simulation_steps++;
+    }
+
+    // Scale attitude by path geometry
+    double path_distance = path.back().distanceFromStart;
+    double path_turn_rad = path.back().radiansFromStart;
+    double attitude_scale = path_distance / std::max(path_turn_rad, 2.0 * M_PI);
+
+    double localFitness = distance_sum + attitude_sum * attitude_scale;
+
+    // Crash penalty
+    if (crashReason != CrashReason::None) {
+      double total_path_distance = path.back().distanceFromStart;
+      double fraction_completed =
+        static_cast<double>(path.at(aircraftStates.back().getThisPathIndex()).distanceFromStart) / total_path_distance;
+      fraction_completed = std::max(fraction_completed, 0.001);
+      double completion_penalty = (1.0 - fraction_completed) * CRASH_COMPLETION_WEIGHT;
+      localFitness = completion_penalty + localFitness;
+    }
+
+    totalFitness += localFitness;
+  }
+
+  return totalFitness;
+}
+
+// Log per-step data from EvalResults to data.dat in same format as GP evalTask
+static void logEvalResults(std::ofstream& fout, EvalResults& results) {
+  bool printHeader = true;
+
+  for (size_t i = 0; i < results.pathList.size(); i++) {
+    auto& path = results.pathList.at(i);
+    auto& aircraftStates = results.aircraftStateList.at(i);
+    if (path.empty() || aircraftStates.empty()) continue;
+
+    uint64_t scenarioSequence = 0;
+    uint64_t bakeoffSequence = 0;
+    int pathVariantIndex = 0;
+    int windVariantIndex = 0;
+    if (i < results.scenarioList.size()) {
+      scenarioSequence = results.scenarioList.at(i).scenarioSequence;
+      bakeoffSequence = results.scenarioList.at(i).bakeoffSequence;
+      pathVariantIndex = results.scenarioList.at(i).pathVariantIndex;
+      windVariantIndex = results.scenarioList.at(i).windVariantIndex;
+    }
+
+    // Intercept-budget scaling
+    double interceptBudget = 0.0;
+    {
+      gp_vec3 initialPos = aircraftStates.at(0).getPosition();
+      gp_vec3 pathStart = path.at(0).start;
+      gp_vec3 offset3d = initialPos - pathStart;
+      double displacement = sqrt(offset3d[0] * offset3d[0] + offset3d[1] * offset3d[1]);
+      double headingOffset = 0.0;
+      if (i < results.scenarioList.size()) {
+        headingOffset = results.scenarioList.at(i).entryHeadingOffset;
+      }
+      interceptBudget = computeInterceptBudget(displacement, headingOffset,
+                                                SIM_INITIAL_VELOCITY, gRabbitSpeedConfig.nominal);
+    }
+
+    double prev_roll = 0.0, prev_pitch = 0.0;
+    bool first_attitude_sample = true;
+    int simulation_steps = 0;
+
+    gp_vec3 prevPathPos(0, 0, 0);
+    long prevPathTime = 0;
+    bool firstStep = true;
+
+    int stepIndex = 0;
+    while (++stepIndex < static_cast<int>(aircraftStates.size())) {
+      auto& stepState = aircraftStates.at(stepIndex);
+      int pathIndex = std::clamp(stepState.getThisPathIndex(), 0, static_cast<int>(path.size()) - 1);
+
+      gp_vec3 aircraftPosition = stepState.getPosition();
+      gp_quat craftOrientation = stepState.getOrientation();
+
+      // Attitude delta
+      double qw = craftOrientation.w(), qx = craftOrientation.x();
+      double qy = craftOrientation.y(), qz = craftOrientation.z();
+      double roll = atan2(2.0 * (qw * qx + qy * qz), 1.0 - 2.0 * (qx * qx + qy * qy));
+      double sinp = std::clamp(2.0 * (qw * qy - qz * qx), -1.0, 1.0);
+      double pitch = asin(sinp);
+
+      double attitude_delta = 0.0;
+      if (first_attitude_sample) {
+        prev_roll = roll;
+        prev_pitch = pitch;
+        first_attitude_sample = false;
+      } else {
+        attitude_delta = fabs(roll - prev_roll) + fabs(pitch - prev_pitch);
+        prev_roll = roll;
+        prev_pitch = pitch;
+      }
+
+      // Distance to rabbit
+      gp_vec3 craftOffset = aircraftPosition - path.at(pathIndex).start;
+      double distance = craftOffset.norm();
+
+      double stepTimeSec = stepState.getSimTimeMsec() / 1000.0;
+      double interceptScale = computeInterceptScale(stepTimeSec, interceptBudget);
+      simulation_steps++;
+
+      // Per-step logging
+      if (printHeader) {
+        fout << "Scn    Bake   Pth/Wnd:Step:   Time Idx  totDist   pathX    pathY    pathZ        X        Y        Z       dr       dp       dy   relVel     roll    pitch    power      qw      qx      qy      qz   vxBody   vyBody   vzBody    alpha     beta   dtheta    dphi   dhome     dist   attDlt  rabVel intScl\n";
+        printHeader = false;
+      }
+
+      // Rabbit velocity
+      gp_scalar rabbitVel = 0.0f;
+      gp_vec3 currPathPos = path.at(pathIndex).start;
+      long currPathTime = path.at(pathIndex).simTimeMsec;
+      if (simulation_steps == 1) {
+        firstStep = true;
+      }
+      if (!firstStep && currPathTime > prevPathTime) {
+        gp_scalar dist = (currPathPos - prevPathPos).norm();
+        gp_scalar dt = static_cast<gp_scalar>(currPathTime - prevPathTime) / 1000.0f;
+        rabbitVel = dist / dt;
+      }
+      prevPathPos = currPathPos;
+      prevPathTime = currPathTime;
+      firstStep = false;
+
+      // Euler angles
+      Eigen::Matrix3f rotMatrix = craftOrientation.toRotationMatrix();
+      gp_vec3 euler;
+      if (std::abs(rotMatrix(2, 0)) > static_cast<gp_scalar>(0.99999f)) {
+        euler[0] = 0;
+        if (rotMatrix(2, 0) > 0) {
+          euler[1] = -static_cast<gp_scalar>(M_PI / 2.0);
+          euler[2] = -atan2(rotMatrix(1, 2), rotMatrix(0, 2));
+        } else {
+          euler[1] = static_cast<gp_scalar>(M_PI / 2.0);
+          euler[2] = atan2(rotMatrix(1, 2), rotMatrix(0, 2));
+        }
+      } else {
+        euler[0] = atan2(rotMatrix(2, 1), rotMatrix(2, 2));
+        euler[1] = -asin(rotMatrix(2, 0));
+        euler[2] = atan2(rotMatrix(1, 0), rotMatrix(0, 0));
+      }
+
+      // Body-frame velocity
+      gp_vec3 velocity_body = stepState.getOrientation().inverse() * stepState.getVelocity();
+
+      gp_scalar alpha_deg = atan2(-velocity_body.z(), velocity_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);
+      gp_scalar beta_deg = atan2(velocity_body.y(), velocity_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);
+
+      // Angle to target in body frame
+      gp_vec3 craftToTarget = path.at(pathIndex).start - stepState.getPosition();
+      gp_vec3 target_body = stepState.getOrientation().inverse() * craftToTarget;
+      gp_scalar dtheta_deg = atan2(-target_body.z(), target_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);
+      gp_scalar dphi_deg = atan2(target_body.y(), -target_body.z()) * static_cast<gp_scalar>(180.0 / M_PI);
+
+      // Distance to home
+      gp_vec3 home(0, 0, SIM_INITIAL_ALTITUDE);
+      gp_scalar dhome = (home - stepState.getPosition()).norm();
+
+      gp_quat q = craftOrientation;
+
+      char outbuf[1600];
+      sprintf(outbuf, "%06llu %06llu %03d/%02d:%04d: %06ld %3d % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.4f % 7.4f % 7.4f % 7.4f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.3f % 6.4f % 6.1f %5.3f\n",
+        static_cast<unsigned long long>(scenarioSequence),
+        static_cast<unsigned long long>(bakeoffSequence),
+        pathVariantIndex, windVariantIndex, simulation_steps,
+        stepState.getSimTimeMsec(), pathIndex,
+        path.at(pathIndex).distanceFromStart,
+        path.at(pathIndex).start[0],
+        path.at(pathIndex).start[1],
+        path.at(pathIndex).start[2],
+        stepState.getPosition()[0],
+        stepState.getPosition()[1],
+        stepState.getPosition()[2],
+        euler[2], euler[1], euler[0],
+        stepState.getRelVel(),
+        stepState.getRollCommand(),
+        stepState.getPitchCommand(),
+        stepState.getThrottleCommand(),
+        q.w(), q.x(), q.y(), q.z(),
+        velocity_body.x(), velocity_body.y(), velocity_body.z(),
+        alpha_deg, beta_deg,
+        dtheta_deg, dphi_deg,
+        dhome,
+        static_cast<gp_scalar>(distance),
+        static_cast<gp_scalar>(attitude_delta),
+        rabbitVel,
+        static_cast<gp_scalar>(interceptScale)
+      );
+      fout << outbuf;
+    }
+  }
+  fout.flush();
+}
+
+// NN evolution main loop — runs when ControllerType=NN
+static void runNNEvolution(
+    const std::string& startTime,
+    const std::chrono::steady_clock::time_point& runStartTime,
+    std::ofstream& fout,
+    std::ofstream& bout,
+    const std::function<void(int)>& logGenerationStats
+) {
+  const ExtraConfig& extraCfg = ConfigManager::getExtraConfig();
+  const GPVariables& gpCfg = ConfigManager::getGPConfig();
+
+  std::vector<int> topology = parseTopology(extraCfg.nnTopology);
+  int popSize = gpCfg.PopulationSize;
+  int numGens = gpCfg.NumberOfGenerations;
+
+  *logger.info() << "NN Evolution mode" << endl;
+  *logger.info() << "  Topology: " << extraCfg.nnTopology
+                 << " (" << nn_weight_count(topology) << " weights)" << endl;
+  *logger.info() << "  Population: " << popSize << endl;
+  *logger.info() << "  Generations: " << numGens << endl;
+  *logger.info() << "  MutationSigma: " << extraCfg.nnMutationSigma << endl;
+  *logger.info() << "  CrossoverAlpha: " << extraCfg.nnCrossoverAlpha << endl;
+
+  // Initialize population
+  NNPopulation pop;
+  nn_init_population(pop, topology, popSize);
+
+  // Set initial mutation sigma from config
+  for (auto& ind : pop.individuals) {
+    ind.mutation_sigma = static_cast<float>(extraCfg.nnMutationSigma);
+  }
+
+  *logger.info() << "Population initialized." << endl;
+
+  // Generation loop (start at 1 like GP — gen0 is Xavier baseline, not stored)
+  for (int gen = 1; gen <= numGens; gen++) {
+
+    // RAMP_LANDSCAPE: Update current generation for variation scaling
+    gCurrentGeneration = gen;
+
+    // Generate paths for this generation
+    generationPaths = generateSmoothPaths(extraCfg.generatorMethod,
+                                          extraCfg.simNumPathsPerGen,
+                                          SIM_PATH_BOUNDS, SIM_PATH_BOUNDS,
+                                          gPathSeed);
+    rebuildGenerationScenarios(generationPaths);
+
+    // Evaluate each individual
+    for (int ind = 0; ind < popSize; ind++) {
+      NNGenome& genome = pop.individuals[ind];
+
+      // Serialize genome to binary
+      std::vector<uint8_t> nnData;
+      nn_serialize(genome, nnData);
+
+      // Build EvalData
+      const ScenarioDescriptor& scenario = scenarioForIndex(ind % generationScenarios.size());
+      uint64_t scenarioSequence = globalScenarioCounter.fetch_add(1, std::memory_order_relaxed) + 1;
+
+      EvalData evalData;
+      evalData.controllerType = ControllerType::NEURAL_NET;
+      evalData.gp.assign(reinterpret_cast<const char*>(nnData.data()),
+                         reinterpret_cast<const char*>(nnData.data() + nnData.size()));
+      evalData.gpHash = hashByteVector(evalData.gp);
+      evalData.isEliteReeval = false;
+      evalData.pathList = scenario.pathList;
+      evalData.scenario.scenarioSequence = scenarioSequence;
+      evalData.scenario.bakeoffSequence = 0;
+
+      // Build scenario list
+      evalData.scenarioList.clear();
+      evalData.scenarioList.reserve(scenario.pathList.size());
+      for (size_t idx = 0; idx < scenario.pathList.size(); ++idx) {
+        ScenarioMetadata meta;
+        meta.scenarioSequence = scenarioSequence;
+        meta.enableDeterministicLogging = false;
+        meta.bakeoffSequence = 0;
+
+        size_t numWindScenarios = scenario.windScenarios.size();
+        if (numWindScenarios > 0 && scenario.pathList.size() > 0) {
+          size_t numBasePaths = scenario.pathList.size() / numWindScenarios;
+          size_t pathIdx = idx / numWindScenarios;
+          size_t windIdx = idx % numWindScenarios;
+          meta.pathVariantIndex = static_cast<int>(pathIdx);
+          if (windIdx < scenario.windScenarios.size()) {
+            meta.windVariantIndex = scenario.windScenarios[windIdx].windVariantIndex;
+            meta.windSeed = scenario.windScenarios[windIdx].windSeed;
+          }
+        } else {
+          meta.pathVariantIndex = static_cast<int>(idx);
+        }
+
+        populateVariationOffsets(meta);
+        applySpeedProfileToPath(evalData.pathList[idx], meta.windVariantIndex);
+        evalData.scenarioList.push_back(meta);
+      }
+      if (!evalData.scenarioList.empty()) {
+        evalData.scenario = evalData.scenarioList.front();
+      }
+      evalData.sanitizePaths();
+
+      // Send to minisim worker via ThreadPool
+      auto evalDataPtr = std::make_shared<EvalData>(std::move(evalData));
+      threadPool->enqueue([&genome, evalDataPtr](WorkerContext& context) {
+        sendRPC(*context.socket, *evalDataPtr);
+        context.evalResults = receiveRPC<EvalResults>(*context.socket);
+        globalSimRunCounter.fetch_add(context.evalResults.pathList.size(), std::memory_order_relaxed);
+
+        // Compute fitness
+        genome.fitness = computeNNFitness(context.evalResults);
+      });
+    }
+
+    // Wait for all evaluations to complete
+    threadPool->wait_for_tasks();
+
+    // Find best individual
+    int bestIdx = 0;
+    for (int i = 1; i < popSize; i++) {
+      if (pop.individuals[i].fitness < pop.individuals[bestIdx].fitness) {
+        bestIdx = i;
+      }
+    }
+    pop.best_fitness = pop.individuals[bestIdx].fitness;
+    pop.best_index = bestIdx;
+
+    // Compute population fitness stats
+    double sumFitness = 0, minFitness = pop.individuals[0].fitness, maxFitness = pop.individuals[0].fitness;
+    for (const auto& ind : pop.individuals) {
+      sumFitness += ind.fitness;
+      if (ind.fitness < minFitness) minFitness = ind.fitness;
+      if (ind.fitness > maxFitness) maxFitness = ind.fitness;
+    }
+    double avgFitness = sumFitness / popSize;
+
+    // Re-evaluate best individual and log per-step data to data.dat
+    {
+      NNGenome& bestGenome = pop.individuals[bestIdx];
+      std::vector<uint8_t> nnData;
+      nn_serialize(bestGenome, nnData);
+
+      const ScenarioDescriptor& scenario = scenarioForIndex(bestIdx % generationScenarios.size());
+      uint64_t scenarioSequence = globalScenarioCounter.fetch_add(1, std::memory_order_relaxed) + 1;
+
+      EvalData evalData;
+      evalData.controllerType = ControllerType::NEURAL_NET;
+      evalData.gp.assign(reinterpret_cast<const char*>(nnData.data()),
+                         reinterpret_cast<const char*>(nnData.data() + nnData.size()));
+      evalData.gpHash = hashByteVector(evalData.gp);
+      evalData.isEliteReeval = false;
+      evalData.pathList = scenario.pathList;
+      evalData.scenario.scenarioSequence = scenarioSequence;
+      evalData.scenario.bakeoffSequence = 0;
+
+      evalData.scenarioList.clear();
+      evalData.scenarioList.reserve(scenario.pathList.size());
+      for (size_t idx = 0; idx < scenario.pathList.size(); ++idx) {
+        ScenarioMetadata meta;
+        meta.scenarioSequence = scenarioSequence;
+        meta.enableDeterministicLogging = false;
+        meta.bakeoffSequence = 0;
+        size_t numWindScenarios = scenario.windScenarios.size();
+        if (numWindScenarios > 0 && scenario.pathList.size() > 0) {
+          size_t pathIdx = idx / numWindScenarios;
+          size_t windIdx = idx % numWindScenarios;
+          meta.pathVariantIndex = static_cast<int>(pathIdx);
+          if (windIdx < scenario.windScenarios.size()) {
+            meta.windVariantIndex = scenario.windScenarios[windIdx].windVariantIndex;
+            meta.windSeed = scenario.windScenarios[windIdx].windSeed;
+          }
+        } else {
+          meta.pathVariantIndex = static_cast<int>(idx);
+        }
+        populateVariationOffsets(meta);
+        applySpeedProfileToPath(evalData.pathList[idx], meta.windVariantIndex);
+        evalData.scenarioList.push_back(meta);
+      }
+      if (!evalData.scenarioList.empty()) {
+        evalData.scenario = evalData.scenarioList.front();
+      }
+      evalData.sanitizePaths();
+
+      auto evalDataPtr = std::make_shared<EvalData>(std::move(evalData));
+      EvalResults bestResults;
+      threadPool->enqueue([evalDataPtr, &bestResults](WorkerContext& context) {
+        sendRPC(*context.socket, *evalDataPtr);
+        bestResults = receiveRPC<EvalResults>(*context.socket);
+      });
+      threadPool->wait_for_tasks();
+
+      logEvalResults(fout, bestResults);
+
+      // Embed serialized NN genome in bestResults.gp for S3 storage
+      // (renderer uses .gp field to detect format and extract fitness)
+      bestResults.gp.assign(reinterpret_cast<const char*>(nnData.data()),
+                            reinterpret_cast<const char*>(nnData.data() + nnData.size()));
+      bestResults.gpHash = hashByteVector(bestResults.gp);
+
+      // Save to S3 as Boost-serialized EvalResults (same format as GP)
+      {
+        std::string keyName = startTime + "/gen" + std::to_string(10000 - gen) + ".dmp";
+        auto s3Client = ConfigManager::getS3Client();
+        if (s3Client) {
+          std::ostringstream oss(std::ios::binary);
+          boost::archive::binary_oarchive oa(oss);
+          oa << bestResults;
+
+          auto stream = Aws::MakeShared<Aws::StringStream>("PutObject");
+          *stream << oss.str();
+
+          Aws::S3::Model::PutObjectRequest request;
+          request.SetBucket(extraCfg.s3Bucket);
+          request.SetKey(keyName);
+          request.SetBody(stream);
+
+          auto outcome = s3Client->PutObject(request);
+          if (!outcome.IsSuccess()) {
+            *logger.warn() << "S3 upload failed: " << outcome.GetError().GetMessage() << endl;
+          }
+        }
+      }
+    }
+
+    // Log generation report
+    *logger.info() << "Gen " << gen
+                   << "  Best=" << std::fixed << std::setprecision(2) << minFitness
+                   << "  Avg=" << avgFitness
+                   << "  Worst=" << maxFitness
+                   << "  Sigma=" << pop.individuals[bestIdx].mutation_sigma
+                   << endl;
+
+    // Log to statistics file
+    bout << "#NNGen gen=" << gen
+         << " best=" << std::fixed << std::setprecision(6) << minFitness
+         << " avg=" << avgFitness
+         << " worst=" << maxFitness
+         << " bestSigma=" << pop.individuals[bestIdx].mutation_sigma
+         << std::endl;
+    bout.flush();
+
+    logGenerationStats(gen);
+
+    // Evolve next generation (skip on last gen)
+    if (gen < numGens) {
+      nn_evolve_generation(pop);
+    }
+  }
+
+  *logger.info() << "NN evolution complete! Best fitness: "
+                 << std::fixed << std::setprecision(2) << pop.best_fitness << endl;
+}
+
 int main(int argc, char** argv)
 {
   // Parse command line arguments
@@ -1494,6 +2026,7 @@ int main(int argc, char** argv)
   *logger.info() << "MinisimProgram: " << ConfigManager::getExtraConfig().minisimProgram << endl;
   *logger.info() << "MinisimPortOverride: " << ConfigManager::getExtraConfig().minisimPortOverride << endl;
   *logger.info() << "EvaluateMode: " << ConfigManager::getExtraConfig().evaluateMode << endl;
+  *logger.info() << "ControllerType: " << ConfigManager::getExtraConfig().controllerType << endl;
   *logger.info() << "WindScenarios: " << ConfigManager::getExtraConfig().windScenarioCount << endl;
   *logger.info() << "GPSeed: " << ConfigManager::getExtraConfig().gpSeed << endl;
   *logger.info() << "RandomPathSeedB: " << ConfigManager::getExtraConfig().randomPathSeedB << endl;
@@ -1644,7 +2177,13 @@ int main(int argc, char** argv)
                  << endl;
   warnIfScenarioMismatch();
 
-  if (ConfigManager::getExtraConfig().evaluateMode) {
+  // Check controller type: NN evolution gets its own dedicated loop
+  bool isNNMode = (strcmp(ConfigManager::getExtraConfig().controllerType, "NN") == 0);
+
+  if (isNNMode) {
+    // NN evolution mode
+    runNNEvolution(startTime, runStartTime, fout, bout, logGenerationStats);
+  } else if (ConfigManager::getExtraConfig().evaluateMode) {
     // Evaluation mode: use bytecode interpreter with external simulators
     *logger.info() << "Running in bytecode evaluation mode with external simulators..." << endl;
     *logger.info() << "Loading bytecode file: " << ConfigManager::getExtraConfig().bytecodeFile << endl;
