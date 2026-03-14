@@ -175,7 +175,7 @@ void nn_xavier_init(NNGenome& genome) {
 }
 
 // ============================================================
-// T038: Gather 22 sensor inputs with normalization
+// T038: Gather NN_INPUT_COUNT sensor inputs with normalization
 // ============================================================
 // Layout:
 //  0- 3: dPhi history    [now, -0.1s, -0.3s, -0.9s]  /π
@@ -193,7 +193,7 @@ void nn_gather_inputs(PathProvider& pathProvider, AircraftState& aircraftState,
                       float* inputs) {
 #ifdef GP_TEST
     // In test builds, zero-fill (sensor functions not available)
-    for (int i = 0; i < 22; i++) inputs[i] = 0.0f;
+    for (int i = 0; i < NN_INPUT_COUNT; i++) inputs[i] = 0.0f;
 #else
     // 0-3: dPhi temporal history (0=now, 1=0.1s ago, 3=0.3s ago, 9=0.9s ago)
     for (int i = 0; i < 4; i++)
@@ -244,10 +244,10 @@ NNControllerBackend::NNControllerBackend(const NNGenome& genome)
     : genome_(genome) {}
 
 void NNControllerBackend::evaluate(AircraftState& aircraftState, PathProvider& pathProvider) {
-    float inputs[22];
+    float inputs[NN_INPUT_COUNT];
     nn_gather_inputs(pathProvider, aircraftState, inputs);
 
-    float outputs[3];
+    float outputs[NN_OUTPUT_COUNT];
     nn_forward(genome_.weights.data(), genome_.topology, inputs, outputs);
 
     // Set control commands: pitch, roll, throttle (already in [-1, 1] via tanh)
@@ -256,7 +256,7 @@ void NNControllerBackend::evaluate(AircraftState& aircraftState, PathProvider& p
     aircraftState.setThrottleCommand(static_cast<gp_scalar>(outputs[2]));
 
     // Capture actual NN I/O for diagnostics
-    aircraftState.setNNData(inputs, 22, outputs, 3);
+    aircraftState.setNNData(inputs, NN_INPUT_COUNT, outputs, NN_OUTPUT_COUNT);
 }
 #endif
 

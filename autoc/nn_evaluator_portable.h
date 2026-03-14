@@ -38,7 +38,7 @@ gp_scalar fast_tanh(gp_scalar x);
 // Xavier/Glorot weight initialization
 void nn_xavier_init(NNGenome& genome);
 
-// Gather 22 sensor inputs from aircraft state, apply normalization
+// Gather NN_INPUT_COUNT sensor inputs from aircraft state, apply normalization
 void nn_gather_inputs(PathProvider& pathProvider, AircraftState& aircraftState,
                       float* inputs);
 

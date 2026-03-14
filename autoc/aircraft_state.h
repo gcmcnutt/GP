@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <string>
 #include "gp_types.h"
+#include "nn_topology.h"
 
 #ifdef GP_BUILD
 #include <boost/format.hpp>
@@ -372,8 +373,6 @@ struct AircraftState {
     gp_vec3 wind_velocity;  // Wind vector (north, east, down) from calculate_wind()
 
     // NN I/O capture — actual values presented to/produced by the neural net
-    static constexpr int NN_INPUT_COUNT = 22;
-    static constexpr int NN_OUTPUT_COUNT = 3;
     float nnInputs_[NN_INPUT_COUNT] = {0};   // Normalized inputs as NN sees them
     float nnOutputs_[NN_OUTPUT_COUNT] = {0};  // Raw tanh outputs
     bool hasNNData_ = false;

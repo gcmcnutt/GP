@@ -186,7 +186,6 @@ The PROGN bytecode instruction preserves GP tree semantics for operations with s
 - `BytecodeFile`: Path to bytecode file for evaluation mode
 - `S3Bucket`/`S3Profile`: AWS S3 storage configuration
 - `ControllerType`: "GP" or "NN" (default: GP)
-- `NNTopology`: comma-separated layer sizes (e.g., 22,16,8,3)
 - `NNMutationSigma`: initial mutation sigma (default: 0.1)
 - `NNCrossoverAlpha`: BLX-alpha blend factor (-1 = uniform random)
 - `NNWeightFile`: weight file path for eval mode (default: nn_weights.dat)

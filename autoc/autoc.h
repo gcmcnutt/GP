@@ -5,6 +5,7 @@
 
 #include "gp.h"
 #include "gp_types.h"
+#include "nn_topology.h"
 
 // Forward declarations
 struct WorkerContext;
@@ -115,7 +116,6 @@ public:
 
   // Neural network evolution (see specs/013-neuroevolution)
   char* controllerType = "GP";       // "GP" or "NN" — selects evolution mode
-  char* nnTopology = "22,16,8,3";    // Comma-separated layer sizes
   double nnMutationSigma = 0.1;      // Initial mutation sigma for NN
   double nnCrossoverAlpha = -1.0;    // BLX-alpha (-1 = uniform random per weight)
   char* nnWeightFile = "nn_weights.dat"; // Weight file for eval mode

@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "../nn_evaluator_portable.h"
+#include "../nn_topology.h"
 #include <cmath>
 #include <vector>
 #include <numeric>
@@ -9,10 +10,10 @@
 // ============================================================
 
 TEST(NNWeightCount, BasicTopology) {
-    // Topology {22, 16, 8, 3} should produce 531 weights
-    std::vector<int> topology = {22, 16, 8, 3};
+    // Canonical topology should produce NN_WEIGHT_COUNT weights
+    std::vector<int> topology(NN_TOPOLOGY, NN_TOPOLOGY + NN_NUM_LAYERS);
     int count = nn_weight_count(topology);
-    EXPECT_EQ(count, 22*16 + 16 + 16*8 + 8 + 8*3 + 3);  // 531
+    EXPECT_EQ(count, NN_WEIGHT_COUNT);
 }
 
 TEST(NNWeightCount, SingleLayer) {
@@ -102,20 +103,20 @@ TEST(NNForwardPass, TwoLayerKnown) {
 
 TEST(NNForwardPass, FullTopology22_16_8_3) {
     // Verify the canonical topology works end-to-end
-    std::vector<int> topology = {22, 16, 8, 3};
+    std::vector<int> topology(NN_TOPOLOGY, NN_TOPOLOGY + NN_NUM_LAYERS);
     int wc = nn_weight_count(topology);
-    EXPECT_EQ(wc, 531);
+    EXPECT_EQ(wc, NN_WEIGHT_COUNT);
 
     // All-zero weights: every layer produces tanh(0) = 0 (only biases matter, which are 0)
     std::vector<float> weights(wc, 0.0f);
-    float inputs[22];
-    for (int i = 0; i < 22; i++) inputs[i] = 1.0f;
-    float outputs[3];
+    float inputs[NN_INPUT_COUNT];
+    for (int i = 0; i < NN_INPUT_COUNT; i++) inputs[i] = 1.0f;
+    float outputs[NN_OUTPUT_COUNT];
 
     nn_forward(weights.data(), topology, inputs, outputs);
 
     // With all-zero weights, all outputs should be tanh(0) = 0
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < NN_OUTPUT_COUNT; i++) {
         EXPECT_NEAR(outputs[i], 0.0f, 1e-3);
     }
 }
@@ -125,7 +126,7 @@ TEST(NNForwardPass, FullTopology22_16_8_3) {
 // ============================================================
 
 TEST(NNForwardPass, OutputRangeWithRandomWeights) {
-    std::vector<int> topology = {22, 16, 8, 3};
+    std::vector<int> topology(NN_TOPOLOGY, NN_TOPOLOGY + NN_NUM_LAYERS);
     int wc = nn_weight_count(topology);
     std::vector<float> weights(wc);
 
@@ -134,15 +135,15 @@ TEST(NNForwardPass, OutputRangeWithRandomWeights) {
         weights[i] = static_cast<float>((i * 7 + 13) % 100 - 50) / 10.0f;  // range [-5, 5]
     }
 
-    float inputs[22];
-    for (int i = 0; i < 22; i++) {
+    float inputs[NN_INPUT_COUNT];
+    for (int i = 0; i < NN_INPUT_COUNT; i++) {
         inputs[i] = static_cast<float>(i - 11) / 11.0f;  // range [-1, 1]
     }
-    float outputs[3];
+    float outputs[NN_OUTPUT_COUNT];
 
     nn_forward(weights.data(), topology, inputs, outputs);
 
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < NN_OUTPUT_COUNT; i++) {
         EXPECT_GE(outputs[i], -1.0f);
         EXPECT_LE(outputs[i], 1.0f);
     }
@@ -188,14 +189,14 @@ TEST(FastTanh, Symmetry) {
 
 TEST(NNXavierInit, CorrectWeightCount) {
     NNGenome genome;
-    genome.topology = {22, 16, 8, 3};
+    genome.topology = std::vector<int>(NN_TOPOLOGY, NN_TOPOLOGY + NN_NUM_LAYERS);
     nn_xavier_init(genome);
     EXPECT_EQ(static_cast<int>(genome.weights.size()), nn_weight_count(genome.topology));
 }
 
 TEST(NNXavierInit, ZeroMean) {
     NNGenome genome;
-    genome.topology = {22, 16, 8, 3};
+    genome.topology = std::vector<int>(NN_TOPOLOGY, NN_TOPOLOGY + NN_NUM_LAYERS);
     nn_xavier_init(genome);
 
     double sum = 0;
@@ -209,11 +210,11 @@ TEST(NNXavierInit, ZeroMean) {
 
 TEST(NNXavierInit, VarianceMatchesFanIn) {
     NNGenome genome;
-    genome.topology = {22, 16, 8, 3};
+    genome.topology = std::vector<int>(NN_TOPOLOGY, NN_TOPOLOGY + NN_NUM_LAYERS);
     nn_xavier_init(genome);
 
-    // Check first layer weights (14->16): variance should be ~1/14 ≈ 0.0714
-    int first_layer_weights = 14 * 16;
+    // Check first layer weights: variance should be ~1/NN_INPUT_COUNT
+    int first_layer_weights = NN_INPUT_COUNT * NN_HIDDEN1_SIZE;
     double sum = 0, sum_sq = 0;
     for (int i = 0; i < first_layer_weights; i++) {
         sum += genome.weights[i];
@@ -221,16 +222,16 @@ TEST(NNXavierInit, VarianceMatchesFanIn) {
     }
     double mean = sum / first_layer_weights;
     double variance = sum_sq / first_layer_weights - mean * mean;
-    double expected_variance = 1.0 / 14.0;
+    double expected_variance = 1.0 / NN_INPUT_COUNT;
 
-    // Statistical test — variance within reasonable range for 224 samples
+    // Statistical test — variance within reasonable range
     EXPECT_GT(variance, expected_variance * 0.2);
     EXPECT_LT(variance, expected_variance * 5.0);
 }
 
 TEST(NNXavierInit, AllFinite) {
     NNGenome genome;
-    genome.topology = {22, 16, 8, 3};
+    genome.topology = std::vector<int>(NN_TOPOLOGY, NN_TOPOLOGY + NN_NUM_LAYERS);
     nn_xavier_init(genome);
 
     for (float w : genome.weights) {
@@ -243,25 +244,25 @@ TEST(NNXavierInit, AllFinite) {
 // ============================================================
 
 TEST(NNForwardPass, Deterministic) {
-    std::vector<int> topology = {22, 16, 8, 3};
+    std::vector<int> topology(NN_TOPOLOGY, NN_TOPOLOGY + NN_NUM_LAYERS);
     int wc = nn_weight_count(topology);
     std::vector<float> weights(wc);
     for (int i = 0; i < wc; i++) {
         weights[i] = static_cast<float>((i * 3 + 7) % 50 - 25) / 25.0f;
     }
 
-    float inputs[22];
-    for (int i = 0; i < 22; i++) {
-        inputs[i] = static_cast<float>(i) / 22.0f;
+    float inputs[NN_INPUT_COUNT];
+    for (int i = 0; i < NN_INPUT_COUNT; i++) {
+        inputs[i] = static_cast<float>(i) / static_cast<float>(NN_INPUT_COUNT);
     }
 
-    float outputs1[3], outputs2[3];
+    float outputs1[NN_OUTPUT_COUNT], outputs2[NN_OUTPUT_COUNT];
 
     nn_forward(weights.data(), topology, inputs, outputs1);
     nn_forward(weights.data(), topology, inputs, outputs2);
 
     // Bit-exact same outputs
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < NN_OUTPUT_COUNT; i++) {
         EXPECT_EQ(outputs1[i], outputs2[i]) << "Non-deterministic at output " << i;
     }
 }

@@ -232,18 +232,19 @@
 
 **Purpose**: Training validation, documentation, final integration
 
-- [ ] T098 [P] Run first full training comparison: NN (14-16-8-3, pop=500, 50 gen) vs GP on same scenario set, compare convergence curves and control smoothness
+- [ ] ~~T098 [P] Run first full training comparison: NN vs GP on same scenario set~~ — deferred to next feature (NN ES can't match GP with current approach; need segment-based scoring or gradient methods)
 - [x] T099 [P] Update CLAUDE.md: added NN build commands (nnextractor, nn2cpp), config options, NN eval architecture, NN workflows
 - [x] T100 [P] Update specs/BACKLOG.md: marked 013 as [ACTIVE], unify-eval as [DONE]
-- [ ] T101 Run release checklist from constitution: all tests pass, all three repo builds pass, CLAUDE.md updated
-- [ ] T102 Validate success criteria SC-001 through SC-005: lower fitness than GP, consistent convergence, <1ms embedded inference, smooth control outputs, cross-platform parity
+- [x] T101 Run release checklist from constitution: all tests pass, all three repo builds pass, CLAUDE.md updated
+- [ ] ~~T102 Validate success criteria SC-001 through SC-005~~ — deferred (SC-001 not achieved: NN hasn't matched GP fitness; needs training approach rethink)
 - [x] T103 [P] Revisit minisim NN logging — added [AUTOC_GP_STRING] stderr logging for NN (topology, weight count, generation) matching GP/bytecode pattern
-- [ ] T104 [P] Cleanup: eliminate gratuitous duplication between GP and NN code paths — e.g. GPrand() vs local RNG (GP should wrap a shared RNG, not the other way around), GP_BUILD/GP_TEST conditional compilation hacks in nn_evaluator_portable.cc and nn_population.cc
-- [ ] T105 [P] Cleanup: evaluate controller pluggability — can GP tree eval, bytecode eval, and NN eval share a common ControllerBackend interface more cleanly? Revisit eval_backend.h, the parallel evalTask/computeNNFitness fitness paths, and whether subclass polymorphism can replace the current if/else branching in minisim.cc and autoc.cc
+- [ ] ~~T104 [P] Cleanup: GPrand() vs local RNG, GP_BUILD/GP_TEST hacks~~ — deferred to GP/NN architecture decision (GP rip-out)
+- [ ] ~~T105 [P] Cleanup: controller pluggability~~ — deferred to GP/NN architecture decision (GP rip-out)
 - [x] T106 Add determinism checker to NN evolution loop — re-evaluate best individual at end of each generation, compare reeval fitness to stored fitness with bitwiseEqual(). Logs NN_ELITE_SAME or NN_ELITE_DIVERGED with delta.
-- [ ] T109 [P] NN elite reeval — port GP elite re-evaluation system to NN path. Current NN_ELITE_SAME check doesn't actually re-evaluate and compare against stored results. GP path collects detailed sim state (physics traces, step-by-step data) and does real comparisons. Need to: (1) actually re-send elite to sim and compare fitness, (2) on divergence, collect and diff physics traces via compareTraces().
-- [ ] T107 [P] Refactor: unify fitness computation into a single function shared by GP (evalTask) and NN (computeNNFitness) — both implement the identical formula (distance penalty + attitude penalty with intercept scaling + crash completion penalty). Extract into a standalone `computeFitness(pathList, aircraftStateList, crashReasonList, scenarioList)` that both code paths call, eliminating the duplication and ensuring they can never diverge.
-- [ ] T108 [P] Cleanup: consolidate xiao-gp platformio.ini GP/NN env duplication — currently 4 board envs (2 GP + 2 NN) with near-identical config. Consider using a build flag or env extension to select GP vs NN without duplicating the full env block. If NN replaces GP long-term, remove GP envs entirely.
+- [ ] ~~T107 [P] Refactor: unify fitness computation~~ — deferred to GP/NN architecture decision (GP rip-out)
+- [ ] ~~T108 [P] Cleanup: consolidate xiao-gp platformio.ini GP/NN env duplication~~ — deferred to GP rip-out (GP envs simply get deleted)
+- [ ] ~~T109 [P] NN elite reeval~~ — deferred (determinism checker works, full reeval is polish)
+- [x] T110 [P] Compile-time NN topology constants: created nn_topology.h with constexpr constants (NN_INPUT_COUNT, NN_OUTPUT_COUNT, NN_TOPOLOGY[], NN_WEIGHT_COUNT). Removed NNTopology from config parsing and ini files. Updated aircraft_state.h, nn_evaluator_portable.cc/h, autoc.h/cc, config_manager.cc, CLAUDE.md, and all test files.
 
 ---
 

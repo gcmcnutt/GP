@@ -109,8 +109,8 @@
   the search space. Revisit only if bang-bang becomes dominant when variations are enabled.
 
 ### [ACTIVE] Neuroevolution Controller → `specs/013-neuroevolution`
-- Phases 1-7 complete (NN population, evaluator, fitness, serialization, S3, eval-mode, minisim integration)
-- Phase 8 (polish/cleanup) remaining
+- Phases 1-8 complete (NN population, evaluator, fitness, serialization, S3, eval-mode, minisim integration, compile-time topology)
+- Remaining deferred tasks rolled into GP rip-out and per-segment credit assignment features
 
 ### [DEFERRED] Per-Segment Credit Assignment & Gradient-Based NN Training
 - Current ES approach scores 49 scenarios × 600 timesteps (29,400 samples) into a single scalar fitness — can't distinguish "99% great with one bad turn" from "mediocre everywhere"
@@ -136,12 +136,10 @@
 - Architecture: predictor NN feeds predicted values as additional inputs to controller NN
 - Depends on: validating temporal history inputs in training runs first
 
-### [DEFERRED] Compile-Time NN Topology Constants
-- Current: NN topology is runtime-configurable via `NNTopology` in autoc.ini, but input count (22 sensors) and output count (3 controls) are hardcoded across multiple files (`aircraft_state.h::NN_INPUT_COUNT`, `nn_evaluator_portable.cc::nn_gather_inputs`, serialization arrays)
-- Hidden layer sizes (16,8) rarely change once settled — runtime flexibility adds complexity without value
-- **Goal**: Define topology as compile-time constants (e.g., `constexpr` in a single header), eliminate runtime parsing/validation of fixed dimensions, simplify serialization and AircraftState arrays
-- **Risk**: Loses ability to experiment with topology without recompiling — but that's fine since topology changes require code changes anyway (sensor wiring, output mapping)
-- Defer until: NN topology is stable from training experiments
+### [DONE] Compile-Time NN Topology Constants → `specs/013-neuroevolution` Phase 8 T110
+- Created `autoc/nn_topology.h` with constexpr constants for full topology (22,16,8,3 = 531 weights)
+- Removed `NNTopology` from config parsing and ini files
+- All hardcoded dimensions now reference single header
 
 ### [DEFERRED] GP/NN Architecture Decision: Refactor or Fork
 - Current: GP and NN code paths coexist with significant duplication (evalTask vs computeNNFitness, GPrand vs local RNG, parallel config parsing, format-aware branching in renderer/extractor/CRRCSim)

@@ -1426,15 +1426,9 @@ void newHandler()
 }
 
 
-// Parse comma-separated topology string "22,16,8,3" into vector
-static std::vector<int> parseTopology(const char* str) {
-  std::vector<int> topology;
-  std::istringstream iss(str);
-  std::string token;
-  while (std::getline(iss, token, ',')) {
-    topology.push_back(std::stoi(token));
-  }
-  return topology;
+// Get compiled topology as std::vector (needed by NNPopulation API)
+static std::vector<int> getCompiledTopology() {
+  return std::vector<int>(NN_TOPOLOGY, NN_TOPOLOGY + NN_NUM_LAYERS);
 }
 
 // Compute fitness for an NN individual from EvalResults
@@ -1837,13 +1831,13 @@ static void runNNEvolution(
   const ExtraConfig& extraCfg = ConfigManager::getExtraConfig();
   const GPVariables& gpCfg = ConfigManager::getGPConfig();
 
-  std::vector<int> topology = parseTopology(extraCfg.nnTopology);
+  std::vector<int> topology = getCompiledTopology();
   int popSize = gpCfg.PopulationSize;
   int numGens = gpCfg.NumberOfGenerations;
 
   *logger.info() << "NN Evolution mode" << endl;
-  *logger.info() << "  Topology: " << extraCfg.nnTopology
-                 << " (" << nn_weight_count(topology) << " weights)" << endl;
+  *logger.info() << "  Topology: " << NN_TOPOLOGY_STRING
+                 << " (" << NN_WEIGHT_COUNT << " weights)" << endl;
   *logger.info() << "  Population: " << popSize << endl;
   *logger.info() << "  Generations: " << numGens << endl;
   *logger.info() << "  MutationSigma: " << extraCfg.nnMutationSigma << endl;
