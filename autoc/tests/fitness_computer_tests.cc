@@ -65,9 +65,9 @@ TEST(FitnessComputer, StepPenaltyWithInterceptScale) {
 
 TEST(FitnessComputer, StepPenaltyKnownValues) {
     // Hand-computed reference values from the spec:
-    // At 5m: distDelta=2.5, penalty = pow(2.5/5.0, 0.75) = pow(0.5, 0.75) ≈ 0.5946
+    // At 5m: distDelta=2.5, penalty = pow(2.5/5.0, 1.5) = pow(0.5, 1.5) ≈ 0.3536
     // At 10m: distDelta=2.5, same
-    // At 24m: distDelta=16.5, penalty = pow(16.5/5.0, 0.75) = pow(3.3, 0.75) ≈ 2.5767
+    // At 24m: distDelta=16.5, penalty = pow(16.5/5.0, 1.5) = pow(3.3, 1.5) ≈ 5.993
     FitnessComputer fc;
     double penalty_5m = fc.computeStepPenalty(5.0, 0.0, 1.0);
     double penalty_10m = fc.computeStepPenalty(10.0, 0.0, 1.0);

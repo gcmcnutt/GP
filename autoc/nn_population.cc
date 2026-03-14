@@ -153,39 +153,81 @@ int nn_tournament_select(const NNPopulation& pop, int tournament_size) {
 // T065: Evolve one generation
 // ============================================================
 
-void nn_evolve_generation(NNPopulation& pop) {
+void nn_evolve_generation(NNPopulation& pop, const NNEvolveParams& params) {
     int n = pop.population_size;
     if (n < 2) return;
 
-    // Find elite (best fitness = lowest)
-    int elite_idx = 0;
-    for (int i = 1; i < n; i++) {
-        if (pop.individuals[i].fitness < pop.individuals[elite_idx].fitness) {
-            elite_idx = i;
-        }
-    }
+    // Find elites (best fitness = lowest)
+    // Sort indices by fitness to pick top elitism_count
+    std::vector<int> sorted_idx(n);
+    for (int i = 0; i < n; i++) sorted_idx[i] = i;
+    std::sort(sorted_idx.begin(), sorted_idx.end(), [&](int a, int b) {
+        return pop.individuals[a].fitness < pop.individuals[b].fitness;
+    });
+
+    int elitism_count = std::max(0, std::min(params.elitism_count, n - 1));
 
     // Create next generation
     std::vector<NNGenome> next_gen;
     next_gen.reserve(n);
 
-    // Elitism: keep the best individual unchanged
-    next_gen.push_back(pop.individuals[elite_idx]);
+    // Elitism: keep top individuals unchanged (GP & NN: AddBestToNewPopulation)
+    for (int i = 0; i < elitism_count; i++) {
+        next_gen.push_back(pop.individuals[sorted_idx[i]]);
+    }
 
-    // Fill rest with crossover + mutation
-    int tournament_size = std::max(2, n / 10);
-    for (int i = 1; i < n; i++) {
-        int p1 = nn_tournament_select(pop, tournament_size);
-        int p2 = nn_tournament_select(pop, tournament_size);
+    // Probability buckets (GP & NN: CrossoverProbability, CreationProbability, SwapMutationProbability)
+    // crossover_prob: crossover + mutation
+    // mutation_prob: mutation only (no crossover)
+    // creation_prob: fresh random individual
+    // remainder: crossover only (no mutation)
+    double total = params.crossover_prob + params.creation_prob + params.mutation_prob;
+    double cross_thresh = params.crossover_prob / total;
+    double create_thresh = cross_thresh + params.creation_prob / total;
+    double mutate_thresh = create_thresh + params.mutation_prob / total;
 
-        // Crossover with random blend (alpha = -1 for uniform random)
-        NNGenome child = nn_arithmetic_crossover(pop.individuals[p1], pop.individuals[p2], -1.0f);
-        child.generation = pop.generation + 1;
+    int tournament_size = std::max(2, params.tournament_size); // GP & NN: TournamentSize
 
-        // Mutation
-        nn_gaussian_mutation(child);
+    // Fill remaining slots
+    for (int i = elitism_count; i < n; i++) {
+        double r = randDouble();
 
-        next_gen.push_back(std::move(child));
+        if (r < cross_thresh) {
+            // Crossover + mutation
+            int p1 = nn_tournament_select(pop, tournament_size);
+            int p2 = nn_tournament_select(pop, tournament_size);
+            NNGenome child = nn_arithmetic_crossover(
+                pop.individuals[p1], pop.individuals[p2],
+                params.crossover_alpha);  // NN only: NNCrossoverAlpha
+            child.generation = pop.generation + 1;
+            nn_gaussian_mutation(child);
+            next_gen.push_back(std::move(child));
+        } else if (r < create_thresh) {
+            // Fresh random individual (CreationProbability)
+            NNGenome fresh;
+            fresh.topology = pop.topology;
+            fresh.generation = pop.generation + 1;
+            fresh.mutation_sigma = pop.individuals[0].mutation_sigma;
+            fresh.fitness = 0.0;
+            nn_xavier_init(fresh);
+            next_gen.push_back(std::move(fresh));
+        } else if (r < mutate_thresh) {
+            // Mutation only, no crossover (SwapMutationProbability)
+            int p = nn_tournament_select(pop, tournament_size);
+            NNGenome child = pop.individuals[p]; // copy
+            child.generation = pop.generation + 1;
+            nn_gaussian_mutation(child);
+            next_gen.push_back(std::move(child));
+        } else {
+            // Crossover only, no mutation (remainder)
+            int p1 = nn_tournament_select(pop, tournament_size);
+            int p2 = nn_tournament_select(pop, tournament_size);
+            NNGenome child = nn_arithmetic_crossover(
+                pop.individuals[p1], pop.individuals[p2],
+                params.crossover_alpha);
+            child.generation = pop.generation + 1;
+            next_gen.push_back(std::move(child));
+        }
     }
 
     pop.individuals = std::move(next_gen);

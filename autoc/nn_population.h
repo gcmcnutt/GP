@@ -29,7 +29,17 @@ void nn_gaussian_mutation(NNGenome& genome);
 // Tournament selection
 int nn_tournament_select(const NNPopulation& pop, int tournament_size);
 
-// Evolve one generation
-void nn_evolve_generation(NNPopulation& pop);
+// Evolution parameters (shared with GP config where noted)
+struct NNEvolveParams {
+    int tournament_size;         // GP & NN: TournamentSize
+    double crossover_prob;       // GP & NN: CrossoverProbability (0-100)
+    double creation_prob;        // GP & NN: CreationProbability (0-100)
+    double mutation_prob;        // GP & NN: SwapMutationProbability (0-100)
+    float crossover_alpha;       // NN only: NNCrossoverAlpha (-1 = random blend)
+    int elitism_count;           // GP & NN: AddBestToNewPopulation
+};
+
+// Evolve one generation using config-driven parameters
+void nn_evolve_generation(NNPopulation& pop, const NNEvolveParams& params);
 
 #endif

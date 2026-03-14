@@ -16,7 +16,7 @@ TEST(NNPopulation, DefaultConstruction) {
 
 TEST(NNPopulation, InitPopulationCreatesCorrectSize) {
     NNPopulation pop;
-    std::vector<int> topology = {14, 16, 8, 3};
+    std::vector<int> topology = {22, 16, 8, 3};
     nn_init_population(pop, topology, 50);
 
     EXPECT_EQ(pop.population_size, 50);
@@ -27,7 +27,7 @@ TEST(NNPopulation, InitPopulationCreatesCorrectSize) {
 
 TEST(NNPopulation, InitPopulationCorrectWeightCount) {
     NNPopulation pop;
-    std::vector<int> topology = {14, 16, 8, 3};
+    std::vector<int> topology = {22, 16, 8, 3};
     nn_init_population(pop, topology, 10);
 
     int expected_weights = nn_weight_count(topology);
@@ -39,7 +39,7 @@ TEST(NNPopulation, InitPopulationCorrectWeightCount) {
 
 TEST(NNPopulation, InitPopulationAllFinite) {
     NNPopulation pop;
-    std::vector<int> topology = {14, 16, 8, 3};
+    std::vector<int> topology = {22, 16, 8, 3};
     nn_init_population(pop, topology, 20);
 
     for (const auto& ind : pop.individuals) {
@@ -101,8 +101,8 @@ TEST(NNCrossover, ArithmeticBlendAlpha1) {
 
 TEST(NNCrossover, PreservesTopology) {
     NNGenome parent1, parent2;
-    parent1.topology = {14, 16, 8, 3};
-    parent2.topology = {14, 16, 8, 3};
+    parent1.topology = {22, 16, 8, 3};
+    parent2.topology = {22, 16, 8, 3};
     int wc = nn_weight_count(parent1.topology);
     parent1.weights.resize(wc, 0.0f);
     parent2.weights.resize(wc, 1.0f);
@@ -118,7 +118,7 @@ TEST(NNCrossover, PreservesTopology) {
 
 TEST(NNMutation, ChangesWeights) {
     NNGenome genome;
-    genome.topology = {14, 16, 8, 3};
+    genome.topology = {22, 16, 8, 3};
     genome.weights.resize(nn_weight_count(genome.topology), 0.0f);
     genome.mutation_sigma = 0.1f;
 
@@ -140,7 +140,7 @@ TEST(NNMutation, ChangesWeights) {
 
 TEST(NNMutation, MeanChangeNearZero) {
     NNGenome genome;
-    genome.topology = {14, 16, 8, 3};
+    genome.topology = {22, 16, 8, 3};
     genome.weights.resize(nn_weight_count(genome.topology), 0.0f);
     genome.mutation_sigma = 0.1f;
 

@@ -59,7 +59,7 @@ TEST(NNSerialization, SerializedDataStartsWithMagic) {
 
 TEST(NNSerialization, RoundTripPreservesAllFields) {
     NNGenome original;
-    original.topology = {14, 16, 8, 3};
+    original.topology = {22, 16, 8, 3};
     original.weights.resize(nn_weight_count(original.topology));
     for (size_t i = 0; i < original.weights.size(); i++) {
         original.weights[i] = static_cast<float>(i) / 100.0f - 2.0f;
@@ -121,7 +121,7 @@ TEST(NNSerialization, DetectFormatOnSerializedData) {
 
 TEST(NNSerialization, RejectsTruncatedData) {
     NNGenome genome;
-    genome.topology = {14, 16, 8, 3};
+    genome.topology = {22, 16, 8, 3};
     genome.weights.resize(nn_weight_count(genome.topology), 1.0f);
 
     std::vector<uint8_t> buf;

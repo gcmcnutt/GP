@@ -112,11 +112,43 @@
 - Phases 1-7 complete (NN population, evaluator, fitness, serialization, S3, eval-mode, minisim integration)
 - Phase 8 (polish/cleanup) remaining
 
+### [DEFERRED] Per-Segment Credit Assignment & Gradient-Based NN Training
+- Current ES approach scores 49 scenarios × 600 timesteps (29,400 samples) into a single scalar fitness — can't distinguish "99% great with one bad turn" from "mediocre everywhere"
+- nn13 result: 500 gens, 2K pop, sigma self-adapted from 0.20→0.024, fitness 38.9M→3.99M then stalled — search froze in local optimum
+- **Core problem**: Unit of evaluation is "one individual × one full trajectory" → one scalar. Should be "one individual × thousands of segment-state pairs" using the distribution of per-segment scores.
+- **Delta-based scoring**: Score segments by error *reduction* relative to initial condition, not absolute tracking. `error_reduction / max_achievable_reduction` given physics. A segment recovering from 50m→40m off course is better than one maintaining 5m→5m. Separates "good control" from "good starting position."
+- **Forward context / handoff quality**: Segment score includes quality of state left for successor — overshoot recovery that creates a hard problem for the next segment gets partial penalty. "Thrown over the fence" feedback.
+- **Segment weighting by difficulty**: Not all segments equally informative. Weight by situation difficulty (angular error magnitude, distance error, attitude deviation). Straight-and-level tracking dead ahead is trivial — focus scoring on turns, crosswind corrections, recovery from overshoot, speed transitions.
+- **Toss uninteresting segments**: Don't score trivial situations (trimmed level, rabbit dead ahead). Focus on segments where demands change or things go wrong.
+- **Population fitness from segment distribution**: Instead of sum-of-errors, use worst-segment (minimax), percentile-based (95th percentile error), or difficulty-weighted. Pressures NN to fix worst behaviors first.
+- **Curriculum from segments**: Evolve for 1-2s tracking from any state first, then extend to 5s, 10s, etc. Much easier search space. Curriculum can also apply to scenario count (start with 9 wind scenarios, expand to 49).
+- **Per-sample supervised training (behavioral cloning)**: Use 10Hz flight data from GP or NN controllers as (state→action) training pairs. Backprop against known-good segments. State-independent: sample from any attitude, not just trimmed level flight start.
+- **CMA-ES**: Drop-in replacement for current isotropic Gaussian mutation. Learns covariance structure of 531-weight space — which weights to mutate together. Gold standard for black-box optimization in this parameter range.
+- **Policy gradient (REINFORCE/PPO)**: Per-timestep reward enables actual gradient estimation w.r.t. weights. Much more sample-efficient than ES. Bigger infrastructure lift.
+- **Sigma floor for current ES**: Quick fix — enforce minimum sigma (e.g., 0.05) to prevent search freeze. Band-aid, not a solution.
+- **Open question**: Evaluating from arbitrary starting states (not just own trajectory) requires restarting sim from sampled states — closer to RL, would need CRRCSim state injection support.
+- Depends on: deciding GP vs NN direction (see GP/NN Architecture Decision)
+
+### [DEFERRED] Future State Predictor NN
+- Add a secondary NN that predicts short-horizon future sensor values from history
+- Current controller uses purely historical temporal inputs (0, -0.1s, -0.3s, -0.9s)
+- Near-term future (e.g., +0.1s, +0.3s) could be estimated via inertia/dynamics
+- Architecture: predictor NN feeds predicted values as additional inputs to controller NN
+- Depends on: validating temporal history inputs in training runs first
+
+### [DEFERRED] Compile-Time NN Topology Constants
+- Current: NN topology is runtime-configurable via `NNTopology` in autoc.ini, but input count (22 sensors) and output count (3 controls) are hardcoded across multiple files (`aircraft_state.h::NN_INPUT_COUNT`, `nn_evaluator_portable.cc::nn_gather_inputs`, serialization arrays)
+- Hidden layer sizes (16,8) rarely change once settled — runtime flexibility adds complexity without value
+- **Goal**: Define topology as compile-time constants (e.g., `constexpr` in a single header), eliminate runtime parsing/validation of fixed dimensions, simplify serialization and AircraftState arrays
+- **Risk**: Loses ability to experiment with topology without recompiling — but that's fine since topology changes require code changes anyway (sensor wiring, output mapping)
+- Defer until: NN topology is stable from training experiments
+
 ### [DEFERRED] GP/NN Architecture Decision: Refactor or Fork
 - Current: GP and NN code paths coexist with significant duplication (evalTask vs computeNNFitness, GPrand vs local RNG, parallel config parsing, format-aware branching in renderer/extractor/CRRCSim)
 - Two paths forward:
   1. **Big refactor**: Unify GP and NN behind a clean ControllerBackend polymorphic interface — shared fitness, shared eval pipeline, shared serialization envelope, pluggable controller backends
   2. **Fork to NN-only**: Rip out GP tree evolution entirely, simplify codebase around NN-only workflow — bytecode/GP tree serialization, gpextractor, bytecode2cpp all become dead code
+- **Fitness constant duplication**: `DISTANCE_POWER`, `DISTANCE_TARGET`, `DISTANCE_NORM` defined in both `autoc.h` and `fitness_computer.h` with `#ifndef` guard — test builds use fallback in `fitness_computer.h`, production uses `autoc.h`. Clean up during GP rip-out.
 - Decision depends on: whether GP tree evolution provides unique value not achievable by NN (e.g., interpretability, modular subtree transfer), or whether NN supersedes GP for all use cases
 - Defer until: 013-neuroevolution is fully validated end-to-end and comparative training runs (T098) inform the decision
 

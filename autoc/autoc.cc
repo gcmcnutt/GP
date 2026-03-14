@@ -1426,7 +1426,7 @@ void newHandler()
 }
 
 
-// Parse comma-separated topology string "14,16,8,3" into vector
+// Parse comma-separated topology string "22,16,8,3" into vector
 static std::vector<int> parseTopology(const char* str) {
   std::vector<int> topology;
   std::istringstream iss(str);
@@ -1534,7 +1534,8 @@ static double computeNNFitness(EvalResults& evalResults) {
   return totalFitness;
 }
 
-// Log per-step data from EvalResults to data.dat in same format as GP evalTask
+// Log per-step data from EvalResults to data.dat
+// NN mode: actual NN inputs (normalized) and outputs captured in minisim, then diagnostics
 static void logEvalResults(std::ofstream& fout, EvalResults& results) {
   bool printHeader = true;
 
@@ -1586,10 +1587,10 @@ static void logEvalResults(std::ofstream& fout, EvalResults& results) {
       gp_quat craftOrientation = stepState.getOrientation();
 
       // Attitude delta
-      double qw = craftOrientation.w(), qx = craftOrientation.x();
-      double qy = craftOrientation.y(), qz = craftOrientation.z();
-      double roll = atan2(2.0 * (qw * qx + qy * qz), 1.0 - 2.0 * (qx * qx + qy * qy));
-      double sinp = std::clamp(2.0 * (qw * qy - qz * qx), -1.0, 1.0);
+      double aqw = craftOrientation.w(), aqx = craftOrientation.x();
+      double aqy = craftOrientation.y(), aqz = craftOrientation.z();
+      double roll = atan2(2.0 * (aqw * aqx + aqy * aqz), 1.0 - 2.0 * (aqx * aqx + aqy * aqy));
+      double sinp = std::clamp(2.0 * (aqw * aqy - aqz * aqx), -1.0, 1.0);
       double pitch = asin(sinp);
 
       double attitude_delta = 0.0;
@@ -1611,12 +1612,6 @@ static void logEvalResults(std::ofstream& fout, EvalResults& results) {
       double interceptScale = computeInterceptScale(stepTimeSec, interceptBudget);
       simulation_steps++;
 
-      // Per-step logging
-      if (printHeader) {
-        fout << "Scn    Bake   Pth/Wnd:Step:   Time Idx  totDist   pathX    pathY    pathZ        X        Y        Z       dr       dp       dy   relVel     roll    pitch    power      qw      qx      qy      qz   vxBody   vyBody   vzBody    alpha     beta   dtheta    dphi   dhome     dist   attDlt  rabVel intScl\n";
-        printHeader = false;
-      }
-
       // Rabbit velocity
       gp_scalar rabbitVel = 0.0f;
       gp_vec3 currPathPos = path.at(pathIndex).start;
@@ -1633,64 +1628,72 @@ static void logEvalResults(std::ofstream& fout, EvalResults& results) {
       prevPathTime = currPathTime;
       firstStep = false;
 
-      // Euler angles
-      Eigen::Matrix3f rotMatrix = craftOrientation.toRotationMatrix();
-      gp_vec3 euler;
-      if (std::abs(rotMatrix(2, 0)) > static_cast<gp_scalar>(0.99999f)) {
-        euler[0] = 0;
-        if (rotMatrix(2, 0) > 0) {
-          euler[1] = -static_cast<gp_scalar>(M_PI / 2.0);
-          euler[2] = -atan2(rotMatrix(1, 2), rotMatrix(0, 2));
-        } else {
-          euler[1] = static_cast<gp_scalar>(M_PI / 2.0);
-          euler[2] = atan2(rotMatrix(1, 2), rotMatrix(0, 2));
-        }
-      } else {
-        euler[0] = atan2(rotMatrix(2, 1), rotMatrix(2, 2));
-        euler[1] = -asin(rotMatrix(2, 0));
-        euler[2] = atan2(rotMatrix(1, 0), rotMatrix(0, 0));
-      }
-
       // Body-frame velocity
       gp_vec3 velocity_body = stepState.getOrientation().inverse() * stepState.getVelocity();
-
-      gp_scalar alpha_deg = atan2(-velocity_body.z(), velocity_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);
-      gp_scalar beta_deg = atan2(velocity_body.y(), velocity_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);
-
-      // Angle to target in body frame
-      gp_vec3 craftToTarget = path.at(pathIndex).start - stepState.getPosition();
-      gp_vec3 target_body = stepState.getOrientation().inverse() * craftToTarget;
-      gp_scalar dtheta_deg = atan2(-target_body.z(), target_body.x()) * static_cast<gp_scalar>(180.0 / M_PI);
-      gp_scalar dphi_deg = atan2(target_body.y(), -target_body.z()) * static_cast<gp_scalar>(180.0 / M_PI);
 
       // Distance to home
       gp_vec3 home(0, 0, SIM_INITIAL_ALTITUDE);
       gp_scalar dhome = (home - stepState.getPosition()).norm();
 
-      gp_quat q = craftOrientation;
+      // Per-step logging — all % 7.4f fields are 8 chars, % 8.2f fields are 9 chars
+      if (printHeader) {
+        fout << "Scn    Bake   Pth/Wnd:Step:  Time Idx"  // 37 chars
+             << "   dPhi0   dPhi1   dPhi3   dPhi9"       // 4 × 8 = 32
+             << "   dTht0   dTht1   dTht3   dTht9"       // 4 × 8 = 32
+             << "    dst0    dst1    dst3    dst9"        // 4 × 8 = 32
+             << "      qw      qx      qy      qz"      // 4 × 8 = 32
+             << "     vel   alpha    beta"                // 3 × 8 = 24
+             << "   outPt   outRl   outTh"                // 3 × 8 = 24
+             << "    cmdP    cmdR    cmdT"                // 3 × 8 = 24
+             << "    pathX    pathY    pathZ"              // 3 × 9 = 27
+             << "        X        Y        Z"             // 3 × 9 = 27
+             << "   vxBody   vyBody   vzBody"             // 3 × 9 = 27
+             << "    dhome     dist  attDlt   rabVl   intSc" // 9+9+8+8+8=42
+             << "\n";
+        printHeader = false;
+      }
 
-      char outbuf[1600];
-      sprintf(outbuf, "%06llu %06llu %03d/%02d:%04d: %06ld %3d % 8.2f% 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f %8.2f %8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 7.4f % 7.4f % 7.4f % 7.4f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.2f % 8.3f % 6.4f % 6.1f %5.3f\n",
+      // Actual NN inputs/outputs captured in minisim
+      const float* in = stepState.getNNInputs();
+      const float* out = stepState.getNNOutputs();
+
+      char outbuf[2048];
+      sprintf(outbuf,
+        "%06llu %06llu %03d/%02d:%04d: %06ld %3d"
+        " % 7.4f % 7.4f % 7.4f % 7.4f"    // dPhi[0,1,3,9]
+        " % 7.4f % 7.4f % 7.4f % 7.4f"    // dTheta[0,1,3,9]
+        " % 7.4f % 7.4f % 7.4f % 7.4f"    // dist[0,1,3,9]
+        " % 7.4f % 7.4f % 7.4f % 7.4f"    // qw,qx,qy,qz
+        " % 7.4f % 7.4f % 7.4f"            // vel, alpha, beta
+        " % 7.4f % 7.4f % 7.4f"            // NN outputs: pitch, roll, throttle
+        " % 7.4f % 7.4f % 7.4f"            // cmd feedback: pitch, roll, throttle
+        " % 8.2f % 8.2f % 8.2f"            // pathX, pathY, pathZ
+        " % 8.2f % 8.2f % 8.2f"            // X, Y, Z
+        " % 8.2f % 8.2f % 8.2f"            // vxBody, vyBody, vzBody
+        " % 8.2f % 8.3f % 7.4f % 7.1f % 7.3f"  // dhome, dist, attDlt, rabVel, intScl
+        "\n",
         static_cast<unsigned long long>(scenarioSequence),
         static_cast<unsigned long long>(bakeoffSequence),
         pathVariantIndex, windVariantIndex, simulation_steps,
         stepState.getSimTimeMsec(), pathIndex,
-        path.at(pathIndex).distanceFromStart,
+        // NN inputs [0-21] — actual normalized values presented to NN
+        in[0], in[1], in[2], in[3],         // dPhi temporal history
+        in[4], in[5], in[6], in[7],         // dTheta temporal history
+        in[8], in[9], in[10], in[11],       // distance temporal history
+        in[12], in[13], in[14], in[15],     // quaternion attitude
+        in[16], in[17], in[18],             // vel, alpha, beta
+        // NN outputs [0-2] — actual tanh outputs
+        out[0], out[1], out[2],             // pitch, roll, throttle
+        // cmd feedback inputs — previous tick's commands (P, R, T order)
+        in[19], in[20], in[21],             // pitch, roll, throttle
+        // Diagnostics
         path.at(pathIndex).start[0],
         path.at(pathIndex).start[1],
         path.at(pathIndex).start[2],
         stepState.getPosition()[0],
         stepState.getPosition()[1],
         stepState.getPosition()[2],
-        euler[2], euler[1], euler[0],
-        stepState.getRelVel(),
-        stepState.getRollCommand(),
-        stepState.getPitchCommand(),
-        stepState.getThrottleCommand(),
-        q.w(), q.x(), q.y(), q.z(),
         velocity_body.x(), velocity_body.y(), velocity_body.z(),
-        alpha_deg, beta_deg,
-        dtheta_deg, dphi_deg,
         dhome,
         static_cast<gp_scalar>(distance),
         static_cast<gp_scalar>(attitude_delta),
@@ -1845,6 +1848,11 @@ static void runNNEvolution(
   *logger.info() << "  Generations: " << numGens << endl;
   *logger.info() << "  MutationSigma: " << extraCfg.nnMutationSigma << endl;
   *logger.info() << "  CrossoverAlpha: " << extraCfg.nnCrossoverAlpha << endl;
+  *logger.info() << "  TournamentSize: " << gpCfg.TournamentSize << endl;
+  *logger.info() << "  CrossoverProb: " << gpCfg.CrossoverProbability << "%" << endl;
+  *logger.info() << "  CreationProb: " << gpCfg.CreationProbability << "%" << endl;
+  *logger.info() << "  MutationOnlyProb: " << gpCfg.SwapMutationProbability << "%" << endl;
+  *logger.info() << "  Elitism: " << gpCfg.AddBestToNewPopulation << endl;
 
   // Initialize population
   NNPopulation pop;
@@ -2082,7 +2090,14 @@ static void runNNEvolution(
 
     // Evolve next generation (skip on last gen)
     if (gen < numGens) {
-      nn_evolve_generation(pop);
+      NNEvolveParams evoParams;
+      evoParams.tournament_size = gpCfg.TournamentSize;          // GP & NN
+      evoParams.crossover_prob = gpCfg.CrossoverProbability;     // GP & NN
+      evoParams.creation_prob = gpCfg.CreationProbability;       // GP & NN
+      evoParams.mutation_prob = gpCfg.SwapMutationProbability;   // GP & NN
+      evoParams.crossover_alpha = static_cast<float>(extraCfg.nnCrossoverAlpha); // NN only
+      evoParams.elitism_count = gpCfg.AddBestToNewPopulation;    // GP & NN
+      nn_evolve_generation(pop, evoParams);
     }
   }
 

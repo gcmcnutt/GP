@@ -175,51 +175,63 @@ void nn_xavier_init(NNGenome& genome) {
 }
 
 // ============================================================
-// T038: Gather 14 sensor inputs with normalization
+// T038: Gather 22 sensor inputs with normalization
 // ============================================================
+// Layout:
+//  0- 3: dPhi history    [now, -0.1s, -0.3s, -0.9s]  /π
+//  4- 7: dTheta history  [now, -0.1s, -0.3s, -0.9s]  /π
+//  8-11: dist history    [now, -0.1s, -0.3s, -0.9s]  /NORM_DIST
+// 12-15: quaternion (w, x, y, z)                      [-1,1]
+//    16: velocity                                     /NORM_VEL
+//    17: alpha (angle of attack)                      /π
+//    18: beta (sideslip)                              /π
+// 19-21: rollCmd, pitchCmd, throttleCmd               [-1,1]
+
+static const int HIST_INDICES[] = {0, 1, 3, 9};
 
 void nn_gather_inputs(PathProvider& pathProvider, AircraftState& aircraftState,
                       float* inputs) {
 #ifdef GP_TEST
     // In test builds, zero-fill (sensor functions not available)
-    for (int i = 0; i < 14; i++) inputs[i] = 0.0f;
+    for (int i = 0; i < 22; i++) inputs[i] = 0.0f;
 #else
-    // Desktop (GP_BUILD) and embedded builds both have executeGet* available
-    // 0-1: Navigation angles
-    inputs[0] = static_cast<float>(executeGetDPhi(pathProvider, aircraftState, 0.0f) / NORM_ANGLE);
-    inputs[1] = static_cast<float>(executeGetDTheta(pathProvider, aircraftState, 0.0f) / NORM_ANGLE);
+    // 0-3: dPhi temporal history (0=now, 1=0.1s ago, 3=0.3s ago, 9=0.9s ago)
+    for (int i = 0; i < 4; i++)
+        inputs[i] = static_cast<float>(aircraftState.getHistoricalDPhi(HIST_INDICES[i]) / NORM_ANGLE);
 
-    // 2: Distance to target
-    inputs[2] = static_cast<float>(executeGetDist(pathProvider, aircraftState) / NORM_DIST);
+    // 4-7: dTheta temporal history
+    for (int i = 0; i < 4; i++)
+        inputs[4 + i] = static_cast<float>(aircraftState.getHistoricalDTheta(HIST_INDICES[i]) / NORM_ANGLE);
 
-    // 3-5: Rate sensors
-    inputs[3] = static_cast<float>(executeGetDistRate(aircraftState) / NORM_RATE);
-    inputs[4] = static_cast<float>(executeGetDPhiRate(aircraftState) / NORM_RATE);
-    inputs[5] = static_cast<float>(executeGetDThetaRate(aircraftState) / NORM_RATE);
+    // 8-11: distance temporal history
+    for (int i = 0; i < 4; i++)
+        inputs[8 + i] = static_cast<float>(aircraftState.getHistoricalDist(HIST_INDICES[i]) / NORM_DIST);
 
-    // 6-7: Attitude (roll/pitch from quaternion Euler extraction)
+    // 12-15: quaternion attitude (w, x, y, z) — unit norm, components in [-1,1]
     {
-        gp_vec3 euler = aircraftState.getOrientation().toRotationMatrix().eulerAngles(2, 1, 0);
-        inputs[6] = static_cast<float>(euler[2] / NORM_ANGLE);  // roll
-        inputs[7] = static_cast<float>(euler[1] / NORM_ANGLE);  // pitch
+        gp_quat q = aircraftState.getOrientation();
+        inputs[12] = static_cast<float>(q.w());
+        inputs[13] = static_cast<float>(q.x());
+        inputs[14] = static_cast<float>(q.y());
+        inputs[15] = static_cast<float>(q.z());
     }
 
-    // 8: Velocity
-    inputs[8] = static_cast<float>(aircraftState.getRelVel() / NORM_VEL);
+    // 16: velocity
+    inputs[16] = static_cast<float>(aircraftState.getRelVel() / NORM_VEL);
 
-    // 9-10: Alpha/Beta — compute inline (same as evaluateGPOperator GETALPHA/GETBETA cases)
+    // 17-18: alpha/beta (aerodynamic angles)
     {
         gp_vec3 velocity_body = aircraftState.getOrientation().inverse() * aircraftState.getVelocity();
         gp_scalar alpha = std::atan2(-velocity_body.z(), velocity_body.x());
         gp_scalar beta = std::atan2(velocity_body.y(), velocity_body.x());
-        inputs[9] = static_cast<float>(alpha / NORM_ANGLE);
-        inputs[10] = static_cast<float>(beta / NORM_ANGLE);
+        inputs[17] = static_cast<float>(alpha / NORM_ANGLE);
+        inputs[18] = static_cast<float>(beta / NORM_ANGLE);
     }
 
-    // 11-13: Current control commands (already [-1, 1], no normalization)
-    inputs[11] = static_cast<float>(aircraftState.getRollCommand());
-    inputs[12] = static_cast<float>(aircraftState.getPitchCommand());
-    inputs[13] = static_cast<float>(aircraftState.getThrottleCommand());
+    // 19-21: current control commands — pitch, roll, throttle (matches output order)
+    inputs[19] = static_cast<float>(aircraftState.getPitchCommand());
+    inputs[20] = static_cast<float>(aircraftState.getRollCommand());
+    inputs[21] = static_cast<float>(aircraftState.getThrottleCommand());
 #endif
 }
 
@@ -232,7 +244,7 @@ NNControllerBackend::NNControllerBackend(const NNGenome& genome)
     : genome_(genome) {}
 
 void NNControllerBackend::evaluate(AircraftState& aircraftState, PathProvider& pathProvider) {
-    float inputs[14];
+    float inputs[22];
     nn_gather_inputs(pathProvider, aircraftState, inputs);
 
     float outputs[3];
@@ -242,6 +254,9 @@ void NNControllerBackend::evaluate(AircraftState& aircraftState, PathProvider& p
     aircraftState.setPitchCommand(static_cast<gp_scalar>(outputs[0]));
     aircraftState.setRollCommand(static_cast<gp_scalar>(outputs[1]));
     aircraftState.setThrottleCommand(static_cast<gp_scalar>(outputs[2]));
+
+    // Capture actual NN I/O for diagnostics
+    aircraftState.setNNData(inputs, 22, outputs, 3);
 }
 #endif
 

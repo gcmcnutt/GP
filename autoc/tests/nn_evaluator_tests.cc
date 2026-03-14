@@ -9,10 +9,10 @@
 // ============================================================
 
 TEST(NNWeightCount, BasicTopology) {
-    // Topology {14, 16, 8, 3} should produce 403 weights
-    std::vector<int> topology = {14, 16, 8, 3};
+    // Topology {22, 16, 8, 3} should produce 531 weights
+    std::vector<int> topology = {22, 16, 8, 3};
     int count = nn_weight_count(topology);
-    EXPECT_EQ(count, 14*16 + 16 + 16*8 + 8 + 8*3 + 3);  // 403
+    EXPECT_EQ(count, 22*16 + 16 + 16*8 + 8 + 8*3 + 3);  // 531
 }
 
 TEST(NNWeightCount, SingleLayer) {
@@ -100,16 +100,16 @@ TEST(NNForwardPass, TwoLayerKnown) {
     EXPECT_NEAR(outputs[0], expected, 1e-2);
 }
 
-TEST(NNForwardPass, FullTopology14_16_8_3) {
+TEST(NNForwardPass, FullTopology22_16_8_3) {
     // Verify the canonical topology works end-to-end
-    std::vector<int> topology = {14, 16, 8, 3};
+    std::vector<int> topology = {22, 16, 8, 3};
     int wc = nn_weight_count(topology);
-    EXPECT_EQ(wc, 403);
+    EXPECT_EQ(wc, 531);
 
     // All-zero weights: every layer produces tanh(0) = 0 (only biases matter, which are 0)
     std::vector<float> weights(wc, 0.0f);
-    float inputs[14];
-    for (int i = 0; i < 14; i++) inputs[i] = 1.0f;
+    float inputs[22];
+    for (int i = 0; i < 22; i++) inputs[i] = 1.0f;
     float outputs[3];
 
     nn_forward(weights.data(), topology, inputs, outputs);
@@ -125,7 +125,7 @@ TEST(NNForwardPass, FullTopology14_16_8_3) {
 // ============================================================
 
 TEST(NNForwardPass, OutputRangeWithRandomWeights) {
-    std::vector<int> topology = {14, 16, 8, 3};
+    std::vector<int> topology = {22, 16, 8, 3};
     int wc = nn_weight_count(topology);
     std::vector<float> weights(wc);
 
@@ -134,9 +134,9 @@ TEST(NNForwardPass, OutputRangeWithRandomWeights) {
         weights[i] = static_cast<float>((i * 7 + 13) % 100 - 50) / 10.0f;  // range [-5, 5]
     }
 
-    float inputs[14];
-    for (int i = 0; i < 14; i++) {
-        inputs[i] = static_cast<float>(i - 7) / 7.0f;  // range [-1, 1]
+    float inputs[22];
+    for (int i = 0; i < 22; i++) {
+        inputs[i] = static_cast<float>(i - 11) / 11.0f;  // range [-1, 1]
     }
     float outputs[3];
 
@@ -188,14 +188,14 @@ TEST(FastTanh, Symmetry) {
 
 TEST(NNXavierInit, CorrectWeightCount) {
     NNGenome genome;
-    genome.topology = {14, 16, 8, 3};
+    genome.topology = {22, 16, 8, 3};
     nn_xavier_init(genome);
     EXPECT_EQ(static_cast<int>(genome.weights.size()), nn_weight_count(genome.topology));
 }
 
 TEST(NNXavierInit, ZeroMean) {
     NNGenome genome;
-    genome.topology = {14, 16, 8, 3};
+    genome.topology = {22, 16, 8, 3};
     nn_xavier_init(genome);
 
     double sum = 0;
@@ -209,7 +209,7 @@ TEST(NNXavierInit, ZeroMean) {
 
 TEST(NNXavierInit, VarianceMatchesFanIn) {
     NNGenome genome;
-    genome.topology = {14, 16, 8, 3};
+    genome.topology = {22, 16, 8, 3};
     nn_xavier_init(genome);
 
     // Check first layer weights (14->16): variance should be ~1/14 ≈ 0.0714
@@ -230,7 +230,7 @@ TEST(NNXavierInit, VarianceMatchesFanIn) {
 
 TEST(NNXavierInit, AllFinite) {
     NNGenome genome;
-    genome.topology = {14, 16, 8, 3};
+    genome.topology = {22, 16, 8, 3};
     nn_xavier_init(genome);
 
     for (float w : genome.weights) {
@@ -243,16 +243,16 @@ TEST(NNXavierInit, AllFinite) {
 // ============================================================
 
 TEST(NNForwardPass, Deterministic) {
-    std::vector<int> topology = {14, 16, 8, 3};
+    std::vector<int> topology = {22, 16, 8, 3};
     int wc = nn_weight_count(topology);
     std::vector<float> weights(wc);
     for (int i = 0; i < wc; i++) {
         weights[i] = static_cast<float>((i * 3 + 7) % 50 - 25) / 25.0f;
     }
 
-    float inputs[14];
-    for (int i = 0; i < 14; i++) {
-        inputs[i] = static_cast<float>(i) / 14.0f;
+    float inputs[22];
+    for (int i = 0; i < 22; i++) {
+        inputs[i] = static_cast<float>(i) / 22.0f;
     }
 
     float outputs1[3], outputs2[3];
@@ -278,21 +278,15 @@ TEST(NNInputNormalization, NormConstants) {
     EXPECT_NEAR(NORM_RATE, 10.0f, 1e-5);
 }
 
-// Input ordering (from spec):
-// 0: dPhi / NORM_ANGLE
-// 1: dTheta / NORM_ANGLE
-// 2: dist / NORM_DIST
-// 3: distRate / NORM_RATE
-// 4: dPhiRate / NORM_RATE
-// 5: dThetaRate / NORM_RATE
-// 6: rollRad / NORM_ANGLE
-// 7: pitchRad / NORM_ANGLE
-// 8: relVel / NORM_VEL
-// 9: alpha / NORM_ANGLE
-// 10: beta / NORM_ANGLE
-// 11: rollCmd (already [-1,1])
-// 12: pitchCmd (already [-1,1])
-// 13: throttleCmd (already [-1,1])
+// Input ordering (22 inputs):
+//  0- 3: dPhi history [now, -0.1s, -0.3s, -0.9s] / NORM_ANGLE
+//  4- 7: dTheta history [now, -0.1s, -0.3s, -0.9s] / NORM_ANGLE
+//  8-11: dist history [now, -0.1s, -0.3s, -0.9s] / NORM_DIST
+// 12-15: quaternion (w, x, y, z) — already [-1,1]
+//    16: velocity / NORM_VEL
+//    17: alpha / NORM_ANGLE
+//    18: beta / NORM_ANGLE
+// 19-21: rollCmd, pitchCmd, throttleCmd (already [-1,1])
 
 // Note: Full nn_gather_inputs test requires AircraftState + PathProvider,
 // which needs GP_BUILD mode (not GP_TEST). Normalization constants verified above.

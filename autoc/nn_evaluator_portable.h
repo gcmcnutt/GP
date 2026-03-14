@@ -16,7 +16,7 @@ constexpr gp_scalar NORM_RATE  = static_cast<gp_scalar>(10.0f); // rate sensors 
 // Neural network genome — the fundamental unit of neuroevolution
 struct NNGenome {
     std::vector<float> weights;       // All weights + biases, layer-major order
-    std::vector<int> topology;        // Layer sizes, e.g., {14, 16, 8, 3}
+    std::vector<int> topology;        // Layer sizes, e.g., {22, 16, 8, 3}
     double fitness;                   // Aggregated fitness from evaluation
     uint32_t generation;              // Generation when created
     float mutation_sigma;             // Per-individual mutation step size (self-adaptive)
@@ -38,7 +38,7 @@ gp_scalar fast_tanh(gp_scalar x);
 // Xavier/Glorot weight initialization
 void nn_xavier_init(NNGenome& genome);
 
-// Gather 14 sensor inputs from aircraft state, apply normalization
+// Gather 22 sensor inputs from aircraft state, apply normalization
 void nn_gather_inputs(PathProvider& pathProvider, AircraftState& aircraftState,
                       float* inputs);
 

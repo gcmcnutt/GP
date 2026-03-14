@@ -129,7 +129,7 @@ make clean && rm -rf build && mkdir build && cd build && cmake -DCMAKE_BUILD_TYP
 **NN Evaluation (`autoc/`, spec 013-neuroevolution):**
 - NNGenome: topology + weights + fitness + generation metadata
 - Forward pass: feedforward with tanh activation, fast_tanh LUT (512 entries)
-- Input: 14 normalized sensor values (angular errors, distance, attitude, velocity)
+- Input: 22 normalized sensor values (temporal error history, quaternion attitude, velocity, alpha/beta, commands)
 - Output: 3 control commands (pitch, roll, throttle) via tanh → [-1, 1]
 - Serialization: custom binary "NN01" format (not Boost), detected by magic bytes
 - S3 prefix: `nn-{timestamp}/` vs `autoc-{timestamp}/` for GP
@@ -186,7 +186,7 @@ The PROGN bytecode instruction preserves GP tree semantics for operations with s
 - `BytecodeFile`: Path to bytecode file for evaluation mode
 - `S3Bucket`/`S3Profile`: AWS S3 storage configuration
 - `ControllerType`: "GP" or "NN" (default: GP)
-- `NNTopology`: comma-separated layer sizes (e.g., 14,16,8,3)
+- `NNTopology`: comma-separated layer sizes (e.g., 22,16,8,3)
 - `NNMutationSigma`: initial mutation sigma (default: 0.1)
 - `NNCrossoverAlpha`: BLX-alpha blend factor (-1 = uniform random)
 - `NNWeightFile`: weight file path for eval mode (default: nn_weights.dat)

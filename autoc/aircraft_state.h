@@ -256,6 +256,16 @@ struct AircraftState {
     gp_vec3 getWindVelocity() const { return wind_velocity; }
     void setWindVelocity(const gp_vec3& wind) { wind_velocity = wind; }
 
+    // NN I/O capture — record what the NN actually saw and produced
+    void setNNData(const float* inputs, int numInputs, const float* outputs, int numOutputs) {
+      for (int i = 0; i < NN_INPUT_COUNT && i < numInputs; i++) nnInputs_[i] = inputs[i];
+      for (int i = 0; i < NN_OUTPUT_COUNT && i < numOutputs; i++) nnOutputs_[i] = outputs[i];
+      hasNNData_ = true;
+    }
+    bool hasNNData() const { return hasNNData_; }
+    const float* getNNInputs() const { return nnInputs_; }
+    const float* getNNOutputs() const { return nnOutputs_; }
+
     // =========================================================================
     // Temporal history for GP nodes - see specs/TEMPORAL_STATE.md
     // =========================================================================
@@ -361,6 +371,13 @@ struct AircraftState {
     // Wind diagnostic fields (for debugging non-determinism)
     gp_vec3 wind_velocity;  // Wind vector (north, east, down) from calculate_wind()
 
+    // NN I/O capture — actual values presented to/produced by the neural net
+    static constexpr int NN_INPUT_COUNT = 22;
+    static constexpr int NN_OUTPUT_COUNT = 3;
+    float nnInputs_[NN_INPUT_COUNT] = {0};   // Normalized inputs as NN sees them
+    float nnOutputs_[NN_OUTPUT_COUNT] = {0};  // Raw tanh outputs
+    bool hasNNData_ = false;
+
     // Temporal history for GP nodes - see specs/TEMPORAL_STATE.md
     gp_scalar dPhiHistory_[HISTORY_SIZE] = {0};
     gp_scalar dThetaHistory_[HISTORY_SIZE] = {0};
@@ -384,11 +401,18 @@ struct AircraftState {
       ar& throttleCommand;
       ar& simTimeMsec;
       ar& wind_velocity;
+      if (version >= 3) {
+        ar& hasNNData_;
+        if (hasNNData_) {
+          for (int i = 0; i < NN_INPUT_COUNT; i++) ar& nnInputs_[i];
+          for (int i = 0; i < NN_OUTPUT_COUNT; i++) ar& nnOutputs_[i];
+        }
+      }
     }
 #endif
 };
 #ifdef GP_BUILD
-BOOST_CLASS_VERSION(AircraftState, 2)
+BOOST_CLASS_VERSION(AircraftState, 3)
 #endif
 
 // Physics trace entry - captures complete FDM state at a single timestep
