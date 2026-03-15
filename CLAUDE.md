@@ -340,6 +340,7 @@ The bytecode system creates an additional dependency path: GP trees (S3) → gpe
 - N/A (in-memory ring buffers, S3 for evolution artifacts) (012-distance-temporal-nodes)
 - C++17 (g++, CMake 3.10+) + Eigen3 (vectors, quaternions), Boost (serialization, logging, threads), GoogleTest 1.14.0 (013-neuroevolution)
 - S3 for evolution archives, local files for diagnostics (data.dat, data.stc) (013-neuroevolution)
+- C++17 (g++, CMake 3.10+) + Eigen3 (linear algebra), AWS SDK (S3), inih (config parser, vendored). Boost removed during refactoring. (014-nn-training-signal)
 
 ## Recent Changes
 - 001-gp-eval-tests: Added C++17 (CMake 3.10+, g++) + Eigen3 (quaternions, vectors), GoogleTest 1.14.0 (testing)

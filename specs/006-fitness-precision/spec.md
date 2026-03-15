@@ -1,7 +1,7 @@
 # Spec: GP Library Fitness Serialization Precision
 
 **Feature ID**: 006-fitness-precision
-**Status**: Draft
+**Status**: Draft (GP-specific, not applicable to NN fork)
 **Created**: 2026-03-10
 
 ## Overview
