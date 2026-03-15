@@ -103,7 +103,7 @@ int main(int argc, char** argv) {
   Aws::InitAPI(options);
 
   auto s3_client = ConfigManager::getS3Client();
-  std::string bucket = ConfigManager::getExtraConfig().s3Bucket;
+  std::string bucket = ConfigManager::getConfig().s3Bucket;
 
   // Find latest run if not specified
   if (computedKeyName.empty()) {

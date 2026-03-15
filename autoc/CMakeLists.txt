@@ -6,10 +6,24 @@ find_package(Eigen3 REQUIRED)
 find_package(Boost REQUIRED COMPONENTS thread system serialization log)
 find_package(AWSSDK REQUIRED COMPONENTS core s3)
 
+include(FetchContent)
+
+# inih config parser (replaces GPConfiguration from libgp.a)
+FetchContent_Declare(
+    inih
+    GIT_REPOSITORY https://github.com/benhoyt/inih.git
+    GIT_TAG r58
+)
+FetchContent_Populate(inih)
+add_library(inih STATIC
+    ${inih_SOURCE_DIR}/ini.c
+    ${inih_SOURCE_DIR}/cpp/INIReader.cpp
+)
+target_include_directories(inih PUBLIC ${inih_SOURCE_DIR} ${inih_SOURCE_DIR}/cpp)
+
 option(ENABLE_AUTOC_TESTS "Build autoc unit tests" ON)
 if(ENABLE_AUTOC_TESTS)
   include(GoogleTest)
-  include(FetchContent)
   set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
   FetchContent_Declare(
       googletest
@@ -87,7 +101,7 @@ add_library(autoc_common STATIC
     nn_population.cc
     nn_population.h
 )
-target_link_libraries(autoc_common gp ${Boost_LIBRARIES} Eigen3::Eigen)
+target_link_libraries(autoc_common gp inih ${Boost_LIBRARIES} Eigen3::Eigen)
 
 add_executable(autoc autoc.cc)
 add_executable(minisim minisim.cc)
@@ -131,20 +145,46 @@ if(ENABLE_AUTOC_TESTS)
   target_compile_definitions(fitness_computer_tests PRIVATE GP_BUILD GP_TEST)
   target_link_libraries(fitness_computer_tests GTest::gtest GTest::gtest_main Eigen3::Eigen)
 
+  # Contract tests (014-nn-training-signal)
+  add_executable(contract_evaluator_tests tests/contract_evaluator_tests.cc nn_evaluator_portable.cc gp_evaluator_portable.cc)
+  target_compile_definitions(contract_evaluator_tests PRIVATE GP_BUILD GP_TEST)
+  target_link_libraries(contract_evaluator_tests GTest::gtest GTest::gtest_main Eigen3::Eigen)
+
+  add_executable(contract_config_tests tests/contract_config_tests.cc)
+  target_compile_definitions(contract_config_tests PRIVATE GP_BUILD GP_TEST)
+  target_link_libraries(contract_config_tests GTest::gtest GTest::gtest_main)
+
+  add_executable(contract_evolution_tests tests/contract_evolution_tests.cc nn_population.cc nn_evaluator_portable.cc gp_evaluator_portable.cc)
+  target_compile_definitions(contract_evolution_tests PRIVATE GP_BUILD GP_TEST)
+  target_link_libraries(contract_evolution_tests GTest::gtest GTest::gtest_main Eigen3::Eigen)
+
+  add_executable(rpc_transport_tests tests/rpc_transport_tests.cc)
+  target_compile_definitions(rpc_transport_tests PRIVATE GP_BUILD GP_TEST)
+  target_link_libraries(rpc_transport_tests GTest::gtest GTest::gtest_main)
+
   enable_testing()
   add_test(NAME autoc_tests COMMAND autoc_tests)
   add_test(NAME nn_evaluator_tests COMMAND nn_evaluator_tests)
   add_test(NAME nn_serialization_tests COMMAND nn_serialization_tests)
   add_test(NAME nn_population_tests COMMAND nn_population_tests)
   add_test(NAME fitness_computer_tests COMMAND fitness_computer_tests)
+  add_test(NAME contract_evaluator_tests COMMAND contract_evaluator_tests)
+  add_test(NAME contract_config_tests COMMAND contract_config_tests)
+  add_test(NAME contract_evolution_tests COMMAND contract_evolution_tests)
+  add_test(NAME rpc_transport_tests COMMAND rpc_transport_tests)
 
   # --gtest_brief=1 only prints failures, not every test run
   add_custom_target(run_autoc_tests ALL
     DEPENDS autoc_tests nn_evaluator_tests nn_serialization_tests nn_population_tests fitness_computer_tests
+            contract_evaluator_tests contract_config_tests contract_evolution_tests rpc_transport_tests
     COMMAND autoc_tests --gtest_brief=1
     COMMAND nn_evaluator_tests --gtest_brief=1
     COMMAND nn_serialization_tests --gtest_brief=1
     COMMAND nn_population_tests --gtest_brief=1
     COMMAND fitness_computer_tests --gtest_brief=1
+    COMMAND contract_evaluator_tests --gtest_brief=1
+    COMMAND contract_config_tests --gtest_brief=1
+    COMMAND contract_evolution_tests --gtest_brief=1
+    COMMAND rpc_transport_tests --gtest_brief=1
   )
 endif()

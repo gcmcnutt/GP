@@ -209,7 +209,7 @@ static void prefetchAllVariations(int numScenarios, const VariationSigmas& sigma
 
     // Derive pathSeed (unless overridden by config)
     if (randomPathSeedB == -1) {
-        gPathSeed = static_cast<unsigned int>(GPrand());
+        gPathSeed = static_cast<unsigned int>(rng::randLong());
         gPathSeedFromOverride = false;
     } else {
         gPathSeed = static_cast<unsigned int>(randomPathSeedB);
@@ -220,18 +220,18 @@ static void prefetchAllVariations(int numScenarios, const VariationSigmas& sigma
 
     // When wind variations disabled, use same seed for all scenarios (identical thermals/gusts)
     // Still consume GPrand to maintain deterministic sequence
-    unsigned int baseWindSeed = static_cast<unsigned int>(GPrand());
+    unsigned int baseWindSeed = static_cast<unsigned int>(rng::randLong());
 
     for (int i = 0; i < numScenarios; i++) {
         ScenarioVariations sv;
 
         // Wind seed for crrcsim: unique per scenario if enabled, same for all if disabled
         if (enableWind) {
-            sv.windSeed = (i == 0) ? baseWindSeed : static_cast<unsigned int>(GPrand());
+            sv.windSeed = (i == 0) ? baseWindSeed : static_cast<unsigned int>(rng::randLong());
         } else {
             // Disabled: all scenarios use same seed (identical thermals/gusts)
             // Still consume GPrand to keep PRNG sequence deterministic
-            if (i > 0) { (void)GPrand(); }
+            if (i > 0) { (void)rng::randLong(); }
             sv.windSeed = baseWindSeed;
         }
 
@@ -481,8 +481,8 @@ unsigned int sanitizeStride(int stride) {
 void rebuildGenerationScenarios(const std::vector<std::vector<Path>>& basePaths) {
   generationScenarios.clear();
 
-  const ExtraConfig& extraCfg = ConfigManager::getExtraConfig();
-  int windScenarioCount = std::max(extraCfg.windScenarioCount, 1);
+  const AutocConfig& cfg = ConfigManager::getConfig();
+  int windScenarioCount = std::max(cfg.windScenarioCount, 1);
 
   // Use pre-fetched windSeeds from gScenarioVariations (single PRNG architecture)
   // Fallback to 0 if pre-fetch hasn't run yet (shouldn't happen in normal flow)
@@ -503,9 +503,7 @@ void rebuildGenerationScenarios(const std::vector<std::vector<Path>>& basePaths)
     return;
   }
 
-  const GPVariables& gpCfg = ConfigManager::getGPConfig();
-
-  if (gpCfg.DemeticGrouping && gpCfg.DemeSize > 0) {
+  if (cfg.demeticGrouping && cfg.demeSize > 0) {
     // DEMETIC MODE: Create one scenario per path variant.
     // Each scenario contains ONE path geometry evaluated across ALL wind conditions.
     // This allows demes to specialize on specific path geometries while being
@@ -665,11 +663,11 @@ static PathFrame computePathFrame(const std::vector<Path>& path, int index) {
 }
 
 int computeScenarioIndexForIndividual(int individualIndex) {
-  const GPVariables& gpCfg = ConfigManager::getGPConfig();
+  const AutocConfig& cfg = ConfigManager::getConfig();
   int scenarioCount = std::max<int>(generationScenarios.size(), 1);
 
-  if (gpCfg.DemeticGrouping && gpCfg.DemeSize > 0) {
-    int demeIndex = individualIndex / gpCfg.DemeSize;
+  if (cfg.demeticGrouping && cfg.demeSize > 0) {
+    int demeIndex = individualIndex / cfg.demeSize;
     if (scenarioCount == 0) {
       return 0;
     }
@@ -683,16 +681,16 @@ int computeScenarioIndexForIndividual(int individualIndex) {
 
 const ScenarioDescriptor& scenarioForIndex(int scenarioIndex) {
   if (generationScenarios.empty()) {
-    GPExitSystem("scenarioForIndex", "generationScenarios is empty - this should never happen!");
+    std::cerr << "FATAL: scenarioForIndex: generationScenarios is empty" << std::endl; exit(1);
   }
   int clampedIndex = ((scenarioIndex % static_cast<int>(generationScenarios.size())) + static_cast<int>(generationScenarios.size())) % static_cast<int>(generationScenarios.size());
   return generationScenarios[clampedIndex];
 }
 
 void warnIfScenarioMismatch() {
-  const GPVariables& gpCfg = ConfigManager::getGPConfig();
-  if (gpCfg.DemeticGrouping && gpCfg.DemeSize > 0) {
-    int demeCount = gpCfg.PopulationSize / gpCfg.DemeSize;
+  const AutocConfig& cfg = ConfigManager::getConfig();
+  if (cfg.demeticGrouping && cfg.demeSize > 0) {
+    int demeCount = cfg.populationSize / cfg.demeSize;
     if (demeCount > 0 && generationScenarios.size() < static_cast<size_t>(demeCount)) {
       *logger.warn() << "Scenario count (" << generationScenarios.size()
                      << ") is smaller than deme count (" << demeCount
@@ -744,6 +742,32 @@ public:
     GPPopulation(GPVar_, adfNs_) {
   }
 
+  // Construct from AutocConfig (bridge until GP code is deleted in T017)
+  MyPopulation(AutocConfig& cfg, GPAdfNodeSet& adfNs_) :
+    GPPopulation(gpVarsFromConfig(cfg), adfNs_) {
+  }
+
+  static GPVariables& gpVarsFromConfig(AutocConfig& cfg) {
+    static GPVariables gv;
+    gv.PopulationSize = cfg.populationSize;
+    gv.NumberOfGenerations = cfg.numberOfGenerations;
+    gv.CreationType = cfg.creationType;
+    gv.CrossoverProbability = cfg.crossoverProbability;
+    gv.CreationProbability = cfg.creationProbability;
+    gv.MaximumDepthForCreation = cfg.maximumDepthForCreation;
+    gv.MaximumDepthForCrossover = cfg.maximumDepthForCrossover;
+    gv.SelectionType = cfg.selectionType;
+    gv.TournamentSize = cfg.tournamentSize;
+    gv.DemeticGrouping = cfg.demeticGrouping;
+    gv.DemeSize = cfg.demeSize;
+    gv.DemeticMigProbability = cfg.demeticMigProbability;
+    gv.SwapMutationProbability = cfg.swapMutationProbability;
+    gv.ShrinkMutationProbability = cfg.shrinkMutationProbability;
+    gv.AddBestToNewPopulation = cfg.addBestToNewPopulation;
+    gv.SteadyState = cfg.steadyState;
+    return gv;
+  }
+
   // Duplication (mandatory)
   MyPopulation(MyPopulation& gpo) : GPPopulation(gpo) {}
   virtual GPObject& duplicate() { return *(new MyPopulation(*this)); }
@@ -779,12 +803,12 @@ public:
                     << " activeEvalCollector=" << (activeEvalCollector ? 1 : 0) << endl;
     if (printEval) {
       bakeoffPathCounter.store(0, std::memory_order_relaxed);
-      const GPVariables& gpCfg = ConfigManager::getGPConfig();
+      const AutocConfig& cfg = ConfigManager::getConfig();
       std::vector<int> candidateIndices;
       candidateIndices.reserve(static_cast<size_t>(std::max(1, containerSize())));
 
-      if (gpCfg.DemeticGrouping && gpCfg.DemeSize > 0) {
-        int demeSize = gpCfg.DemeSize;
+      if (cfg.demeticGrouping && cfg.demeSize > 0) {
+        int demeSize = cfg.demeSize;
         if (demeSize <= 0) {
           demeSize = 1;
         }
@@ -887,17 +911,17 @@ public:
           bestOfPopulation = bestIndex;
 
           // Demetic propagation (only in demetic mode)
-          if (gpCfg.DemeticGrouping && gpCfg.DemeSize > 0 &&
+          if (cfg.demeticGrouping && cfg.demeSize > 0 &&
               std::isfinite(bestAggregatedFitness)) {
-            int demeSize = gpCfg.DemeSize;
+            int demeSize = cfg.demeSize;
             int demesPropagated = 0;
-            gp_scalar migProb = std::clamp(static_cast<gp_scalar>(gpCfg.DemeticMigProbability) / static_cast<gp_scalar>(100.0f),
+            gp_scalar migProb = std::clamp(static_cast<gp_scalar>(cfg.demeticMigProbability) / static_cast<gp_scalar>(100.0f),
                                            static_cast<gp_scalar>(0.0f),
                                            static_cast<gp_scalar>(1.0f));
 
             for (int demeStart = 0; demeStart < containerSize(); demeStart += demeSize) {
               // Use GPrand() for deterministic migration decisions (single PRNG architecture)
-              gp_scalar randVal = static_cast<gp_scalar>(GPrand()) / static_cast<gp_scalar>(RAND_MAX);
+              gp_scalar randVal = static_cast<gp_scalar>(rng::randDouble());
               if (randVal > migProb) {
                 continue;
               }
@@ -946,7 +970,7 @@ public:
       
       // now put the resulting elements into the S3 object
       Aws::S3::Model::PutObjectRequest request;
-      request.SetBucket(ConfigManager::getExtraConfig().s3Bucket);
+      request.SetBucket(cfg.s3Bucket);
 
       // path name is $base/RunDate/gen$gen.dmp
       request.SetKey(computedKeyName);
@@ -976,7 +1000,7 @@ public:
 };
 
 void MyPopulation::evaluate() {
-  const GPVariables& gpCfg = ConfigManager::getGPConfig();
+  const AutocConfig& cfg = ConfigManager::getConfig();
   int scenarioCount = std::max<int>(generationScenarios.size(), 1);
 
   // Reset elite reeval flag for this generation (only flag first matching individual)
@@ -987,7 +1011,7 @@ void MyPopulation::evaluate() {
     MyGP* current = NthMyGP(n);
 #if GPINTERNALCHECK
     if (!current) {
-      GPExitSystem("MyPopulation::evaluate", "Member of population is NULL");
+      std::cerr << "FATAL: MyPopulation::evaluate: Member of population is NULL" << std::endl; exit(1);
     }
 #endif
     current->setScenarioIndex(computeScenarioIndexForIndividual(n));
@@ -1037,7 +1061,7 @@ void MyGP::evalTask(WorkerContext& context)
   bool isBakeoff = bakeoffMode;
   bool enableLogging = enableDeterministicTestLogging.load(std::memory_order_relaxed);
 
-  const GPVariables& gpCfg = ConfigManager::getGPConfig();
+  const AutocConfig& cfg = ConfigManager::getConfig();
 
   // Build scenario list FIRST before checking for elite re-eval
   for (size_t idx = 0; idx < scenario.pathList.size(); ++idx) {
@@ -1051,7 +1075,7 @@ void MyGP::evalTask(WorkerContext& context)
       meta.bakeoffSequence = 0;
     }
 
-    if (gpCfg.DemeticGrouping && gpCfg.DemeSize > 0) {
+    if (cfg.demeticGrouping && cfg.demeSize > 0) {
       // Demetic mode: scenario has one path variant across multiple winds
       meta.pathVariantIndex = scenario.pathVariantIndex;
       if (idx < scenario.windScenarios.size()) {
@@ -1706,15 +1730,15 @@ static void runNNEvaluation(
     std::ofstream& fout,
     std::ofstream& bout
 ) {
-  const ExtraConfig& extraCfg = ConfigManager::getExtraConfig();
+  const AutocConfig& cfg = ConfigManager::getConfig();
 
   *logger.info() << "NN Evaluation mode" << endl;
-  *logger.info() << "  Weight file: " << extraCfg.nnWeightFile << endl;
+  *logger.info() << "  Weight file: " << cfg.nnWeightFile << endl;
 
   // Load NN weight file
-  std::ifstream weightFile(extraCfg.nnWeightFile, std::ios::binary | std::ios::ate);
+  std::ifstream weightFile(cfg.nnWeightFile, std::ios::binary | std::ios::ate);
   if (!weightFile.is_open()) {
-    *logger.error() << "Cannot open NN weight file: " << extraCfg.nnWeightFile << endl;
+    *logger.error() << "Cannot open NN weight file: " << cfg.nnWeightFile << endl;
     exit(1);
   }
   std::streamsize fileSize = weightFile.tellg();
@@ -1815,7 +1839,7 @@ static void runNNEvaluation(
   // Log to statistics file
   bout << "#NNEval fitness=" << std::fixed << std::setprecision(6) << fitness
        << " storedFitness=" << genome.fitness
-       << " weightFile=" << extraCfg.nnWeightFile
+       << " weightFile=" << cfg.nnWeightFile
        << " scenarios=" << evalResults.pathList.size()
        << endl;
 }
@@ -1828,25 +1852,24 @@ static void runNNEvolution(
     std::ofstream& bout,
     const std::function<void(int)>& logGenerationStats
 ) {
-  const ExtraConfig& extraCfg = ConfigManager::getExtraConfig();
-  const GPVariables& gpCfg = ConfigManager::getGPConfig();
+  const AutocConfig& cfg = ConfigManager::getConfig();
 
   std::vector<int> topology = getCompiledTopology();
-  int popSize = gpCfg.PopulationSize;
-  int numGens = gpCfg.NumberOfGenerations;
+  int popSize = cfg.populationSize;
+  int numGens = cfg.numberOfGenerations;
 
   *logger.info() << "NN Evolution mode" << endl;
   *logger.info() << "  Topology: " << NN_TOPOLOGY_STRING
                  << " (" << NN_WEIGHT_COUNT << " weights)" << endl;
   *logger.info() << "  Population: " << popSize << endl;
   *logger.info() << "  Generations: " << numGens << endl;
-  *logger.info() << "  MutationSigma: " << extraCfg.nnMutationSigma << endl;
-  *logger.info() << "  CrossoverAlpha: " << extraCfg.nnCrossoverAlpha << endl;
-  *logger.info() << "  TournamentSize: " << gpCfg.TournamentSize << endl;
-  *logger.info() << "  CrossoverProb: " << gpCfg.CrossoverProbability << "%" << endl;
-  *logger.info() << "  CreationProb: " << gpCfg.CreationProbability << "%" << endl;
-  *logger.info() << "  MutationOnlyProb: " << gpCfg.SwapMutationProbability << "%" << endl;
-  *logger.info() << "  Elitism: " << gpCfg.AddBestToNewPopulation << endl;
+  *logger.info() << "  MutationSigma: " << cfg.nnMutationSigma << endl;
+  *logger.info() << "  CrossoverAlpha: " << cfg.nnCrossoverAlpha << endl;
+  *logger.info() << "  TournamentSize: " << cfg.tournamentSize << endl;
+  *logger.info() << "  CrossoverProb: " << cfg.crossoverProbability << "%" << endl;
+  *logger.info() << "  CreationProb: " << cfg.creationProbability << "%" << endl;
+  *logger.info() << "  MutationOnlyProb: " << cfg.swapMutationProbability << "%" << endl;
+  *logger.info() << "  Elitism: " << cfg.addBestToNewPopulation << endl;
 
   // Initialize population
   NNPopulation pop;
@@ -1854,7 +1877,7 @@ static void runNNEvolution(
 
   // Set initial mutation sigma from config
   for (auto& ind : pop.individuals) {
-    ind.mutation_sigma = static_cast<float>(extraCfg.nnMutationSigma);
+    ind.mutation_sigma = static_cast<float>(cfg.nnMutationSigma);
   }
 
   *logger.info() << "Population initialized." << endl;
@@ -1866,8 +1889,8 @@ static void runNNEvolution(
     gCurrentGeneration = gen;
 
     // Generate paths for this generation
-    generationPaths = generateSmoothPaths(extraCfg.generatorMethod,
-                                          extraCfg.simNumPathsPerGen,
+    generationPaths = generateSmoothPaths(const_cast<char*>(cfg.generatorMethod.c_str()),
+                                          cfg.simNumPathsPerGen,
                                           SIM_PATH_BOUNDS, SIM_PATH_BOUNDS,
                                           gPathSeed);
     rebuildGenerationScenarios(generationPaths);
@@ -2051,7 +2074,7 @@ static void runNNEvolution(
           *stream << oss.str();
 
           Aws::S3::Model::PutObjectRequest request;
-          request.SetBucket(extraCfg.s3Bucket);
+          request.SetBucket(cfg.s3Bucket);
           request.SetKey(keyName);
           request.SetBody(stream);
 
@@ -2085,12 +2108,12 @@ static void runNNEvolution(
     // Evolve next generation (skip on last gen)
     if (gen < numGens) {
       NNEvolveParams evoParams;
-      evoParams.tournament_size = gpCfg.TournamentSize;          // GP & NN
-      evoParams.crossover_prob = gpCfg.CrossoverProbability;     // GP & NN
-      evoParams.creation_prob = gpCfg.CreationProbability;       // GP & NN
-      evoParams.mutation_prob = gpCfg.SwapMutationProbability;   // GP & NN
-      evoParams.crossover_alpha = static_cast<float>(extraCfg.nnCrossoverAlpha); // NN only
-      evoParams.elitism_count = gpCfg.AddBestToNewPopulation;    // GP & NN
+      evoParams.tournament_size = cfg.tournamentSize;          // GP & NN
+      evoParams.crossover_prob = cfg.crossoverProbability;     // GP & NN
+      evoParams.creation_prob = cfg.creationProbability;       // GP & NN
+      evoParams.mutation_prob = cfg.swapMutationProbability;   // GP & NN
+      evoParams.crossover_alpha = static_cast<float>(cfg.nnCrossoverAlpha); // NN only
+      evoParams.elitism_count = cfg.addBestToNewPopulation;    // GP & NN
       nn_evolve_generation(pop, evoParams);
     }
   }
@@ -2144,76 +2167,77 @@ int main(int argc, char** argv)
 
   // Initialize ConfigManager first so we can access gpSeed
   ConfigManager::initialize(configFile, *logger.info());
+  const AutocConfig& cfg = ConfigManager::getConfig();
 
   // Init GP system with seed from config
   // Handle -1 as time-based seed (GP library doesn't recognize this convention)
   long gpSeed;
-  if (ConfigManager::getExtraConfig().gpSeed == -1) {
+  if (cfg.gpSeed == -1) {
     gpSeed = static_cast<long>(time(NULL));
     *logger.info() << "GPSeed: -1 (auto) -> " << gpSeed << endl;
   } else {
-    gpSeed = static_cast<long>(ConfigManager::getExtraConfig().gpSeed);
+    gpSeed = static_cast<long>(cfg.gpSeed);
   }
-  GPInit(1, gpSeed);
+  rng::seed(static_cast<uint64_t>(gpSeed));
 
   // AWS setup
   Aws::SDKOptions options;
   Aws::InitAPI(options);
 
   // initialize workers
-  threadPool = new ThreadPool(ConfigManager::getExtraConfig());
+  threadPool = new ThreadPool(ConfigManager::getConfig());
 
   // Print the configuration
-  *logger.info() << ConfigManager::getGPConfig() << endl;
-  *logger.info() << "SimNumPathsPerGen: " << ConfigManager::getExtraConfig().simNumPathsPerGen << endl;
-  *logger.info() << "EvalThreads: " << ConfigManager::getExtraConfig().evalThreads << endl;
-  *logger.info() << "MinisimProgram: " << ConfigManager::getExtraConfig().minisimProgram << endl;
-  *logger.info() << "MinisimPortOverride: " << ConfigManager::getExtraConfig().minisimPortOverride << endl;
-  *logger.info() << "EvaluateMode: " << ConfigManager::getExtraConfig().evaluateMode << endl;
-  *logger.info() << "ControllerType: " << ConfigManager::getExtraConfig().controllerType << endl;
-  *logger.info() << "WindScenarios: " << ConfigManager::getExtraConfig().windScenarioCount << endl;
-  *logger.info() << "GPSeed: " << ConfigManager::getExtraConfig().gpSeed << endl;
-  *logger.info() << "RandomPathSeedB: " << ConfigManager::getExtraConfig().randomPathSeedB << endl;
+  *logger.info() << "Config: pop=" << cfg.populationSize
+                 << " gens=" << cfg.numberOfGenerations << endl;
+  *logger.info() << "SimNumPathsPerGen: " << cfg.simNumPathsPerGen << endl;
+  *logger.info() << "EvalThreads: " << cfg.evalThreads << endl;
+  *logger.info() << "MinisimProgram: " << cfg.minisimProgram << endl;
+  *logger.info() << "MinisimPortOverride: " << cfg.minisimPortOverride << endl;
+  *logger.info() << "EvaluateMode: " << cfg.evaluateMode << endl;
+  *logger.info() << "ControllerType: " << cfg.controllerType << endl;
+  *logger.info() << "WindScenarios: " << cfg.windScenarioCount << endl;
+  *logger.info() << "GPSeed: " << cfg.gpSeed << endl;
+  *logger.info() << "RandomPathSeedB: " << cfg.randomPathSeedB << endl;
 
   // Log VARIATIONS1 settings and initialize global sigmas
-  const ExtraConfig& extraCfg = ConfigManager::getExtraConfig();
-  *logger.info() << "EnableEntryVariations: " << extraCfg.enableEntryVariations << endl;
-  *logger.info() << "EnableWindVariations: " << extraCfg.enableWindVariations << endl;
+  *logger.info() << "EnableEntryVariations: " << cfg.enableEntryVariations << endl;
+  *logger.info() << "EnableWindVariations: " << cfg.enableWindVariations << endl;
 
   // Initialize global variation parameters from config (degrees -> radians)
   // Store individual flags for selective application in populateVariationOffsets()
-  gEnableEntryVariations = (extraCfg.enableEntryVariations != 0);
-  gEnableWindVariations = (extraCfg.enableWindVariations != 0);
+  gEnableEntryVariations = (cfg.enableEntryVariations != 0);
+  gEnableWindVariations = (cfg.enableWindVariations != 0);
   gVariationSigmas = VariationSigmas::fromDegrees(
-      extraCfg.entryHeadingSigma,
-      extraCfg.entryRollSigma,
-      extraCfg.entryPitchSigma,
-      extraCfg.entrySpeedSigma,  // already a fraction
-      extraCfg.windDirectionSigma,
-      extraCfg.entryPositionRadiusSigma,  // meters (no conversion needed)
-      extraCfg.entryPositionAltSigma      // meters (no conversion needed)
+      cfg.entryHeadingSigma,
+      cfg.entryRollSigma,
+      cfg.entryPitchSigma,
+      cfg.entrySpeedSigma,  // already a fraction
+      cfg.windDirectionSigma,
+      cfg.entryPositionRadiusSigma,  // meters (no conversion needed)
+      cfg.entryPositionAltSigma      // meters (no conversion needed)
   );
 
   // Initialize global rabbit speed config
   gRabbitSpeedConfig = RabbitSpeedConfig{
-      extraCfg.rabbitSpeedNominal,
-      extraCfg.rabbitSpeedSigma,
-      extraCfg.rabbitSpeedMin,
-      extraCfg.rabbitSpeedMax,
-      extraCfg.rabbitSpeedCycleMin,
-      extraCfg.rabbitSpeedCycleMax
+      cfg.rabbitSpeedNominal,
+      cfg.rabbitSpeedSigma,
+      cfg.rabbitSpeedMin,
+      cfg.rabbitSpeedMax,
+      cfg.rabbitSpeedCycleMin,
+      cfg.rabbitSpeedCycleMax
   };
 
   // Log rabbit speed configuration
-  *logger.info() << "RabbitSpeed: nominal=" << extraCfg.rabbitSpeedNominal << " m/s"
-                 << " sigma=" << extraCfg.rabbitSpeedSigma << " m/s"
-                 << " range=[" << extraCfg.rabbitSpeedMin << ", " << extraCfg.rabbitSpeedMax << "] m/s"
-                 << " cycles=[" << extraCfg.rabbitSpeedCycleMin << ", " << extraCfg.rabbitSpeedCycleMax << "] s"
-                 << (extraCfg.rabbitSpeedSigma > 0 ? " (VARIABLE)" : " (CONSTANT)") << endl;
+  *logger.info() << "RabbitSpeed: nominal=" << cfg.rabbitSpeedNominal << " m/s"
+                 << " sigma=" << cfg.rabbitSpeedSigma << " m/s"
+                 << " range=[" << cfg.rabbitSpeedMin << ", " << cfg.rabbitSpeedMax << "] m/s"
+                 << " cycles=[" << cfg.rabbitSpeedCycleMin << ", " << cfg.rabbitSpeedCycleMax << "] s"
+                 << (cfg.rabbitSpeedSigma > 0 ? " (VARIABLE)" : " (CONSTANT)") << endl;
 
   // RAMP_LANDSCAPE: Initialize variation ramp globals
-  gTotalGenerations = ConfigManager::getGPConfig().NumberOfGenerations;
-  gVariationRampStep = extraCfg.variationRampStep;
+  gTotalGenerations = cfg.numberOfGenerations;
+  gVariationRampStep = cfg.variationRampStep;
   gCurrentGeneration = 0;
   if (gVariationRampStep > 0) {
     int totalSteps = gTotalGenerations / gVariationRampStep;
@@ -2226,21 +2250,21 @@ int main(int argc, char** argv)
   // SINGLE PRNG ARCHITECTURE: Pre-fetch all scenario variations from GPrand()
   // This consumes from GPrand() BEFORE GP evolution, ensuring deterministic sequence
   // When a variation type is disabled, defaults are stored in the table (not filtered later)
-  int windScenarioCount = std::max(extraCfg.windScenarioCount, 1);
+  int windScenarioCount = std::max(cfg.windScenarioCount, 1);
   prefetchAllVariations(windScenarioCount, gVariationSigmas, gRabbitSpeedConfig,
-                        extraCfg.randomPathSeedB,
+                        cfg.randomPathSeedB,
                         gEnableEntryVariations, gEnableWindVariations);
 
   // Log pre-fetched variations for verification
-  *logger.info() << "Sigmas: heading=" << extraCfg.entryHeadingSigma << "° "
-                 << "roll=" << extraCfg.entryRollSigma << "° "
-                 << "pitch=" << extraCfg.entryPitchSigma << "° "
-                 << "speed=" << (extraCfg.entrySpeedSigma * 100) << "% "
-                 << "wind=" << extraCfg.windDirectionSigma << "°" << endl;
+  *logger.info() << "Sigmas: heading=" << cfg.entryHeadingSigma << "° "
+                 << "roll=" << cfg.entryRollSigma << "° "
+                 << "pitch=" << cfg.entryPitchSigma << "° "
+                 << "speed=" << (cfg.entrySpeedSigma * 100) << "% "
+                 << "wind=" << cfg.windDirectionSigma << "°" << endl;
   logPrefetchedVariations(windScenarioCount, gpSeed);
 
   // Set training node mask before creating node set
-  setTrainingNodesMask(ConfigManager::getExtraConfig().trainingNodes);
+  setTrainingNodesMask(cfg.trainingNodes.c_str());
 
   // Create the adf function/terminal set and print it out.
   createNodeSet(adfNs);
@@ -2260,7 +2284,7 @@ int main(int argc, char** argv)
   // First set up names for data file.  Remember we should delete the
   // string from the stream, well just a few bytes
   ostringstream strOutFile, strStatFile;
-  const char* filePrefix = ConfigManager::getExtraConfig().evaluateMode ? "eval-" : "";
+  const char* filePrefix = cfg.evaluateMode ? "eval-" : "";
   strOutFile << filePrefix << "data.dat" << ends;
   strStatFile << filePrefix << "data.stc" << ends;
   fout.open(strOutFile.str());
@@ -2294,13 +2318,13 @@ int main(int argc, char** argv)
   };
 
   // Generate initial paths using pre-fetched gPathSeed (single PRNG architecture)
-  generationPaths = generateSmoothPaths(ConfigManager::getExtraConfig().generatorMethod,
-                                        ConfigManager::getExtraConfig().simNumPathsPerGen,
+  generationPaths = generateSmoothPaths(const_cast<char*>(cfg.generatorMethod.c_str()),
+                                        cfg.simNumPathsPerGen,
                                         SIM_PATH_BOUNDS, SIM_PATH_BOUNDS,
                                         gPathSeed);
 
   // DEBUG: Log segment counts for each path
-  std::cout << "\n=== Path Segment Counts (method=" << ConfigManager::getExtraConfig().generatorMethod
+  std::cout << "\n=== Path Segment Counts (method=" << cfg.generatorMethod
             << ", seed=" << gPathSeed << ") ===" << std::endl;
   int maxSegments = 0;
   for (size_t i = 0; i < generationPaths.size(); i++) {
@@ -2312,9 +2336,9 @@ int main(int argc, char** argv)
   std::cout << "===" << std::endl << std::endl;
 
   rebuildGenerationScenarios(generationPaths);
-  const int windsPerPath = std::max(ConfigManager::getExtraConfig().windScenarioCount, 1);
+  const int windsPerPath = std::max(cfg.windScenarioCount, 1);
   *logger.debug() << "Wind scenarios this generation: paths="
-                 << ConfigManager::getExtraConfig().simNumPathsPerGen
+                 << cfg.simNumPathsPerGen
                  << " windsPerPath=" << windsPerPath
                  << " dispatchScenarios=" << generationScenarios.size()
                  << " totalEvaluations=" << generationScenarios.size() * windsPerPath
@@ -2322,23 +2346,23 @@ int main(int argc, char** argv)
   warnIfScenarioMismatch();
 
   // Check controller type: NN evolution gets its own dedicated loop
-  bool isNNMode = (strcmp(ConfigManager::getExtraConfig().controllerType, "NN") == 0);
+  bool isNNMode = (cfg.controllerType == "NN");
 
-  if (isNNMode && ConfigManager::getExtraConfig().evaluateMode) {
+  if (isNNMode && cfg.evaluateMode) {
     // NN evaluation mode: load weight file, evaluate, report fitness
     runNNEvaluation(startTime, fout, bout);
   } else if (isNNMode) {
     // NN evolution mode
     runNNEvolution(startTime, runStartTime, fout, bout, logGenerationStats);
-  } else if (ConfigManager::getExtraConfig().evaluateMode) {
+  } else if (cfg.evaluateMode) {
     // Evaluation mode: use bytecode interpreter with external simulators
     *logger.info() << "Running in bytecode evaluation mode with external simulators..." << endl;
-    *logger.info() << "Loading bytecode file: " << ConfigManager::getExtraConfig().bytecodeFile << endl;
+    *logger.info() << "Loading bytecode file: " << cfg.bytecodeFile << endl;
     
     // Load the bytecode program
     GPBytecodeInterpreter interpreter;
-    if (!interpreter.loadProgram(ConfigManager::getExtraConfig().bytecodeFile)) {
-      *logger.error() << "Failed to load bytecode file: " << ConfigManager::getExtraConfig().bytecodeFile << endl;
+    if (!interpreter.loadProgram(cfg.bytecodeFile)) {
+      *logger.error() << "Failed to load bytecode file: " << cfg.bytecodeFile << endl;
       exit(1);
     }
     
@@ -2367,7 +2391,7 @@ int main(int argc, char** argv)
         evalData.scenarioList.clear();
         evalData.scenarioList.reserve(scenario.pathList.size());
         bool isBakeoff = isBakeoffMode();
-        const GPVariables& gpCfg = ConfigManager::getGPConfig();
+        const AutocConfig& cfg = ConfigManager::getConfig();
 
         for (size_t idx = 0; idx < scenario.pathList.size(); ++idx) {
           ScenarioMetadata meta;
@@ -2378,7 +2402,7 @@ int main(int argc, char** argv)
             meta.bakeoffSequence = 0;
           }
 
-          if (gpCfg.DemeticGrouping && gpCfg.DemeSize > 0) {
+          if (cfg.demeticGrouping && cfg.demeSize > 0) {
             // Demetic mode: scenario has one path variant across multiple winds
             meta.pathVariantIndex = scenario.pathVariantIndex;
             if (idx < scenario.windScenarios.size()) {
@@ -2769,7 +2793,7 @@ int main(int argc, char** argv)
     // Store results to S3
     if (bestOfEvalResults.pathList.size() > 0) {
       Aws::S3::Model::PutObjectRequest request;
-      request.SetBucket(ConfigManager::getExtraConfig().s3Bucket);
+      request.SetBucket(cfg.s3Bucket);
       request.SetKey(computedKeyName);
 
       std::ostringstream oss(std::ios::binary);
@@ -2791,7 +2815,8 @@ int main(int argc, char** argv)
     // Normal GP evolution mode
     // Create a population with this configuration
     *logger.info() << "Creating initial population ..." << endl;
-    MyPopulation* pop = new MyPopulation(ConfigManager::getGPConfig(), adfNs);
+    // TODO(T017-T018): Remove GPVariables bridge once GP code is deleted
+    MyPopulation* pop = new MyPopulation(ConfigManager::getConfig(), adfNs);
     pop->create();
     *logger.info() << "Ok." << endl;
     pop->createGenerationReport(1, 0, fout, bout, *logger.info());
@@ -2802,7 +2827,7 @@ int main(int argc, char** argv)
     // through all the generations ...
     MyPopulation* newPop = NULL;
 
-    for (int gen = 1; gen <= ConfigManager::getGPConfig().NumberOfGenerations; gen++)
+    for (int gen = 1; gen <= cfg.numberOfGenerations; gen++)
     {
       // RAMP_LANDSCAPE: Update current generation for variation scaling
       int prevGen = gCurrentGeneration;
@@ -2822,23 +2847,24 @@ int main(int argc, char** argv)
 
       // For this generation, build a smooth path goal using pre-fetched gPathSeed
       // (single PRNG architecture: consistent paths derived from GPSeed)
-      generationPaths = generateSmoothPaths(ConfigManager::getExtraConfig().generatorMethod,
-                                            ConfigManager::getExtraConfig().simNumPathsPerGen,
+      generationPaths = generateSmoothPaths(const_cast<char*>(cfg.generatorMethod.c_str()),
+                                            cfg.simNumPathsPerGen,
                                             SIM_PATH_BOUNDS, SIM_PATH_BOUNDS,
                                             gPathSeed);
       rebuildGenerationScenarios(generationPaths);
       warnIfScenarioMismatch();
 
       // Create a new generation from the old one by applying the genetic operators
-      if (!ConfigManager::getGPConfig().SteadyState)
-        newPop = new MyPopulation(ConfigManager::getGPConfig(), adfNs);
+      if (!cfg.steadyState)
+        // TODO(T017-T018): Remove GPVariables bridge once GP code is deleted
+        newPop = new MyPopulation(ConfigManager::getConfig(), adfNs);
       pop->generate(*newPop);
 
       // Enable evaluation output for this generation
       printEval = true;
 
       // Switch to new population first to get the correct best individual
-      if (!ConfigManager::getGPConfig().SteadyState)
+      if (!cfg.steadyState)
       {
         MyPopulation* oldPop = pop;
         pop = newPop;

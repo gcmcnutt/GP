@@ -1,12 +1,7 @@
 #include "config_manager.h"
-#include <vector>
 #include <fstream>
-#include <climits>
 #include <cstdlib>
-#include <cstring>
-#include "aircraft_state.h"
-#include "pathgen.h"
-#include "autoc.h"
+#include <INIReader.h>
 
 #include <aws/core/Aws.h>
 #include <aws/s3/S3Client.h>
@@ -14,16 +9,14 @@
 #include <aws/core/client/ClientConfiguration.h>
 
 // Static member definitions
-GPVariables* ConfigManager::gpConfig = nullptr;
-ExtraConfig* ConfigManager::extraConfig = nullptr;
-GPConfiguration* ConfigManager::gpConfiguration = nullptr;
+AutocConfig* ConfigManager::config = nullptr;
 bool ConfigManager::initialized = false;
 
 void ConfigManager::initialize(const std::string& filename, std::ostream& out) {
     if (initialized) {
-        return; // Already initialized
+        return;
     }
-    
+
     // Check if config file exists
     std::ifstream configFile(filename);
     if (!configFile.good()) {
@@ -32,110 +25,106 @@ void ConfigManager::initialize(const std::string& filename, std::ostream& out) {
         exit(1);
     }
     configFile.close();
-    
-    // Create config instances
-    gpConfig = new GPVariables();
-    extraConfig = new ExtraConfig();
-    
-    // Create the configuration array (moved from autoc.cc)
-    GPConfigVarInformation* configArray = createConfigArray();
-    
-    // Use GPConfiguration to parse the file
-    gpConfiguration = new GPConfiguration(out, const_cast<char*>(filename.c_str()), configArray);
-    
-    // Print S3 configuration once during initialization
-    if (strcmp(extraConfig->s3Profile, "default") != 0) {
-        out << "S3 Configuration: Using MinIO S3 (profile: " << extraConfig->s3Profile << ", bucket: " << extraConfig->s3Bucket << ")" << std::endl;
-    } else {
-        out << "S3 Configuration: Using AWS S3 (profile: " << extraConfig->s3Profile << ", bucket: " << extraConfig->s3Bucket << ")" << std::endl;
+
+    INIReader reader(filename);
+    if (reader.ParseError() != 0) {
+        out << "FATAL ERROR: Cannot parse configuration file '" << filename << "'" << std::endl;
+        exit(1);
     }
-    
+
+    config = new AutocConfig();
+
+    // Evolution core (formerly GPVariables)
+    config->populationSize = reader.GetInteger("", "PopulationSize", config->populationSize);
+    config->numberOfGenerations = reader.GetInteger("", "NumberOfGenerations", config->numberOfGenerations);
+    config->creationType = reader.GetInteger("", "CreationType", config->creationType);
+    config->crossoverProbability = reader.GetReal("", "CrossoverProbability", config->crossoverProbability);
+    config->creationProbability = reader.GetReal("", "CreationProbability", config->creationProbability);
+    config->maximumDepthForCreation = reader.GetInteger("", "MaximumDepthForCreation", config->maximumDepthForCreation);
+    config->maximumDepthForCrossover = reader.GetInteger("", "MaximumDepthForCrossover", config->maximumDepthForCrossover);
+    config->selectionType = reader.GetInteger("", "SelectionType", config->selectionType);
+    config->tournamentSize = reader.GetInteger("", "TournamentSize", config->tournamentSize);
+    config->demeticGrouping = reader.GetInteger("", "DemeticGrouping", config->demeticGrouping);
+    config->demeSize = reader.GetInteger("", "DemeSize", config->demeSize);
+    config->demeticMigProbability = reader.GetReal("", "DemeticMigProbability", config->demeticMigProbability);
+    config->swapMutationProbability = reader.GetReal("", "SwapMutationProbability", config->swapMutationProbability);
+    config->shrinkMutationProbability = reader.GetReal("", "ShrinkMutationProbability", config->shrinkMutationProbability);
+    config->addBestToNewPopulation = reader.GetInteger("", "AddBestToNewPopulation", config->addBestToNewPopulation);
+    config->steadyState = reader.GetInteger("", "SteadyState", config->steadyState);
+
+    // Simulation
+    config->simNumPathsPerGen = reader.GetInteger("", "SimNumPathsPerGeneration", config->simNumPathsPerGen);
+    config->evalThreads = reader.GetInteger("", "EvalThreads", config->evalThreads);
+    config->generatorMethod = reader.Get("", "PathGeneratorMethod", config->generatorMethod);
+    config->minisimProgram = reader.Get("", "MinisimProgram", config->minisimProgram);
+    config->minisimPortOverride = static_cast<unsigned short>(reader.GetInteger("", "MinisimPortOverride", config->minisimPortOverride));
+
+    // S3
+    config->s3Bucket = reader.Get("", "S3Bucket", config->s3Bucket);
+    config->s3Profile = reader.Get("", "S3Profile", config->s3Profile);
+
+    // Eval mode
+    config->evaluateMode = reader.GetInteger("", "EvaluateMode", config->evaluateMode);
+    config->bytecodeFile = reader.Get("", "BytecodeFile", config->bytecodeFile);
+
+    // Scenarios
+    config->windScenarioCount = reader.GetInteger("", "WindScenarios", config->windScenarioCount);
+    config->randomPathSeedB = reader.GetInteger("", "RandomPathSeedB", config->randomPathSeedB);
+    config->gpSeed = reader.GetInteger("", "GPSeed", config->gpSeed);
+    config->trainingNodes = reader.Get("", "TrainingNodes", config->trainingNodes);
+
+    // Entry and wind direction variations
+    config->enableEntryVariations = reader.GetInteger("", "EnableEntryVariations", config->enableEntryVariations);
+    config->enableWindVariations = reader.GetInteger("", "EnableWindVariations", config->enableWindVariations);
+    config->entryHeadingSigma = reader.GetReal("", "EntryHeadingSigma", config->entryHeadingSigma);
+    config->entryRollSigma = reader.GetReal("", "EntryRollSigma", config->entryRollSigma);
+    config->entryPitchSigma = reader.GetReal("", "EntryPitchSigma", config->entryPitchSigma);
+    config->entrySpeedSigma = reader.GetReal("", "EntrySpeedSigma", config->entrySpeedSigma);
+    config->windDirectionSigma = reader.GetReal("", "WindDirectionSigma", config->windDirectionSigma);
+
+    // Entry position variations
+    config->entryPositionRadiusSigma = reader.GetReal("", "EntryPositionRadiusSigma", config->entryPositionRadiusSigma);
+    config->entryPositionAltSigma = reader.GetReal("", "EntryPositionAltSigma", config->entryPositionAltSigma);
+
+    // Variation landscape ramp
+    config->variationRampStep = reader.GetInteger("", "VariationRampStep", config->variationRampStep);
+
+    // Variable rabbit speed
+    config->rabbitSpeedNominal = reader.GetReal("", "RabbitSpeedNominal", config->rabbitSpeedNominal);
+    config->rabbitSpeedSigma = reader.GetReal("", "RabbitSpeedSigma", config->rabbitSpeedSigma);
+    config->rabbitSpeedMin = reader.GetReal("", "RabbitSpeedMin", config->rabbitSpeedMin);
+    config->rabbitSpeedMax = reader.GetReal("", "RabbitSpeedMax", config->rabbitSpeedMax);
+    config->rabbitSpeedCycleMin = reader.GetReal("", "RabbitSpeedCycleMin", config->rabbitSpeedCycleMin);
+    config->rabbitSpeedCycleMax = reader.GetReal("", "RabbitSpeedCycleMax", config->rabbitSpeedCycleMax);
+
+    // Neural network evolution
+    config->controllerType = reader.Get("", "ControllerType", config->controllerType);
+    config->nnMutationSigma = reader.GetReal("", "NNMutationSigma", config->nnMutationSigma);
+    config->nnCrossoverAlpha = reader.GetReal("", "NNCrossoverAlpha", config->nnCrossoverAlpha);
+    config->nnWeightFile = reader.Get("", "NNWeightFile", config->nnWeightFile);
+    config->nnInitMethod = reader.Get("", "NNInitMethod", config->nnInitMethod);
+
+    // Print S3 configuration
+    if (config->s3Profile != "default") {
+        out << "S3 Configuration: Using MinIO S3 (profile: " << config->s3Profile << ", bucket: " << config->s3Bucket << ")" << std::endl;
+    } else {
+        out << "S3 Configuration: Using AWS S3 (profile: " << config->s3Profile << ", bucket: " << config->s3Bucket << ")" << std::endl;
+    }
+
     initialized = true;
 }
 
-GPVariables& ConfigManager::getGPConfig() {
+AutocConfig& ConfigManager::getConfig() {
     if (!initialized) {
         std::cerr << "Error: ConfigManager not initialized. Call ConfigManager::initialize() first." << std::endl;
-        static GPVariables defaultConfig;
+        static AutocConfig defaultConfig;
         return defaultConfig;
     }
-    return *gpConfig;
-}
-
-ExtraConfig& ConfigManager::getExtraConfig() {
-    if (!initialized) {
-        std::cerr << "Error: ConfigManager not initialized. Call ConfigManager::initialize() first." << std::endl;
-        static ExtraConfig defaultConfig;
-        return defaultConfig;
-    }
-    return *extraConfig;
+    return *config;
 }
 
 bool ConfigManager::isInitialized() {
     return initialized;
-}
-
-// Create the configuration array (moved from autoc.cc lines 220-248)
-GPConfigVarInformation* ConfigManager::createConfigArray() {
-    static GPConfigVarInformation configArray[] = {
-        {"PopulationSize", DATAINT, &gpConfig->PopulationSize},
-        {"NumberOfGenerations", DATAINT, &gpConfig->NumberOfGenerations},
-        {"CreationType", DATAINT, &gpConfig->CreationType},
-        {"CrossoverProbability", DATADOUBLE, &gpConfig->CrossoverProbability},
-        {"CreationProbability", DATADOUBLE, &gpConfig->CreationProbability},
-        {"MaximumDepthForCreation", DATAINT, &gpConfig->MaximumDepthForCreation},
-        {"MaximumDepthForCrossover", DATAINT, &gpConfig->MaximumDepthForCrossover},
-        {"SelectionType", DATAINT, &gpConfig->SelectionType},
-        {"TournamentSize", DATAINT, &gpConfig->TournamentSize},
-        {"DemeticGrouping", DATAINT, &gpConfig->DemeticGrouping},
-        {"DemeSize", DATAINT, &gpConfig->DemeSize},
-        {"DemeticMigProbability", DATADOUBLE, &gpConfig->DemeticMigProbability},
-        {"SwapMutationProbability", DATADOUBLE, &gpConfig->SwapMutationProbability},
-        {"ShrinkMutationProbability", DATADOUBLE, &gpConfig->ShrinkMutationProbability},
-        {"AddBestToNewPopulation", DATAINT, &gpConfig->AddBestToNewPopulation},
-        {"SteadyState", DATAINT, &gpConfig->SteadyState},
-        {"SimNumPathsPerGeneration", DATAINT, &extraConfig->simNumPathsPerGen},
-        {"EvalThreads", DATAINT, &extraConfig->evalThreads},
-        {"PathGeneratorMethod", DATASTRING, &extraConfig->generatorMethod},
-        {"MinisimProgram", DATASTRING, &extraConfig->minisimProgram},
-        {"MinisimPortOverride", DATAINT, &extraConfig->minisimPortOverride},
-        {"S3Bucket", DATASTRING, &extraConfig->s3Bucket},
-        {"S3Profile", DATASTRING, &extraConfig->s3Profile},
-        {"EvaluateMode", DATAINT, &extraConfig->evaluateMode},
-        {"BytecodeFile", DATASTRING, &extraConfig->bytecodeFile},
-        {"WindScenarios", DATAINT, &extraConfig->windScenarioCount},
-        {"RandomPathSeedB", DATAINT, &extraConfig->randomPathSeedB},
-        {"GPSeed", DATAINT, &extraConfig->gpSeed},
-        {"TrainingNodes", DATASTRING, &extraConfig->trainingNodes},
-        // VARIATIONS1: Entry and wind direction variations
-        {"EnableEntryVariations", DATAINT, &extraConfig->enableEntryVariations},
-        {"EnableWindVariations", DATAINT, &extraConfig->enableWindVariations},
-        {"EntryHeadingSigma", DATADOUBLE, &extraConfig->entryHeadingSigma},
-        {"EntryRollSigma", DATADOUBLE, &extraConfig->entryRollSigma},
-        {"EntryPitchSigma", DATADOUBLE, &extraConfig->entryPitchSigma},
-        {"EntrySpeedSigma", DATADOUBLE, &extraConfig->entrySpeedSigma},
-        {"WindDirectionSigma", DATADOUBLE, &extraConfig->windDirectionSigma},
-        // Entry position variations (see specs/005-entry-fitness-ramp)
-        {"EntryPositionRadiusSigma", DATADOUBLE, &extraConfig->entryPositionRadiusSigma},
-        {"EntryPositionAltSigma", DATADOUBLE, &extraConfig->entryPositionAltSigma},
-        // Variation landscape ramp (see specs/RAMP_LANDSCAPE.md)
-        {"VariationRampStep", DATAINT, &extraConfig->variationRampStep},
-        // Variable rabbit speed (see specs/VARIABLE_RABBIT.md)
-        {"RabbitSpeedNominal", DATADOUBLE, &extraConfig->rabbitSpeedNominal},
-        {"RabbitSpeedSigma", DATADOUBLE, &extraConfig->rabbitSpeedSigma},
-        {"RabbitSpeedMin", DATADOUBLE, &extraConfig->rabbitSpeedMin},
-        {"RabbitSpeedMax", DATADOUBLE, &extraConfig->rabbitSpeedMax},
-        {"RabbitSpeedCycleMin", DATADOUBLE, &extraConfig->rabbitSpeedCycleMin},
-        {"RabbitSpeedCycleMax", DATADOUBLE, &extraConfig->rabbitSpeedCycleMax},
-        // Neural network evolution (see specs/013-neuroevolution)
-        {"ControllerType", DATASTRING, &extraConfig->controllerType},
-        {"NNMutationSigma", DATADOUBLE, &extraConfig->nnMutationSigma},
-        {"NNCrossoverAlpha", DATADOUBLE, &extraConfig->nnCrossoverAlpha},
-        {"NNWeightFile", DATASTRING, &extraConfig->nnWeightFile},
-        {"NNInitMethod", DATASTRING, &extraConfig->nnInitMethod},
-        {"", DATAINT, NULL}
-    };
-    return configArray;
 }
 
 std::shared_ptr<Aws::S3::S3Client> ConfigManager::getS3Client() {
@@ -143,23 +132,22 @@ std::shared_ptr<Aws::S3::S3Client> ConfigManager::getS3Client() {
         std::cerr << "Error: ConfigManager not initialized. Call ConfigManager::initialize() first." << std::endl;
         return nullptr;
     }
-    
-    const ExtraConfig& extraCfg = getExtraConfig();
-    
-    // real S3 or local minio?
+
+    const AutocConfig& cfg = getConfig();
+
     Aws::Client::ClientConfiguration clientConfig;
     Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy policy = Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::RequestDependent;
-    
-    if (strcmp(extraCfg.s3Profile, "default") != 0) {
-        clientConfig.endpointOverride = "http://localhost:9000"; // MinIO server address
-        clientConfig.scheme = Aws::Http::Scheme::HTTP; // Use HTTP instead of HTTPS
-        clientConfig.verifySSL = false; // Disable SSL verification for local testing
-        
+
+    if (cfg.s3Profile != "default") {
+        clientConfig.endpointOverride = "http://localhost:9000";
+        clientConfig.scheme = Aws::Http::Scheme::HTTP;
+        clientConfig.verifySSL = false;
         policy = Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never;
     }
-    
-    auto credentialsProvider = Aws::MakeShared<Aws::Auth::ProfileConfigFileAWSCredentialsProvider>("CredentialsProvider", extraCfg.s3Profile);
-    
+
+    auto credentialsProvider = Aws::MakeShared<Aws::Auth::ProfileConfigFileAWSCredentialsProvider>(
+        "CredentialsProvider", cfg.s3Profile.c_str());
+
     return Aws::MakeShared<Aws::S3::S3Client>("S3Client",
         credentialsProvider,
         clientConfig,

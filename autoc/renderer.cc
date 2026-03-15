@@ -299,7 +299,7 @@ vtkSmartPointer<vtkPolyData> Renderer::createTapeSet(vec3 offset, const std::vec
 bool Renderer::updateGenerationDisplay(int newGen) {
   // now do initial fetch
   Aws::S3::Model::GetObjectRequest request;
-  request.SetBucket(ConfigManager::getExtraConfig().s3Bucket);
+  request.SetBucket(ConfigManager::getConfig().s3Bucket);
   std::string keyName = computedKeyName + "gen" + std::to_string(newGen) + ".dmp";
   request.SetKey(keyName);
   auto outcome = getS3Client()->GetObject(request);
@@ -1490,7 +1490,7 @@ int main(int argc, char** argv) {
   // should we look up the latest run?
   if (computedKeyName.empty()) {
     Aws::S3::Model::ListObjectsV2Request listFolders;
-    listFolders.SetBucket(ConfigManager::getExtraConfig().s3Bucket);
+    listFolders.SetBucket(ConfigManager::getConfig().s3Bucket);
     listFolders.SetPrefix("autoc-");
     listFolders.SetDelimiter("/");
 
@@ -1519,7 +1519,7 @@ int main(int argc, char** argv) {
 
   // ok for this run, look for the last generation
   Aws::S3::Model::ListObjectsV2Request listItem;
-  listItem.SetBucket(ConfigManager::getExtraConfig().s3Bucket);
+  listItem.SetBucket(ConfigManager::getConfig().s3Bucket);
   listItem.SetPrefix(computedKeyName + "gen");
   bool isTruncated = false;
   do {
@@ -2350,7 +2350,7 @@ void Renderer::jumpToNewestGeneration() {
   auto s3_client = getS3Client();
   
   Aws::S3::Model::ListObjectsV2Request listItem;
-  listItem.SetBucket(ConfigManager::getExtraConfig().s3Bucket);
+  listItem.SetBucket(ConfigManager::getConfig().s3Bucket);
   listItem.SetPrefix(computedKeyName + "gen");
   
   std::string newestKeyName = "";

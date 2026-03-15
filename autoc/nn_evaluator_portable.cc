@@ -1,14 +1,11 @@
 #include "nn_evaluator_portable.h"
+#include "rng.h"
 #include <cmath>
 #include <array>
 #include <algorithm>
 
 #ifndef GP_TEST
 #include "gp_evaluator_portable.h"
-#endif
-
-#if defined(GP_BUILD) && !defined(GP_TEST)
-#include "gp_math_utils.h"
 #endif
 
 // ============================================================
@@ -126,26 +123,8 @@ void nn_forward(const float* weights, const std::vector<int>& topology,
 }
 
 // ============================================================
-// T037: Xavier/Glorot initialization using GPrand()
+// T037: Xavier/Glorot initialization
 // ============================================================
-
-// Local Box-Muller Gaussian for builds without GPrand (test/embedded)
-#if !defined(GP_BUILD) || defined(GP_TEST)
-namespace {
-static long nn_rand_state = 42;
-inline long nn_local_rand() {
-    nn_rand_state = (nn_rand_state * 1103515245L + 12345L) & 0x7FFFFFFF;
-    return nn_rand_state;
-}
-inline double nn_local_gaussian(double sigma) {
-    constexpr double RNMX = 2147483646.0;
-    double u1 = (nn_local_rand() / RNMX) * 0.999 + 0.001;
-    double u2 = nn_local_rand() / RNMX;
-    double z = std::sqrt(-2.0 * std::log(u1)) * std::cos(2.0 * M_PI * u2);
-    return z * sigma;
-}
-} // namespace
-#endif
 
 void nn_xavier_init(NNGenome& genome) {
     int total = nn_weight_count(genome.topology);
@@ -157,14 +136,9 @@ void nn_xavier_init(NNGenome& genome) {
         int fan_out = genome.topology[layer + 1];
         double stddev = std::sqrt(1.0 / fan_in);
 
-        // Initialize weights with Gaussian(0, stddev)
         int num_weights = fan_in * fan_out;
         for (int i = 0; i < num_weights; i++) {
-#if defined(GP_BUILD) && !defined(GP_TEST)
-            genome.weights[idx++] = static_cast<float>(GPrandGaussian(stddev));
-#else
-            genome.weights[idx++] = static_cast<float>(nn_local_gaussian(stddev));
-#endif
+            genome.weights[idx++] = static_cast<float>(rng::randGaussian(stddev));
         }
 
         // Initialize biases to zero

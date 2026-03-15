@@ -25,7 +25,7 @@ gp_vec3 cubicInterpolate(const gp_vec3& p0, const gp_vec3& p1, const gp_vec3& p2
 // Generate paths with controllable random seed
 // For 'aeroStandard' and deterministic methods: use ONE seed for all numPaths
 // For 'random' method: generate a NEW seed for each path
-std::vector<std::vector<Path>> generateSmoothPaths(char* method, int numPaths, gp_scalar radius, gp_scalar height, unsigned int baseSeed);
+std::vector<std::vector<Path>> generateSmoothPaths(const std::string& method, int numPaths, gp_scalar radius, gp_scalar height, unsigned int baseSeed);
 
 class GeneratorMethod {
 public:

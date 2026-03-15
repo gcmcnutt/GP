@@ -1,5 +1,5 @@
-#include "gp.h"
 #include "pathgen.h"
+#include "rng.h"
 #include <cmath>
 #include <iostream>
 #include <ctime>
@@ -9,9 +9,9 @@
 // Function to generate a random point within a cylinder
 gp_vec3 randomPointInCylinder(gp_scalar radius, gp_scalar height, gp_scalar base) {
   // Generate random values
-  gp_scalar r = radius * std::cbrtf(static_cast<gp_scalar>(GPrand()) / static_cast<gp_scalar>(RAND_MAX));
-  gp_scalar theta = (static_cast<gp_scalar>(GPrand()) / static_cast<gp_scalar>(RAND_MAX)) * static_cast<gp_scalar>(M_PI * 2.0);
-  gp_scalar z = base - (static_cast<gp_scalar>(GPrand()) / static_cast<gp_scalar>(RAND_MAX)) * height;
+  gp_scalar r = radius * std::cbrtf(static_cast<gp_scalar>(rng::randDouble()));
+  gp_scalar theta = static_cast<gp_scalar>(rng::randDouble()) * static_cast<gp_scalar>(M_PI * 2.0);
+  gp_scalar z = base - static_cast<gp_scalar>(rng::randDouble()) * height;
 
   // Convert to Cartesian coordinates
   gp_scalar x = r * std::cos(theta);
@@ -29,30 +29,30 @@ gp_vec3 cubicInterpolate(const gp_vec3& p0, const gp_vec3& p1, const gp_vec3& p2
 }
 
 // Function to generate a smooth random paths within a half-sphere
-std::vector<std::vector<Path>> generateSmoothPaths(char* method, int numPaths, gp_scalar radius, gp_scalar height, unsigned int baseSeed) {
+std::vector<std::vector<Path>> generateSmoothPaths(const std::string& method, int numPaths, gp_scalar radius, gp_scalar height, unsigned int baseSeed) {
   std::vector<std::vector<Path>> paths;
 
   GeneratorMethod* generatorMethod;
 
-  if (strcmp(method, "random") == 0) {
+  if (method == "random") {
     generatorMethod = new GenerateRandom();
   }
-  else if (strcmp(method, "classic") == 0) {
+  else if (method == "classic") {
     generatorMethod = new GenerateClassic();
   }
-  else if (strcmp(method, "computedPaths") == 0) {
+  else if (method == "computedPaths") {
     generatorMethod = new GenerateComputedPaths();
   }
-  else if (strcmp(method, "longSequential") == 0) {
+  else if (method == "longSequential") {
     generatorMethod = new GenerateLongSequential();
   }
-  else if (strcmp(method, "aeroStandard") == 0) {
+  else if (method == "aeroStandard") {
     generatorMethod = new GenerateAeroStandard();
   }
-  else if (strcmp(method, "line") == 0) {
+  else if (method == "line") {
     generatorMethod = new GenerateLine();
   }
-  else if (strcmp(method, "progressiveDistance") == 0) {
+  else if (method == "progressiveDistance") {
     generatorMethod = new GenerateProgressiveDistance();
   }
   else {
@@ -62,7 +62,7 @@ std::vector<std::vector<Path>> generateSmoothPaths(char* method, int numPaths, g
 
   // For 'random' method: create a NEW seed per path using an mt19937 instance
   // For all other methods (aeroStandard, etc): use the SAME baseSeed for all paths
-  bool useNewSeedPerPath = (strcmp(method, "random") == 0);
+  bool useNewSeedPerPath = (method == "random");
   std::mt19937 seedGenerator(baseSeed);
 
   for (int i = 0; i < numPaths; ++i) {

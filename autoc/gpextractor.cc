@@ -345,7 +345,7 @@ int main(int argc, char** argv) {
   // should we look up the latest run?
   if (computedKeyName.empty()) {
     Aws::S3::Model::ListObjectsV2Request listFolders;
-    listFolders.SetBucket(ConfigManager::getExtraConfig().s3Bucket);
+    listFolders.SetBucket(ConfigManager::getConfig().s3Bucket);
     listFolders.SetPrefix("autoc-");
     listFolders.SetDelimiter("/");
 
@@ -381,7 +381,7 @@ int main(int argc, char** argv) {
   } else {
     // Find the latest generation
     Aws::S3::Model::ListObjectsV2Request listItem;
-    listItem.SetBucket(ConfigManager::getExtraConfig().s3Bucket);
+    listItem.SetBucket(ConfigManager::getConfig().s3Bucket);
     listItem.SetPrefix(computedKeyName + "gen");
     bool isTruncated = false;
     do {
@@ -415,7 +415,7 @@ int main(int argc, char** argv) {
   // Fetch the object from S3
   EvalResults evalResults;
   Aws::S3::Model::GetObjectRequest request;
-  request.SetBucket(ConfigManager::getExtraConfig().s3Bucket);
+  request.SetBucket(ConfigManager::getConfig().s3Bucket);
   request.SetKey(keyName);
   auto outcome = s3_client->GetObject(request);
   

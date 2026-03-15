@@ -12,7 +12,7 @@ Binary length-prefixed messages over TCP. Single format for both train and eval 
 └──────────────┴──────────────────────┘
 ```
 
-All multi-byte values are host byte order (same-machine communication only).
+All multi-byte values are **little-endian** for cross-platform portability (x86 ↔ ARM32/ARM64). IEEE 754 float/double representation assumed.
 
 ## Messages
 

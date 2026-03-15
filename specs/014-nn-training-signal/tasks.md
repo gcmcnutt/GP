@@ -19,15 +19,15 @@
 
 **Purpose**: Dependency analysis and contract tests that define surviving behavior
 
-- [ ] T001 Run `nm ~/GP/lib/libgp.a | grep ' T '` and document all 103 exported symbols used by autoc in specs/014-nn-training-signal/analysis/libgp-symbols.md
-- [ ] T002 Scan all `#include "gp.h"` and `#include "gpconfig.h"` across 11 autoc files, document transitive usage in specs/014-nn-training-signal/analysis/gp-includes.md
-- [ ] T003 Scan all `#include <boost/` across autoc files, document per-file usage in specs/014-nn-training-signal/analysis/boost-includes.md
-- [ ] T004 [P] Write contract test for NN evaluator (sensor-in/control-out: 22 inputs → 3 outputs) in autoc/tests/contract_evaluator_tests.cc
-- [ ] T005 [P] Write contract test for config parsing (load autoc.ini, verify key types and defaults) in autoc/tests/contract_config_tests.cc
-- [ ] T006 [P] Write contract test for NN evolution loop (1 generation: init → evaluate → select → reproduce → verify fitness improves) in autoc/tests/contract_evolution_tests.cc
-- [ ] T006a [P] Write contract test for RPC transport (serialize EvalRequest/EvalResponse, round-trip, verify fields match) in autoc/tests/rpc_transport_tests.cc
-- [ ] T007 Update autoc/CMakeLists.txt to add new contract test targets and ensure tests build into build/tests/
-- [ ] T008 Verify all existing + new tests pass: `cd ~/GP/build && ctest --output-on-failure`
+- [X] T001 Run `nm ~/GP/lib/libgp.a | grep ' T '` and document all 103 exported symbols used by autoc in specs/014-nn-training-signal/analysis/libgp-symbols.md
+- [X] T002 Scan all `#include "gp.h"` and `#include "gpconfig.h"` across 11 autoc files, document transitive usage in specs/014-nn-training-signal/analysis/gp-includes.md
+- [X] T003 Scan all `#include <boost/` across autoc files, document per-file usage in specs/014-nn-training-signal/analysis/boost-includes.md
+- [X] T004 [P] Write contract test for NN evaluator (sensor-in/control-out: 22 inputs → 3 outputs) in autoc/tests/contract_evaluator_tests.cc
+- [X] T005 [P] Write contract test for config parsing (load autoc.ini, verify key types and defaults) in autoc/tests/contract_config_tests.cc
+- [X] T006 [P] Write contract test for NN evolution loop (1 generation: init → evaluate → select → reproduce → verify fitness improves) in autoc/tests/contract_evolution_tests.cc
+- [X] T006a [P] Write contract test for RPC transport (serialize EvalRequest/EvalResponse, round-trip, verify fields match — little-endian wire format for x86↔ARM portability) in autoc/tests/rpc_transport_tests.cc
+- [X] T007 Update autoc/CMakeLists.txt to add new contract test targets and ensure tests build into build/tests/
+- [X] T008 Verify all existing + new tests pass: `cd ~/GP/build && ctest --output-on-failure`
 
 **Checkpoint**: Dependency surface fully documented, contract tests pass, safe to begin surgery
 
@@ -41,17 +41,17 @@
 
 ### 2a: Vendor inih config parser
 
-- [ ] T009 Vendor inih library (ini.h, ini.c, INIReader.h, INIReader.cpp) into autoc/third_party/inih/
-- [ ] T010 Add inih to autoc/CMakeLists.txt as a source dependency
-- [ ] T011 Rewrite autoc/config_manager.h to use inih INIReader instead of GPConfiguration/GPVariables/GPConfigVarInformation — remove `#include "gp.h"` and `#include "gpconfig.h"`
-- [ ] T012 Rewrite autoc/config_manager.cc to use INIReader::GetInteger/GetReal/GetString with empty section — remove all DATAINT/DATADOUBLE/DATASTRING usage
-- [ ] T013 Verify contract_config_tests pass with new parser
+- [X] T009 Vendor inih library via CMake FetchContent (r58 tag)
+- [X] T010 Add inih to autoc/CMakeLists.txt as a static library dependency
+- [X] T011 Rewrite autoc/config_manager.h: unified AutocConfig struct replaces GPVariables + ExtraConfig — removed `#include "gp.h"` and `#include "gpconfig.h"`
+- [X] T012 Rewrite autoc/config_manager.cc to use INIReader::GetInteger/GetReal/GetString — updated all callers across autoc.cc, nnextractor.cc, renderer.cc, gpextractor.cc, threadpool.h, pathgen.cc
+- [X] T013 Verify contract_config_tests pass with new parser
 
 ### 2b: Replace PRNG
 
-- [ ] T014 [P] Create autoc/rng.h with std::mt19937 wrapper replacing GPrand()/GPsrand()/GPRandomPercent()
-- [ ] T015 Replace GPrand() calls in autoc/pathgen.cc with rng.h wrapper — remove `#include "gp.h"`
-- [ ] T016 Replace GPrand() calls in autoc/gp_math_utils.h with rng.h wrapper — remove `#include "gp.h"`
+- [X] T014 [P] Create autoc/rng.h with std::mt19937 wrapper replacing GPrand()/GPsrand()/GPRandomPercent()
+- [X] T015 Replace GPrand() calls in autoc/pathgen.cc, autoc.cc, variation_generator.h, nn_population.cc, nn_evaluator_portable.cc with rng.h
+- [X] T016 Replace GPrandGaussian/GPrandDouble in gp_math_utils.h with rng.h delegates — removed `#include "gp.h"`
 
 ### 2c: Break GP inheritance and remove GP code
 

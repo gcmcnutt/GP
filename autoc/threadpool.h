@@ -16,6 +16,7 @@
 #include <thread>
 
 #include "autoc.h"
+#include "config_manager.h"
 #include "logger.h"
 
 using namespace std;
@@ -32,7 +33,7 @@ private:
   std::atomic<int> active_tasks{ 0 };
   std::atomic<int> tasks_in_queue{ 0 };
 
-  void worker(int id, ExtraConfig& extraCfg) {
+  void worker(int id, AutocConfig& extraCfg) {
     auto& context = *worker_contexts[id];
     context.workerId = id;
 
@@ -86,7 +87,7 @@ private:
   }
 
 public:
-  ThreadPool(ExtraConfig& extraCfg) : stop(false) {
+  ThreadPool(AutocConfig& extraCfg) : stop(false) {
     worker_contexts.reserve(extraCfg.evalThreads);
     for (int i = 0; i < extraCfg.evalThreads; ++i) {
       worker_contexts.push_back(std::make_unique<WorkerContext>());

@@ -1,58 +1,13 @@
 #include "nn_population.h"
+#include "rng.h"
 #include <cmath>
 #include <algorithm>
 #include <limits>
 
-// Use local RNG for test/embedded builds, GPrand for full builds
-#if defined(GP_BUILD) && !defined(GP_TEST)
-#include "gp_math_utils.h"
-#else
 namespace {
-static long nn_pop_rand_state = 54321;
-inline long nn_pop_rand() {
-    nn_pop_rand_state = (nn_pop_rand_state * 1103515245L + 12345L) & 0x7FFFFFFF;
-    return nn_pop_rand_state;
-}
-inline double nn_pop_rand_double() {
-    return nn_pop_rand() / 2147483646.0;
-}
-inline double nn_pop_rand_gaussian(double sigma) {
-    double u1 = nn_pop_rand_double() * 0.999 + 0.001;
-    double u2 = nn_pop_rand_double();
-    double z = std::sqrt(-2.0 * std::log(u1)) * std::cos(2.0 * M_PI * u2);
-    return z * sigma;
-}
-inline int nn_pop_rand_int(int max_exclusive) {
-    return static_cast<int>(nn_pop_rand() % max_exclusive);
-}
-} // namespace
-#endif
-
-// Portable wrappers
-namespace {
-inline double randDouble() {
-#if defined(GP_BUILD) && !defined(GP_TEST)
-    return GPrandDouble();
-#else
-    return nn_pop_rand_double();
-#endif
-}
-
-inline double randGaussian(double sigma) {
-#if defined(GP_BUILD) && !defined(GP_TEST)
-    return GPrandGaussian(sigma);
-#else
-    return nn_pop_rand_gaussian(sigma);
-#endif
-}
-
-inline int randInt(int max_exclusive) {
-#if defined(GP_BUILD) && !defined(GP_TEST)
-    return static_cast<int>(GPrand() % max_exclusive);
-#else
-    return nn_pop_rand_int(max_exclusive);
-#endif
-}
+inline double randDouble() { return rng::randDouble(); }
+inline double randGaussian(double sigma) { return rng::randGaussian(sigma); }
+inline int randInt(int max_exclusive) { return rng::randInt(max_exclusive); }
 } // namespace
 
 // ============================================================

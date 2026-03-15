@@ -18,6 +18,7 @@
 
 #include <cmath>
 #include <vector>
+#include "rng.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -256,17 +257,12 @@ inline double getSpeedAtTime(const std::vector<RabbitSpeedPoint>& profile, doubl
 inline VariationOffsets generateVariationsFromGPrand(const VariationSigmas& sigmas) {
     VariationOffsets v;
 
-    // GPrand-based uniform [0, 1)
-    auto nextDouble = []() -> double {
-        return static_cast<double>(GPrand()) / static_cast<double>(RAND_MAX);
+    auto gaussian = [](double sigma) -> double {
+        return rng::randGaussian(sigma);
     };
 
-    // Box-Muller transform for Gaussian sampling
-    auto gaussian = [&nextDouble](double sigma) -> double {
-        double u1 = nextDouble() * 0.999 + 0.001;  // avoid log(0)
-        double u2 = nextDouble();
-        double z = sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
-        return z * sigma;
+    auto nextDouble = []() -> double {
+        return rng::randDouble();
     };
 
     // Generate Gaussian-distributed offsets
@@ -312,17 +308,12 @@ inline std::vector<RabbitSpeedPoint> generateSpeedProfileFromGPrand(
         return profile;
     }
 
-    // GPrand-based uniform [0, 1)
     auto nextDouble = []() -> double {
-        return static_cast<double>(GPrand()) / static_cast<double>(RAND_MAX);
+        return rng::randDouble();
     };
 
-    // Box-Muller for Gaussian sampling
-    auto gaussian = [&nextDouble](double mean, double sigma) -> double {
-        double u1 = nextDouble() * 0.999 + 0.001;  // avoid log(0)
-        double u2 = nextDouble();
-        double z = sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
-        return mean + z * sigma;
+    auto gaussian = [](double mean, double sigma) -> double {
+        return mean + rng::randGaussian(sigma);
     };
 
     // Clamp speed to valid range
