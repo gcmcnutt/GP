@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
-#include "../nn_serialization.h"
-#include "../nn_topology.h"
+#include "autoc/nn/serialization.h"
+#include "autoc/nn/topology.h"
 #include <cstring>
 
 // ============================================================

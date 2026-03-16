@@ -138,19 +138,35 @@
 
 ## Phase 5: Foundational — Cross-Repo & Output Cleanup (Phases G/H)
 
-**Purpose**: Update CRRCSim and xiao-gp, clean up run output
+**Purpose**: Update CRRCSim and xiao-gp for cereal/POSIX protocol, clean up run output
 
-- [ ] T061 Update CRRCSim minisim RPC to match new binary transport protocol in ~/crsim/crrcsim-0.9.13 (matching autoc/rpc_protocol.h)
-- [ ] T062 Remove `#ifdef GP_BUILD` guards from shared NN evaluator code in ~/crsim/crrcsim-0.9.13
+**Direction**: autoc is the main repo. crrcsim and xiao-gp will become git submodules of autoc once it is extracted from GP.
+
+### 5a: CRRCSim integration
+
+- [ ] T061 Update CRRCSim inputdev_autoc RPC: replace Boost serialization with cereal, Boost.Asio with POSIX sockets (matching autoc socket_wrapper.h protocol)
+- [ ] T062 Remove GP dead code from CRRCSim inputdev_autoc: drop `gp.h`, `gp_bytecode.h`, `gp_evaluator_portable.h` includes; NN-only
+- [ ] T062a Replace `boost::circular_buffer` in CRRCSim inputdev_autoc with std::array ring buffer
 - [ ] T063 Build CRRCSim: `cd ~/crsim/crrcsim-0.9.13/build && cmake .. && make`
+
+### 5b: xiao-gp integration
+
 - [ ] T064 Verify xiao-gp export pipeline: `./build/nnextractor` → `./build/nn2cpp` → `cd ~/xiao-gp && pio run`
-- [ ] T065 Remove `#ifdef GP_BUILD` guards from shared NN evaluator code in ~/xiao-gp
-- [ ] T066 Add OutputDir config key to autoc.ini (default: current directory for backward compat)
-- [ ] T067 Implement auto-created run subdirectory in autoc/src/autoc.cc: create OutputDir/{timestamp}/ at startup, route data.dat, data.stc, logs to it
-- [ ] T068 Remove hardcoded `eval-` prefix from data file naming in autoc/src/autoc.cc
-- [ ] T069 Run all 3 repo builds and verify: GP autoc, CRRCSim, xiao-gp
+- [ ] T065 Remove GP dead code from xiao-gp: `gp_evaluator_embedded.cc`, `gp_program_generated.cpp`, `gp_program.h`
+- [ ] T065a Update xiao-gp includes to match renamed autoc headers (types.h, math_utils.h, etc.)
+
+### 5c: Output cleanup
+
+- [ ] T066 Add OutputDir config key to autoc.ini (default: current directory)
+- [ ] T067 Implement auto-created run subdirectory in autoc.cc: create OutputDir/{timestamp}/ at startup, route data.dat, data.stc, logs to it
+- [ ] T068 Remove hardcoded `eval-` prefix from data file naming in autoc.cc
+
+### 5d: Verification
+
+- [ ] T069 Run all 3 repo builds and verify: autoc, CRRCSim, xiao-gp
 - [ ] T069a Integration smoke test: run `./build/autoc` for 3 generations with OutputDir set, verify run artifacts land in auto-created subdirectory
-- [ ] T069b Cross-repo integration test: run autoc with minisim worker from CRRCSim build, verify RPC works end-to-end
+- [ ] T069b Cross-repo integration test: run autoc with CRRCSim FDM worker, verify cereal RPC works end-to-end
+- [ ] T069c Profile cereal serialization cost in large-scale CRRCSim run (vs Boost baseline)
 
 **Checkpoint**: All 3 repos build, cross-repo contracts aligned, run output goes to subdirectories
 
@@ -349,8 +365,9 @@
 - **Phase 2 (Strip GP)**: Depends on Phase 1 contract tests — BLOCKS all subsequent work
 - **Phase 3 (Replace Boost)**: Depends on Phase 2 — can overlap with late Phase 2 work
 - **Phase 4 (Source Reorg)**: Depends on Phases 2+3 — all code changes done before moving files
-- **Phase 5 (Cross-Repo)**: Depends on Phase 4 — transport contract finalized
+- **Phase 5 (Cross-Repo)**: Depends on Phase 4 — transport contract finalized, autoc is main repo
 - **Phases 6-13 (User Stories)**: Depend on Phase 5 — can proceed in priority order or parallel
+- **Repo Extraction (T200-T210)**: After user stories stabilize — crrcsim and xiao-gp become submodules of autoc
 
 ### User Story Dependencies
 
@@ -418,9 +435,22 @@ Task T079-T082: "Curriculum Ramp implementation"
 6. Add US7 → US5 → US6 → Advanced scoring + warm start
 7. Add US8 (Checkpoint) → Crash recovery
 
-### Repo Extraction (after Phase 14)
+### Repo Extraction (after user stories stabilize)
 
-Separate follow-up: extract autoc/ to standalone repo, migrate relevant specs/docs.
+Extract autoc/ to standalone repo. crrcsim and xiao-gp become submodules of autoc (autoc orchestrates both).
+
+- [ ] T200 Extract autoc/ to standalone git repo (git subtree split), preserve commit history
+- [ ] T201 Sort autoc/specs/: enumerate which stay with GP repo vs move to autoc repo
+- [ ] T202 Move relevant specs/ and docs/ artifacts to new autoc repo
+- [ ] T203 Add crrcsim as git submodule of autoc repo
+- [ ] T204 Update crrcsim CMakeLists.txt: replace `$ENV{HOME}/GP/include` with parent autoc include path
+- [ ] T205 Add xiao-gp as git submodule of autoc repo
+- [ ] T206 Remove `~/GP` symlink from xiao-gp, update platformio.ini lib_deps to use submodule path
+- [ ] T207 Update xiao-gp includes: `#include <GP/autoc/...>` → `#include <autoc/...>`
+- [ ] T208 Build + test all three from autoc repo root: autoc, crrcsim, xiao-gp
+- [ ] T209 Update CLAUDE.md in all repos for new submodule workflow
+- [ ] T210 Update .gitignore for standalone autoc repo (no longer under GP)
+- [ ] T211 Cross-platform verification: train on aarch64, pull repo on x86, build, run renderer/nnextractor/eval against S3 objects created on aarch64 — validates cereal binary portability end-to-end
 
 ---
 

@@ -68,44 +68,33 @@ if(PERFORMANCE_BUILD)
 endif()
 
 include(${VTK_USE_FILE})
-include_directories(${EIGEN3_INCLUDE_DIR} ${VTK_INCLUDE_DIRS} ${AWSSDK_INCLUDE_DIRS})
+include_directories(
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${EIGEN3_INCLUDE_DIR}
+    ${VTK_INCLUDE_DIRS}
+    ${AWSSDK_INCLUDE_DIRS}
+)
 add_compile_options(-Wno-write-strings)
 
 # Shared library for common sources (compiled once, linked by all executables)
 add_library(autoc_common STATIC
-    config_manager.cc
-    config_manager.h
-    logger.cc
-    logger.h
-    pathgen.cc
-    pathgen.h
-    sensor_math.cc
-    sensor_math.h
-    autoc.h
-    minisim.h
-    aircraft_state.h
-    threadpool.h
-    gp_types.h
-    variation_generator.h
-    eval_backend.h
-    fitness_computer.cc
-    fitness_computer.h
-    eval_logger.cc
-    eval_logger.h
-    nn_evaluator_portable.cc
-    nn_evaluator_portable.h
-    nn_serialization.cc
-    nn_serialization.h
-    nn_population.cc
-    nn_population.h
+    src/util/config.cc
+    src/util/logger.cc
+    src/eval/pathgen.cc
+    src/eval/sensor_math.cc
+    src/eval/fitness_computer.cc
+    src/eval/eval_logger.cc
+    src/nn/evaluator.cc
+    src/nn/serialization.cc
+    src/nn/population.cc
 )
 target_link_libraries(autoc_common inih cereal::cereal Eigen3::Eigen)
 
-add_executable(autoc autoc.cc)
-add_executable(minisim minisim.cc)
-add_executable(renderer renderer.cc)
-add_executable(nnextractor nnextractor.cc)
-add_executable(nn2cpp nn2cpp.cc)
+add_executable(autoc src/autoc.cc)
+add_executable(minisim tools/minisim.cc)
+add_executable(renderer tools/renderer.cc)
+add_executable(nnextractor tools/nnextractor.cc)
+add_executable(nn2cpp tools/nn2cpp.cc)
 
 target_link_libraries(autoc autoc_common ${AWSSDK_LIBRARIES})
 target_link_libraries(minisim autoc_common)
@@ -114,31 +103,26 @@ target_link_libraries(nnextractor autoc_common ${AWSSDK_LIBRARIES})
 target_link_libraries(nn2cpp autoc_common)
 
 if(ENABLE_AUTOC_TESTS)
-  # NN evaluator tests
-  add_executable(nn_evaluator_tests tests/nn_evaluator_tests.cc nn_evaluator_portable.cc)
-  target_link_libraries(nn_evaluator_tests GTest::gtest GTest::gtest_main Eigen3::Eigen cereal::cereal)
+  add_executable(nn_evaluator_tests tests/nn_evaluator_tests.cc)
+  target_link_libraries(nn_evaluator_tests GTest::gtest GTest::gtest_main autoc_common)
 
-  # NN serialization tests
-  add_executable(nn_serialization_tests tests/nn_serialization_tests.cc nn_serialization.cc nn_evaluator_portable.cc)
-  target_link_libraries(nn_serialization_tests GTest::gtest GTest::gtest_main Eigen3::Eigen cereal::cereal)
+  add_executable(nn_serialization_tests tests/nn_serialization_tests.cc)
+  target_link_libraries(nn_serialization_tests GTest::gtest GTest::gtest_main autoc_common)
 
-  # NN population tests
-  add_executable(nn_population_tests tests/nn_population_tests.cc nn_population.cc nn_evaluator_portable.cc)
-  target_link_libraries(nn_population_tests GTest::gtest GTest::gtest_main Eigen3::Eigen cereal::cereal)
+  add_executable(nn_population_tests tests/nn_population_tests.cc)
+  target_link_libraries(nn_population_tests GTest::gtest GTest::gtest_main autoc_common)
 
-  # Fitness computer tests
-  add_executable(fitness_computer_tests tests/fitness_computer_tests.cc fitness_computer.cc)
-  target_link_libraries(fitness_computer_tests GTest::gtest GTest::gtest_main Eigen3::Eigen)
+  add_executable(fitness_computer_tests tests/fitness_computer_tests.cc)
+  target_link_libraries(fitness_computer_tests GTest::gtest GTest::gtest_main autoc_common)
 
-  # Contract tests (014-nn-training-signal)
-  add_executable(contract_evaluator_tests tests/contract_evaluator_tests.cc nn_evaluator_portable.cc)
-  target_link_libraries(contract_evaluator_tests GTest::gtest GTest::gtest_main Eigen3::Eigen cereal::cereal)
+  add_executable(contract_evaluator_tests tests/contract_evaluator_tests.cc)
+  target_link_libraries(contract_evaluator_tests GTest::gtest GTest::gtest_main autoc_common)
 
   add_executable(contract_config_tests tests/contract_config_tests.cc)
-  target_link_libraries(contract_config_tests GTest::gtest GTest::gtest_main)
+  target_link_libraries(contract_config_tests GTest::gtest GTest::gtest_main autoc_common)
 
-  add_executable(contract_evolution_tests tests/contract_evolution_tests.cc nn_population.cc nn_evaluator_portable.cc)
-  target_link_libraries(contract_evolution_tests GTest::gtest GTest::gtest_main Eigen3::Eigen cereal::cereal)
+  add_executable(contract_evolution_tests tests/contract_evolution_tests.cc)
+  target_link_libraries(contract_evolution_tests GTest::gtest GTest::gtest_main autoc_common)
 
   add_executable(rpc_transport_tests tests/rpc_transport_tests.cc)
   target_link_libraries(rpc_transport_tests GTest::gtest GTest::gtest_main)
@@ -155,8 +139,9 @@ if(ENABLE_AUTOC_TESTS)
 
   # --gtest_brief=1 only prints failures, not every test run
   add_custom_target(run_autoc_tests ALL
-    DEPENDS nn_evaluator_tests nn_serialization_tests nn_population_tests fitness_computer_tests
-            contract_evaluator_tests contract_config_tests contract_evolution_tests rpc_transport_tests
+    DEPENDS nn_evaluator_tests nn_serialization_tests nn_population_tests
+            fitness_computer_tests contract_evaluator_tests contract_config_tests
+            contract_evolution_tests rpc_transport_tests
     COMMAND nn_evaluator_tests --gtest_brief=1
     COMMAND nn_serialization_tests --gtest_brief=1
     COMMAND nn_population_tests --gtest_brief=1

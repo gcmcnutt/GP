@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 #include <cmath>
-#include "../fitness_computer.h"
+#include "autoc/eval/fitness_computer.h"
 
 // Constants provided by fitness_computer.h via #define (matching autoc.h values)
 

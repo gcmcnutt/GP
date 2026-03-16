@@ -3,8 +3,8 @@
 // This contract MUST hold through GP removal, Boost removal, and source reorg.
 
 #include <gtest/gtest.h>
-#include "../nn_evaluator_portable.h"
-#include "../nn_topology.h"
+#include "autoc/nn/evaluator.h"
+#include "autoc/nn/topology.h"
 #include <cmath>
 #include <vector>
 #include <algorithm>

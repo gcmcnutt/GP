@@ -3,8 +3,8 @@
 // This contract MUST hold through GP removal and optimizer changes.
 
 #include <gtest/gtest.h>
-#include "../nn_population.h"
-#include "../nn_topology.h"
+#include "autoc/nn/population.h"
+#include "autoc/nn/topology.h"
 #include <cmath>
 #include <algorithm>
 #include <limits>
