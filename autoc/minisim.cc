@@ -61,12 +61,12 @@ ScenarioMetadata scenarioForPathIndex(const EvalData& evalData, size_t idx) {
 
 class SimProcess {
 public:
-  SimProcess(boost::asio::io_context& io_context, unsigned short port) : socket_(io_context) {
+  SimProcess(boost::asio::io_context& io_context, int id, unsigned short port) : socket_(io_context) {
     tcp::resolver resolver(io_context);
     auto endpoints = resolver.resolve("localhost", std::to_string(port));
     boost::asio::connect(socket_, endpoints);
     workerPid = static_cast<int>(getpid());
-    workerId = 0;
+    workerId = id;
   }
 
   void run() {
@@ -112,20 +112,16 @@ public:
         continue;
       }
 
-      // Log NN info
-      {
+      // Log topology once on first eval
+      if (evalCounter == 1) {
         std::ostringstream topo;
         for (size_t i = 0; i < nnGenome.topology.size(); i++) {
           if (i > 0) topo << "x";
           topo << nnGenome.topology[i];
         }
         std::cerr << "[MINISIM] worker=" << workerId
-                  << " eval=" << evalCounter
-                  << " hash=0x" << std::hex << evalData.gpHash << std::dec
-                  << " nn_bytes=" << evalData.gp.size()
                   << " topology=" << topo.str()
                   << " weights=" << nnGenome.weights.size()
-                  << " gen=" << nnGenome.generation
                   << std::endl;
       }
 
@@ -230,9 +226,10 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
+  int id = std::atoi(argv[2]);
   unsigned short port = std::atoi(argv[3]);
   boost::asio::io_context io_context;
-  SimProcess sim_process(io_context, port);
+  SimProcess sim_process(io_context, id, port);
   sim_process.run();
 
   return 0;

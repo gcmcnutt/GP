@@ -46,11 +46,10 @@ make install
 # Dependencies (Ubuntu 22.04)
 sudo apt-get install -y libboost-all-dev libeigen3-dev libvtk9-dev xvfb g++ cmake gdb qtbase5-dev
 
-# Build autoc system (requires core library built first)
-# IMPORTANT: Build from ~/GP/build directory, not ~/GP/autoc/build
-cd ~/GP
+# Build autoc system (standalone, no libgp.a dependency)
+cd ~/GP/autoc
 mkdir build && cd build
-cmake -DCMAKE_BUILD_TYPE=Debug ../autoc
+cmake -DCMAKE_BUILD_TYPE=Debug ..
 make
 
 # For headless operation (visualization)
@@ -67,7 +66,7 @@ cd ~/GP/autoc && bash rebuild.sh
 cd ~/GP/autoc && bash rebuild-perf.sh
 
 # Incremental build - just recompile changed files (fastest)
-cd ~/GP && make
+cd ~/GP/autoc/build && make
 
 # Extract best NN weights from S3 archive
 ./build/nnextractor -k keyname -o nn_weights.dat -i autoc.ini
@@ -79,16 +78,13 @@ cd ~/GP && make
 **Key Build Commands:**
 ```bash
 # Full rebuild cycle (equivalent to rebuild.sh)
-make clean && rm -rf build && mkdir build && cd build && cmake -DCMAKE_BUILD_TYPE=Debug ../autoc && cd .. && make
+cd ~/GP/autoc && rm -rf build && mkdir build && cd build && cmake -DCMAKE_BUILD_TYPE=Debug .. && make
 
-# Run evolution
+# Run evolution (from ~/GP/autoc)
 ./build/autoc
 
-# Extract GP to bytecode
-./build/gpextractor -b -o gp_program.dat
-
-# Run evaluation mode
-./build/autoc  # (with EvaluateMode=1 in autoc.ini)
+# Run evaluation mode (with EvaluateMode=1 and NNWeightFile set in autoc.ini)
+./build/autoc
 
 # Visualize results
 ./build/renderer -k keyname

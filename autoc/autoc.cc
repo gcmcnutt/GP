@@ -245,9 +245,9 @@ static void prefetchAllVariations(int numScenarios, const VariationSigmas& sigma
  * Log pre-fetched variations at startup for verification.
  * Format matches spec in SINGLE_PRNG.md.
  */
-static void logPrefetchedVariations(int numScenarios, long gpSeed) {
+static void logPrefetchedVariations(int numScenarios, long seed) {
     *logger.info() << endl;
-    *logger.info() << "=== Pre-fetched Scenario Variations (GPSeed=" << gpSeed << ") ===" << endl;
+    *logger.info() << "=== Pre-fetched Scenario Variations (Seed=" << seed << ") ===" << endl;
     *logger.info() << "PathSeed: " << gPathSeed
                    << " (override: " << (gPathSeedFromOverride ? "yes" : "no")
                    << ")" << endl;
@@ -1206,6 +1206,7 @@ static void runNNEvolution(
       threadPool->enqueue([evalDataPtr, &bestResults](WorkerContext& context) {
         sendRPC(*context.socket, *evalDataPtr);
         bestResults = receiveRPC<EvalResults>(*context.socket);
+        globalSimRunCounter.fetch_add(bestResults.pathList.size(), std::memory_order_relaxed);
       });
       threadPool->wait_for_tasks();
 
@@ -1336,20 +1337,18 @@ int main(int argc, char** argv)
   // we don't know it's there.
   set_new_handler(newHandler);
 
-  // Initialize ConfigManager first so we can access gpSeed
   ConfigManager::initialize(configFile, *logger.info());
   const AutocConfig& cfg = ConfigManager::getConfig();
 
-  // Init GP system with seed from config
-  // Handle -1 as time-based seed (GP library doesn't recognize this convention)
-  long gpSeed;
-  if (cfg.gpSeed == -1) {
-    gpSeed = static_cast<long>(time(NULL));
-    *logger.info() << "GPSeed: -1 (auto) -> " << gpSeed << endl;
+  // RNG seed: -1 means time-based
+  long seed;
+  if (cfg.seed == -1) {
+    seed = static_cast<long>(time(NULL));
+    *logger.info() << "Seed: -1 (auto) -> " << seed << endl;
   } else {
-    gpSeed = static_cast<long>(cfg.gpSeed);
+    seed = static_cast<long>(cfg.seed);
   }
-  rng::seed(static_cast<uint64_t>(gpSeed));
+  rng::seed(static_cast<uint64_t>(seed));
 
   // AWS setup
   Aws::SDKOptions options;
@@ -1366,9 +1365,8 @@ int main(int argc, char** argv)
   *logger.info() << "MinisimProgram: " << cfg.minisimProgram << endl;
   *logger.info() << "MinisimPortOverride: " << cfg.minisimPortOverride << endl;
   *logger.info() << "EvaluateMode: " << cfg.evaluateMode << endl;
-  *logger.info() << "ControllerType: " << cfg.controllerType << endl;
   *logger.info() << "WindScenarios: " << cfg.windScenarioCount << endl;
-  *logger.info() << "GPSeed: " << cfg.gpSeed << endl;
+  *logger.info() << "Seed: " << cfg.seed << endl;
   *logger.info() << "RandomPathSeedB: " << cfg.randomPathSeedB << endl;
 
   // Log VARIATIONS1 settings and initialize global sigmas
@@ -1432,7 +1430,7 @@ int main(int argc, char** argv)
                  << "pitch=" << cfg.entryPitchSigma << "° "
                  << "speed=" << (cfg.entrySpeedSigma * 100) << "% "
                  << "wind=" << cfg.windDirectionSigma << "°" << endl;
-  logPrefetchedVariations(windScenarioCount, gpSeed);
+  logPrefetchedVariations(windScenarioCount, seed);
 
   // Open the main output file for the data and statistics file.
   // First set up names for data file.  Remember we should delete the

@@ -17,11 +17,9 @@ void ConfigManager::initialize(const std::string& filename, std::ostream& out) {
         return;
     }
 
-    // Check if config file exists
     std::ifstream configFile(filename);
     if (!configFile.good()) {
         out << "FATAL ERROR: Configuration file '" << filename << "' not found!" << std::endl;
-        out << "Please ensure autoc.ini exists in the current directory." << std::endl;
         exit(1);
     }
     configFile.close();
@@ -34,23 +32,20 @@ void ConfigManager::initialize(const std::string& filename, std::ostream& out) {
 
     config = new AutocConfig();
 
-    // Evolution core (formerly GPVariables)
+    // Evolution
     config->populationSize = reader.GetInteger("", "PopulationSize", config->populationSize);
     config->numberOfGenerations = reader.GetInteger("", "NumberOfGenerations", config->numberOfGenerations);
-    config->creationType = reader.GetInteger("", "CreationType", config->creationType);
     config->crossoverProbability = reader.GetReal("", "CrossoverProbability", config->crossoverProbability);
     config->creationProbability = reader.GetReal("", "CreationProbability", config->creationProbability);
-    config->maximumDepthForCreation = reader.GetInteger("", "MaximumDepthForCreation", config->maximumDepthForCreation);
-    config->maximumDepthForCrossover = reader.GetInteger("", "MaximumDepthForCrossover", config->maximumDepthForCrossover);
-    config->selectionType = reader.GetInteger("", "SelectionType", config->selectionType);
     config->tournamentSize = reader.GetInteger("", "TournamentSize", config->tournamentSize);
-    config->demeticGrouping = reader.GetInteger("", "DemeticGrouping", config->demeticGrouping);
-    config->demeSize = reader.GetInteger("", "DemeSize", config->demeSize);
-    config->demeticMigProbability = reader.GetReal("", "DemeticMigProbability", config->demeticMigProbability);
     config->swapMutationProbability = reader.GetReal("", "SwapMutationProbability", config->swapMutationProbability);
-    config->shrinkMutationProbability = reader.GetReal("", "ShrinkMutationProbability", config->shrinkMutationProbability);
     config->addBestToNewPopulation = reader.GetInteger("", "AddBestToNewPopulation", config->addBestToNewPopulation);
-    config->steadyState = reader.GetInteger("", "SteadyState", config->steadyState);
+
+    // NN-specific
+    config->nnMutationSigma = reader.GetReal("", "NNMutationSigma", config->nnMutationSigma);
+    config->nnCrossoverAlpha = reader.GetReal("", "NNCrossoverAlpha", config->nnCrossoverAlpha);
+    config->nnWeightFile = reader.Get("", "NNWeightFile", config->nnWeightFile);
+    config->nnInitMethod = reader.Get("", "NNInitMethod", config->nnInitMethod);
 
     // Simulation
     config->simNumPathsPerGen = reader.GetInteger("", "SimNumPathsPerGeneration", config->simNumPathsPerGen);
@@ -65,13 +60,16 @@ void ConfigManager::initialize(const std::string& filename, std::ostream& out) {
 
     // Eval mode
     config->evaluateMode = reader.GetInteger("", "EvaluateMode", config->evaluateMode);
-    config->bytecodeFile = reader.Get("", "BytecodeFile", config->bytecodeFile);
 
     // Scenarios
     config->windScenarioCount = reader.GetInteger("", "WindScenarios", config->windScenarioCount);
     config->randomPathSeedB = reader.GetInteger("", "RandomPathSeedB", config->randomPathSeedB);
-    config->gpSeed = reader.GetInteger("", "GPSeed", config->gpSeed);
-    config->trainingNodes = reader.Get("", "TrainingNodes", config->trainingNodes);
+    config->seed = reader.GetInteger("", "Seed", config->seed);
+
+    // Demetic grouping (scenario assignment)
+    config->demeticGrouping = reader.GetInteger("", "DemeticGrouping", config->demeticGrouping);
+    config->demeSize = reader.GetInteger("", "DemeSize", config->demeSize);
+    config->demeticMigProbability = reader.GetReal("", "DemeticMigProbability", config->demeticMigProbability);
 
     // Entry and wind direction variations
     config->enableEntryVariations = reader.GetInteger("", "EnableEntryVariations", config->enableEntryVariations);
@@ -96,13 +94,6 @@ void ConfigManager::initialize(const std::string& filename, std::ostream& out) {
     config->rabbitSpeedMax = reader.GetReal("", "RabbitSpeedMax", config->rabbitSpeedMax);
     config->rabbitSpeedCycleMin = reader.GetReal("", "RabbitSpeedCycleMin", config->rabbitSpeedCycleMin);
     config->rabbitSpeedCycleMax = reader.GetReal("", "RabbitSpeedCycleMax", config->rabbitSpeedCycleMax);
-
-    // Neural network evolution
-    config->controllerType = reader.Get("", "ControllerType", config->controllerType);
-    config->nnMutationSigma = reader.GetReal("", "NNMutationSigma", config->nnMutationSigma);
-    config->nnCrossoverAlpha = reader.GetReal("", "NNCrossoverAlpha", config->nnCrossoverAlpha);
-    config->nnWeightFile = reader.Get("", "NNWeightFile", config->nnWeightFile);
-    config->nnInitMethod = reader.Get("", "NNInitMethod", config->nnInitMethod);
 
     // Print S3 configuration
     if (config->s3Profile != "default") {
