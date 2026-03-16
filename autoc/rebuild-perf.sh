@@ -12,9 +12,9 @@ cmake -DPERFORMANCE_BUILD=ON ..
 make
 
 # same for crrcsim -- perf mode
-# cd ~/crsim/crrcsim-0.9.13
-# rm -rf build
-# mkdir build
-# cd build
-# cmake -DPERFORMANCE_BUILD=ON ..
-# make
+cd ~/crsim/crrcsim-0.9.13
+rm -rf build
+mkdir build
+cd build
+cmake -DPERFORMANCE_BUILD=ON ..
+make
