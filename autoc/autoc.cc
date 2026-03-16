@@ -926,7 +926,6 @@ static void runNNEvaluation(
     *logger.info() << "  Topology: " << topo.str() << " (" << genome.weights.size() << " weights)" << endl;
   }
   *logger.info() << "  Stored fitness: " << std::fixed << std::setprecision(6) << genome.fitness << endl;
-  *logger.info() << "  Stored generation: " << genome.generation << endl;
 
   // Serialize genome for RPC (same format minisim expects)
   std::vector<uint8_t> nnData;

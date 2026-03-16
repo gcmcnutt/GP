@@ -37,6 +37,7 @@ std::string generatePortableCode(const NNGenome& genome, const std::string& func
     code << "//\n";
     code << "// Source NN Information:\n";
     code << "//   Weight file: " << sourceFile << "\n";
+    code << "//   Source:      " << genome.source << "\n";
     code << "//   Topology:    ";
     for (size_t i = 0; i < genome.topology.size(); i++) {
         if (i > 0) code << " -> ";
@@ -44,7 +45,6 @@ std::string generatePortableCode(const NNGenome& genome, const std::string& func
     }
     code << "\n";
     code << "//   Weights:     " << genome.weights.size() << "\n";
-    code << "//   Generation:  " << genome.generation << "\n";
     code << "//   Fitness:     " << std::fixed << std::setprecision(6) << genome.fitness << "\n";
     code << "//   Sigma:       " << std::fixed << std::setprecision(6) << genome.mutation_sigma << "\n";
     code << "//\n";
@@ -90,7 +90,7 @@ std::string generatePortableCode(const NNGenome& genome, const std::string& func
     code << "}\n\n";
 
     // Source identifier
-    code << "const char* generatedNNProgramSource = \"" << sourceFile << "\";\n";
+    code << "const char* generatedNNProgramSource = \"" << genome.source << "\";\n";
 
     return code.str();
 }
@@ -104,6 +104,7 @@ std::string generateUnrolledCode(const NNGenome& genome, const std::string& func
     code << "//\n";
     code << "// Source NN Information:\n";
     code << "//   Weight file: " << sourceFile << "\n";
+    code << "//   Source:      " << genome.source << "\n";
     code << "//   Topology:    ";
     for (size_t i = 0; i < genome.topology.size(); i++) {
         if (i > 0) code << " -> ";
@@ -111,7 +112,6 @@ std::string generateUnrolledCode(const NNGenome& genome, const std::string& func
     }
     code << "\n";
     code << "//   Weights:     " << genome.weights.size() << "\n";
-    code << "//   Generation:  " << genome.generation << "\n";
     code << "//   Fitness:     " << std::fixed << std::setprecision(6) << genome.fitness << "\n";
     code << "//   Sigma:       " << std::fixed << std::setprecision(6) << genome.mutation_sigma << "\n";
     code << "//\n";
@@ -179,7 +179,7 @@ std::string generateUnrolledCode(const NNGenome& genome, const std::string& func
     code << "}\n\n";
 
     // Source identifier
-    code << "const char* generatedNNProgramSource = \"" << sourceFile << "\";\n";
+    code << "const char* generatedNNProgramSource = \"" << genome.source << "\";\n";
 
     return code.str();
 }

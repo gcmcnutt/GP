@@ -20,6 +20,7 @@ struct NNGenome {
     double fitness;                   // Aggregated fitness from evaluation
     uint32_t generation;              // Generation when created
     float mutation_sigma;             // Per-individual mutation step size (self-adaptive)
+    std::string source;               // Provenance: "bucket/key" from S3 extraction
 
     NNGenome() : fitness(0.0), generation(0), mutation_sigma(0.1f) {}
 };

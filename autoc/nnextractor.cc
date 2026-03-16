@@ -43,12 +43,13 @@ void printUsage(const char* progName) {
 }
 
 // Extract the generation number from the S3 key
+// S3 keys use 10000-gen for reverse sort order; convert back to real gen number
 int extractGenNumber(const std::string& input) {
   std::regex pattern("autoc-.*\\/gen(\\d+)\\.dmp");
   std::smatch matches;
 
   if (std::regex_search(input, matches, pattern) && matches.size() > 1) {
-    return std::stoi(matches[1].str());
+    return 10000 - std::stoi(matches[1].str());
   }
 
   return -1;
@@ -203,7 +204,7 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  // Deserialize to get metadata for display
+  // Deserialize to get metadata
   NNGenome genome;
   if (!nn_deserialize(reinterpret_cast<const uint8_t*>(evalResults.gp.data()),
                       evalResults.gp.size(), genome)) {
@@ -211,13 +212,18 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  // Write the raw NN01 binary directly (already serialized)
+  // Set provenance: profile:bucket/key
+  std::string profile = ConfigManager::getConfig().s3Profile;
+  genome.source = profile + ":" + bucket + "/" + keyName;
+  std::vector<uint8_t> nnData;
+  nn_serialize(genome, nnData);
+
   std::ofstream file(outputFile, std::ios::binary);
   if (!file.is_open()) {
     std::cerr << "Error: Cannot create output file: " << outputFile << std::endl;
     return 1;
   }
-  file.write(evalResults.gp.data(), evalResults.gp.size());
+  file.write(reinterpret_cast<const char*>(nnData.data()), nnData.size());
   file.close();
 
   // Print summary
