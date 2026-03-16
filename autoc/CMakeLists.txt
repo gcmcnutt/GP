@@ -8,7 +8,7 @@ find_package(AWSSDK REQUIRED COMPONENTS core s3)
 
 include(FetchContent)
 
-# inih config parser (replaces GPConfiguration from libgp.a)
+# inih config parser
 FetchContent_Declare(
     inih
     GIT_REPOSITORY https://github.com/benhoyt/inih.git
@@ -46,12 +46,6 @@ endif()
 
 if(ENABLE_PROFILING)
     message(STATUS "Enabling profiling-friendly compiler flags for autoc")
-    # -O2: Optimize but keep code structure recognizable (avoid -O3 which over-inlines)
-    # -g: Debug symbols for perf to resolve symbols
-    # -fno-omit-frame-pointer: Essential for perf call graph
-    # -fno-optimize-sibling-calls: Preserve tail call frames in stack traces
-    # Note: -O2 gives representative percentages vs PERFORMANCE_BUILD's -O3
-    #       (difference is typically <5% in time distribution)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O2 -g -fno-omit-frame-pointer -fno-optimize-sibling-calls")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O2 -g -fno-omit-frame-pointer -fno-optimize-sibling-calls")
 endif()
@@ -63,26 +57,20 @@ if(PERFORMANCE_BUILD)
 endif()
 
 include(${VTK_USE_FILE})
-include_directories(../include ${EIGEN3_INCLUDE_DIR} ${VTK_INCLUDE_DIRS} ${Boost_INCLUDE_DIRS} ${AWSSDK_INCLUDE_DIRS})
-link_directories(../lib)
+include_directories(${EIGEN3_INCLUDE_DIR} ${VTK_INCLUDE_DIRS} ${Boost_INCLUDE_DIRS} ${AWSSDK_INCLUDE_DIRS})
 add_compile_options(-Wno-write-strings)
 add_definitions(-DGP_BUILD)
 
 # Shared library for common sources (compiled once, linked by all executables)
 add_library(autoc_common STATIC
-    gp_bytecode.cc
-    gp_bytecode.h
-    gp_evaluator_portable.cc
-    gp_evaluator_portable.h
-    gp_evaluator_desktop.cc
-    gp_evaluator_desktop.h
     config_manager.cc
     config_manager.h
     logger.cc
     logger.h
     pathgen.cc
     pathgen.h
-    autoc-eval.cc
+    sensor_math.cc
+    sensor_math.h
     autoc.h
     minisim.h
     aircraft_state.h
@@ -101,32 +89,23 @@ add_library(autoc_common STATIC
     nn_population.cc
     nn_population.h
 )
-target_link_libraries(autoc_common gp inih ${Boost_LIBRARIES} Eigen3::Eigen)
+target_link_libraries(autoc_common inih ${Boost_LIBRARIES} Eigen3::Eigen)
 
 add_executable(autoc autoc.cc)
 add_executable(minisim minisim.cc)
 add_executable(renderer renderer.cc)
-add_executable(gpextractor gpextractor.cc)
-add_executable(bytecode2cpp bytecode2cpp.cc)
 add_executable(nnextractor nnextractor.cc)
 add_executable(nn2cpp nn2cpp.cc)
 
 target_link_libraries(autoc autoc_common ${AWSSDK_LIBRARIES})
 target_link_libraries(minisim autoc_common)
 target_link_libraries(renderer autoc_common ${VTK_LIBRARIES} ${AWSSDK_LIBRARIES})
-target_link_libraries(gpextractor autoc_common ${AWSSDK_LIBRARIES})
-target_link_libraries(bytecode2cpp autoc_common ${AWSSDK_LIBRARIES})
 target_link_libraries(nnextractor autoc_common ${AWSSDK_LIBRARIES})
 target_link_libraries(nn2cpp autoc_common)
 
 if(ENABLE_AUTOC_TESTS)
-  # Tests need separate compilation with GP_TEST define, can't use autoc_common
-  add_executable(autoc_tests tests/gp_evaluator_tests.cc gp_evaluator_portable.cc)
-  target_compile_definitions(autoc_tests PRIVATE GP_BUILD GP_TEST)
-  target_link_libraries(autoc_tests GTest::gtest GTest::gtest_main Eigen3::Eigen)
-
   # NN evaluator tests
-  add_executable(nn_evaluator_tests tests/nn_evaluator_tests.cc nn_evaluator_portable.cc gp_evaluator_portable.cc)
+  add_executable(nn_evaluator_tests tests/nn_evaluator_tests.cc nn_evaluator_portable.cc)
   target_compile_definitions(nn_evaluator_tests PRIVATE GP_BUILD GP_TEST)
   target_link_libraries(nn_evaluator_tests GTest::gtest GTest::gtest_main Eigen3::Eigen)
 
@@ -146,7 +125,7 @@ if(ENABLE_AUTOC_TESTS)
   target_link_libraries(fitness_computer_tests GTest::gtest GTest::gtest_main Eigen3::Eigen)
 
   # Contract tests (014-nn-training-signal)
-  add_executable(contract_evaluator_tests tests/contract_evaluator_tests.cc nn_evaluator_portable.cc gp_evaluator_portable.cc)
+  add_executable(contract_evaluator_tests tests/contract_evaluator_tests.cc nn_evaluator_portable.cc)
   target_compile_definitions(contract_evaluator_tests PRIVATE GP_BUILD GP_TEST)
   target_link_libraries(contract_evaluator_tests GTest::gtest GTest::gtest_main Eigen3::Eigen)
 
@@ -154,7 +133,7 @@ if(ENABLE_AUTOC_TESTS)
   target_compile_definitions(contract_config_tests PRIVATE GP_BUILD GP_TEST)
   target_link_libraries(contract_config_tests GTest::gtest GTest::gtest_main)
 
-  add_executable(contract_evolution_tests tests/contract_evolution_tests.cc nn_population.cc nn_evaluator_portable.cc gp_evaluator_portable.cc)
+  add_executable(contract_evolution_tests tests/contract_evolution_tests.cc nn_population.cc nn_evaluator_portable.cc)
   target_compile_definitions(contract_evolution_tests PRIVATE GP_BUILD GP_TEST)
   target_link_libraries(contract_evolution_tests GTest::gtest GTest::gtest_main Eigen3::Eigen)
 
@@ -163,7 +142,6 @@ if(ENABLE_AUTOC_TESTS)
   target_link_libraries(rpc_transport_tests GTest::gtest GTest::gtest_main)
 
   enable_testing()
-  add_test(NAME autoc_tests COMMAND autoc_tests)
   add_test(NAME nn_evaluator_tests COMMAND nn_evaluator_tests)
   add_test(NAME nn_serialization_tests COMMAND nn_serialization_tests)
   add_test(NAME nn_population_tests COMMAND nn_population_tests)
@@ -175,9 +153,8 @@ if(ENABLE_AUTOC_TESTS)
 
   # --gtest_brief=1 only prints failures, not every test run
   add_custom_target(run_autoc_tests ALL
-    DEPENDS autoc_tests nn_evaluator_tests nn_serialization_tests nn_population_tests fitness_computer_tests
+    DEPENDS nn_evaluator_tests nn_serialization_tests nn_population_tests fitness_computer_tests
             contract_evaluator_tests contract_config_tests contract_evolution_tests rpc_transport_tests
-    COMMAND autoc_tests --gtest_brief=1
     COMMAND nn_evaluator_tests --gtest_brief=1
     COMMAND nn_serialization_tests --gtest_brief=1
     COMMAND nn_population_tests --gtest_brief=1

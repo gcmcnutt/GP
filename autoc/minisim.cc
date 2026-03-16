@@ -1,29 +1,36 @@
-/* test sim for aircraft */
+/* minisim — lightweight simulator for NN controller evaluation */
 #include <boost/asio.hpp>
-#include <boost/archive/binary_iarchive.hpp>
 #include <vector>
-#include <stdlib.h>
-#include <math.h>
-#include <new>
+#include <cstdlib>
+#include <cmath>
 #include <fstream>
 #include <sstream>
-#include <thread>
-#include <chrono>
 #include <iostream>
-#include <cmath>
-#include <array>
 #include <unistd.h>
 
-#include "gp.h"
 #include "minisim.h"
 #include "autoc.h"
-#include "gp_bytecode.h"
-#include "gp_evaluator_portable.h"
+#include "sensor_math.h"
 #include "nn_serialization.h"
 #include "nn_evaluator_portable.h"
 
 using namespace std;
 using boost::asio::ip::tcp;
+
+// Global aircraft state (declared extern in autoc.h)
+AircraftState aircraftState;
+
+std::string crashReasonToString(CrashReason type) {
+  switch (type) {
+  case CrashReason::None: return "None";
+  case CrashReason::Boot: return "Boot";
+  case CrashReason::Sim: return "Sim";
+  case CrashReason::Eval: return "Eval";
+  case CrashReason::Time: return "Time";
+  case CrashReason::Distance: return "Distance";
+  default: return "*?*";
+  }
+}
 
 namespace {
 
@@ -52,15 +59,6 @@ ScenarioMetadata scenarioForPathIndex(const EvalData& evalData, size_t idx) {
 
 } // namespace
 
-boost::iostreams::stream<boost::iostreams::array_source> charArrayToIstream(const std::vector<char>& charArray) {
-  return boost::iostreams::stream<boost::iostreams::array_source>(
-    boost::iostreams::array_source(charArray.data(), charArray.size())
-  );
-}
-
-void MyGP::evaluate() {}
-void MyGP::evalTask(WorkerContext& context) {}
-
 class SimProcess {
 public:
   SimProcess(boost::asio::io_context& io_context, unsigned short port) : socket_(io_context) {
@@ -68,24 +66,23 @@ public:
     auto endpoints = resolver.resolve("localhost", std::to_string(port));
     boost::asio::connect(socket_, endpoints);
     workerPid = static_cast<int>(getpid());
-    workerId = 0; // single-worker context uses index 0
+    workerId = 0;
   }
 
   void run() {
-    while (true) { // TODO have reply have a controlled loop exit
+    while (true) {
       EvalResults evalResults;
       evalResults.workerPid = workerPid;
       evalResults.workerId = workerId;
       evalResults.workerEvalCounter = ++evalCounter;
 
-      // ok what does main say to do
       EvalData evalData = receiveRPC<EvalData>(socket_);
 
       const uint64_t localGpHash = hashByteVector(evalData.gp);
       if (evalData.gpHash == 0) {
         evalData.gpHash = localGpHash;
       } else if (evalData.gpHash != localGpHash) {
-        std::cerr << "[AUTOC_GP_HASH_MISMATCH] workerId=" << workerId
+        std::cerr << "[HASH_MISMATCH] workerId=" << workerId
                   << " expected=0x" << std::hex << evalData.gpHash
                   << " got=0x" << localGpHash << std::dec
                   << " size=" << evalData.gp.size()
@@ -94,7 +91,6 @@ public:
 
       ensureScenarioMetadata(evalData);
 
-      // flip this back for return trip
       evalResults.gp = evalData.gp;
       evalResults.gpHash = localGpHash;
       if (!evalData.scenarioList.empty()) {
@@ -105,182 +101,57 @@ public:
       evalResults.scenarioList.clear();
       evalResults.scenarioList.reserve(evalData.scenarioList.size());
 
-      // Controller type dispatch using explicit ControllerType tag from EvalData
-      // Falls back to magic byte heuristics for legacy data (controllerType defaults to GP_TREE)
-      bool isGPTreeData = false;
-      bool isBytecodeData = false;
-      bool isNeuralNetData = false;
-      MyGP gp;
-      GPBytecodeInterpreter interpreter;
+      // Deserialize NN genome
       NNGenome nnGenome;
-
-      switch (evalData.controllerType) {
-        case ControllerType::BYTECODE: {
-          try {
-            boost::iostreams::stream<boost::iostreams::array_source> bytecodeStream = charArrayToIstream(evalData.gp);
-            boost::archive::binary_iarchive archive(bytecodeStream);
-            archive >> interpreter;
-            isBytecodeData = true;
-          } catch (const std::exception& e) {
-            std::cerr << "Error loading bytecode data: " << e.what() << std::endl;
-            continue;
-          }
-          break;
-        }
-        case ControllerType::NEURAL_NET: {
-          // Deserialize NN genome from payload
-          if (nn_detect_format(reinterpret_cast<const uint8_t*>(evalData.gp.data()), evalData.gp.size())) {
-            if (nn_deserialize(reinterpret_cast<const uint8_t*>(evalData.gp.data()), evalData.gp.size(), nnGenome)) {
-              isNeuralNetData = true;
-            } else {
-              std::cerr << "[MINISIM] Failed to deserialize NN genome" << std::endl;
-              continue;
-            }
-          } else {
-            std::cerr << "[MINISIM] NN payload missing magic bytes" << std::endl;
-            continue;
-          }
-          break;
-        }
-        case ControllerType::GP_TREE:
-        default: {
-          // Legacy fallback: check for binary archive magic bytes (bytecode)
-          // This handles pre-ControllerType data where controllerType defaults to GP_TREE
-          bool looksLikeBinaryArchive = false;
-          if (evalData.gp.size() >= 4) {
-            unsigned char firstBytes[4] = {
-              (unsigned char)evalData.gp[0],
-              (unsigned char)evalData.gp[1],
-              (unsigned char)evalData.gp[2],
-              (unsigned char)evalData.gp[3]
-            };
-            looksLikeBinaryArchive = (firstBytes[0] >= 0x16 && firstBytes[0] <= 0x20) &&
-                                    (firstBytes[1] == 0x00 || firstBytes[2] == 0x00);
-          }
-
-          if (looksLikeBinaryArchive) {
-            try {
-              boost::iostreams::stream<boost::iostreams::array_source> bytecodeStream = charArrayToIstream(evalData.gp);
-              boost::archive::binary_iarchive archive(bytecodeStream);
-              archive >> interpreter;
-              isBytecodeData = true;
-            } catch (const std::exception& e) {
-              std::cerr << "Error loading bytecode data: " << e.what() << std::endl;
-              continue;
-            }
-          } else {
-            try {
-              boost::iostreams::stream<boost::iostreams::array_source> gpStream = charArrayToIstream(evalData.gp);
-              gp.load(gpStream);
-              gp.resolveNodeValues(adfNs);
-              isGPTreeData = true;
-            } catch (const std::exception& e) {
-              std::cerr << "Error loading GP tree data: " << e.what() << std::endl;
-              continue;
-            }
-          }
-          break;
-        }
+      if (!nn_detect_format(reinterpret_cast<const uint8_t*>(evalData.gp.data()), evalData.gp.size())) {
+        std::cerr << "[MINISIM] Payload missing NN01 magic bytes, size=" << evalData.gp.size() << std::endl;
+        continue;
+      }
+      if (!nn_deserialize(reinterpret_cast<const uint8_t*>(evalData.gp.data()), evalData.gp.size(), nnGenome)) {
+        std::cerr << "[MINISIM] Failed to deserialize NN genome" << std::endl;
+        continue;
       }
 
-      // Always log GP program while debugging
-      static const bool logGpStrings = true;
-      if (logGpStrings) {
-        if (isGPTreeData) {
-          std::ostringstream oss;
-          gp.printOn(oss);
-          std::string treeStr = oss.str();
-          const size_t maxLen = 800;
-          if (treeStr.size() > maxLen) {
-            treeStr.resize(maxLen);
-            treeStr.append("...<truncated>");
-          }
-          std::cerr << "[AUTOC_GP_STRING] worker=" << workerId
-                    << " eval=" << evalCounter
-                    << " hash=0x" << std::hex << evalData.gpHash << std::dec
-                    << " bytes=" << evalData.gp.size()
-                    << " tree=\"" << treeStr << "\""
-                    << std::endl;
-        } else if (isBytecodeData) {
-          std::cerr << "[AUTOC_GP_STRING] worker=" << workerId
-                    << " eval=" << evalCounter
-                    << " hash=0x" << std::hex << evalData.gpHash << std::dec
-                    << " bytecode_bytes=" << evalData.gp.size()
-                    << " (bytecode)"
-                    << std::endl;
-        } else if (isNeuralNetData) {
-          std::ostringstream topo;
-          for (size_t i = 0; i < nnGenome.topology.size(); i++) {
-            if (i > 0) topo << "x";
-            topo << nnGenome.topology[i];
-          }
-          std::cerr << "[AUTOC_GP_STRING] worker=" << workerId
-                    << " eval=" << evalCounter
-                    << " hash=0x" << std::hex << evalData.gpHash << std::dec
-                    << " nn_bytes=" << evalData.gp.size()
-                    << " topology=" << topo.str()
-                    << " weights=" << nnGenome.weights.size()
-                    << " gen=" << nnGenome.generation
-                    << std::endl;
+      // Log NN info
+      {
+        std::ostringstream topo;
+        for (size_t i = 0; i < nnGenome.topology.size(); i++) {
+          if (i > 0) topo << "x";
+          topo << nnGenome.topology[i];
         }
+        std::cerr << "[MINISIM] worker=" << workerId
+                  << " eval=" << evalCounter
+                  << " hash=0x" << std::hex << evalData.gpHash << std::dec
+                  << " nn_bytes=" << evalData.gp.size()
+                  << " topology=" << topo.str()
+                  << " weights=" << nnGenome.weights.size()
+                  << " gen=" << nnGenome.generation
+                  << std::endl;
       }
-      
-      // for each path, evaluate
-      for (int i = 0; i < evalData.pathList.size(); i++) {
+
+      // Evaluate each path
+      for (int i = 0; i < static_cast<int>(evalData.pathList.size()); i++) {
         std::vector<Path> path = evalData.pathList.at(i);
-
-        // accumulate steps
         std::vector<AircraftState> aircraftStateSteps;
 
         // Fixed initial orientation and position for deterministic evaluation
-        gp_quat aircraft_orientation;
-        gp_vec3 initialPosition;
-        {
-          // Set orientation to be upright and level (180 deg yaw, 0 pitch, 0 roll)
-          aircraft_orientation = gp_quat(Eigen::AngleAxis<gp_scalar>(static_cast<gp_scalar>(M_PI), gp_vec3::UnitZ())) *
-            gp_quat(Eigen::AngleAxis<gp_scalar>(0, gp_vec3::UnitY())) *
-            gp_quat(Eigen::AngleAxis<gp_scalar>(0, gp_vec3::UnitX()));
-
-          // Set fixed starting position
-          initialPosition = gp_vec3(static_cast<gp_scalar>(-2.19f), static_cast<gp_scalar>(5.49f), static_cast<gp_scalar>(-36.93f));
-        }
-
-        // compute initial velocity vector based on aircraft orientation (keeping minisim simple)
+        gp_quat aircraft_orientation = gp_quat(Eigen::AngleAxis<gp_scalar>(static_cast<gp_scalar>(M_PI), gp_vec3::UnitZ())) *
+          gp_quat(Eigen::AngleAxis<gp_scalar>(0, gp_vec3::UnitY())) *
+          gp_quat(Eigen::AngleAxis<gp_scalar>(0, gp_vec3::UnitX()));
+        gp_vec3 initialPosition(static_cast<gp_scalar>(-2.19f), static_cast<gp_scalar>(5.49f), static_cast<gp_scalar>(-36.93f));
         gp_vec3 initial_velocity = aircraft_orientation * gp_vec3(SIM_INITIAL_VELOCITY, 0.0f, 0.0f);
-        
-        // reset sim state
-        aircraftState = AircraftState{ 0, SIM_INITIAL_VELOCITY, initial_velocity, aircraft_orientation, initialPosition, 0.0f, 0.0f, SIM_INITIAL_THROTTLE, 0 };
-        aircraftState.clearHistory();  // Reset temporal history for new path
 
-        // Record initial aircraft state at time 0 to match path start
+        aircraftState = AircraftState{ 0, SIM_INITIAL_VELOCITY, initial_velocity, aircraft_orientation, initialPosition, 0.0f, 0.0f, SIM_INITIAL_THROTTLE, 0 };
+        aircraftState.clearHistory();
+
         aircraftStateSteps.push_back(aircraftState);
 
-        // iterate the simulator
-        unsigned long int duration_msec = 0; // how long have we been running
+        unsigned long int duration_msec = 0;
         CrashReason crashReason = CrashReason::None;
 
         while (crashReason == CrashReason::None) {
 
-          // BASELINE CONTROLLER DISABLED FOR GP-ONLY LEARNING (consistent with crrcsim)
-          // Control commands start at 0 for each path (consistent with crrcsim reset behavior)
-          // Within each path evaluation, commands persist between timesteps for incremental GP adjustments
-
-#if 0
-          {
-            char outbuf[1000];
-            Eigen::Matrix3d r = aircraftState.getOrientation().toRotationMatrix();
-            sprintf(outbuf, "Estimate airXaxis:%f %f %f  airZaxis:%f %f %f toTarget:%f %f %f rolledTarget:%f %f %f  r:%f p:%f t:%f\n",
-              r.col(0).x(), r.col(0).y(), r.col(0).z(),
-              r.col(2).x(), r.col(2).y(), r.col(2).z(),
-              projectedVector.x(), projectedVector.y(), projectedVector.z(),
-              newLocalTargetVector.x(), newLocalTargetVector.y(), newLocalTargetVector.z(),
-              aircraftState.getPitchCommand(), aircraftState.getRollCommand(), aircraftState.getThrottleCommand());
-
-            std::cout << outbuf;
-          }
-#endif
-
-          // Capture temporal history before GP evaluation (for GETDPHI_PREV, GETDTHETA_PREV, GETDIST_PREV, etc.)
+          // Capture temporal history before NN evaluation
           {
             VectorPathProvider pathProvider(path, aircraftState.getThisPathIndex());
             gp_scalar dPhi = executeGetDPhi(pathProvider, aircraftState, 0.0f);
@@ -291,57 +162,43 @@ public:
             aircraftState.recordErrorHistory(dPhi, dTheta, distance, duration_msec);
           }
 
-          // Store control values before evaluation for comparison
-          gp_scalar pre_roll = aircraftState.getRollCommand();
-          gp_scalar pre_pitch = aircraftState.getPitchCommand();
-          gp_scalar pre_throttle = aircraftState.getThrottleCommand();
-
-          // run the controller (GP tree, bytecode interpreter, or neural net)
-          gp_scalar evaluation_result = 0.0f;
-          if (isGPTreeData) {
-            evaluation_result = gp.NthMyGene(0)->evaluate(path, gp, 0);
-          } else if (isBytecodeData) {
-            evaluation_result = interpreter.evaluate(aircraftState, path, 0.0);
-          } else if (isNeuralNetData) {
+          // Run NN controller
+          {
             VectorPathProvider pathProvider(path, aircraftState.getThisPathIndex());
             NNControllerBackend nnBackend(nnGenome);
             nnBackend.evaluate(aircraftState, pathProvider);
           }
-          
 
-          // advance the aircraft
+          // Advance aircraft state
           aircraftState.minisimAdvanceState(SIM_TIME_STEP_MSEC);
           duration_msec += SIM_TIME_STEP_MSEC;
           aircraftState.setSimTimeMsec(duration_msec);
 
-          // did we crash?
+          // Crash detection
           gp_scalar distanceFromOrigin = std::sqrt(aircraftState.getPosition()[0] * aircraftState.getPosition()[0] +
             aircraftState.getPosition()[1] * aircraftState.getPosition()[1]);
-          if (aircraftState.getPosition()[2] < (SIM_MAX_ELEVATION) || // too high
-            aircraftState.getPosition()[2] > (SIM_MIN_ELEVATION) || // too low
-            distanceFromOrigin > SIM_PATH_RADIUS_LIMIT) { // too far
+          if (aircraftState.getPosition()[2] < (SIM_MAX_ELEVATION) ||
+            aircraftState.getPosition()[2] > (SIM_MIN_ELEVATION) ||
+            distanceFromOrigin > SIM_PATH_RADIUS_LIMIT) {
             crashReason = CrashReason::Eval;
           }
 
-          // search for location of next timestamp using time-based targeting
-          while (aircraftState.getThisPathIndex() < path.size() - 2 && (path.at(aircraftState.getThisPathIndex()).simTimeMsec < duration_msec)) {
+          // Advance path index
+          while (aircraftState.getThisPathIndex() < static_cast<int>(path.size()) - 2 &&
+                 (path.at(aircraftState.getThisPathIndex()).simTimeMsec < static_cast<int32_t>(duration_msec))) {
             aircraftState.setThisPathIndex(aircraftState.getThisPathIndex() + 1);
           }
 
-          // record progress
           aircraftStateSteps.push_back(aircraftState);
 
-          // as long as we are within the time limit and have not reached the end of the path
           if (duration_msec >= SIM_TOTAL_TIME_MSEC) {
             crashReason = CrashReason::Time;
           }
-
-          if (aircraftState.getThisPathIndex() >= path.size() - 2) {
+          if (aircraftState.getThisPathIndex() >= static_cast<int>(path.size()) - 2) {
             crashReason = CrashReason::Distance;
           }
         }
 
-        // save results of this run
         {
           ScenarioMetadata meta = scenarioForPathIndex(evalData, static_cast<size_t>(i));
           evalResults.scenarioList.push_back(meta);
@@ -351,11 +208,8 @@ public:
         evalResults.crashReasonList.push_back(crashReason);
       }
 
-      // always send our state -- covers initial state
-      // evalResults.dump(std::cout);
       sendRPC(socket_, evalResults);
 
-      // prepare results for next cycle
       evalResults.pathList.clear();
       evalResults.aircraftStateList.clear();
       evalResults.crashReasonList.clear();
@@ -375,8 +229,6 @@ int main(int argc, char* argv[]) {
     std::cerr << "Usage: minisim <base> <id> <port>" << std::endl;
     return 1;
   }
-
-  initializeSimGP();
 
   unsigned short port = std::atoi(argv[3]);
   boost::asio::io_context io_context;

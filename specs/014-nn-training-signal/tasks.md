@@ -55,23 +55,23 @@
 
 ### 2c: Break GP inheritance and remove GP code
 
-- [ ] T017 Rewrite autoc/autoc.h: remove `#include "gp.h"`, remove MyGP : GP / MyGene : GPGene / MyPopulation : GPPopulation inheritance, replace with standalone NN-only classes wrapping NNPopulation
-- [ ] T018 Rewrite autoc/autoc.cc: remove GPInit(), GPRegisterClass(), GP tree creation, GPVariables usage — replace with direct NNPopulation init using config from inih. Remove `#include "gp.h"` and `#include "gpconfig.h"`
-- [ ] T019 Delete autoc/autoc-eval.cc (GP tree evaluation — entirely replaced by nn_evaluator_portable)
-- [ ] T020 [P] Delete autoc/gp_bytecode.h and autoc/gp_bytecode.cc (bytecode interpreter)
-- [ ] T021 [P] Delete autoc/gp_evaluator_portable.h and autoc/gp_evaluator_portable.cc (GP portable evaluator)
-- [ ] T022 Remove GP tree deserialization from autoc/minisim.cc — remove `#include "gp.h"`, keep only NN weight handling
-- [ ] T023 Remove GP tree deserialization from autoc/renderer.cc — remove `#include "gp.h"`, keep only NN archive replay
-- [ ] T024 Remove GPConfiguration usage from autoc/nnextractor.cc — use inih instead, remove `#include "gp.h"`
-- [ ] T025 Remove autoc/gpextractor.cc from build (GP-only tool) — delete or move to archive
-- [ ] T026 Strip all if(ControllerType=="GP") / if(ControllerType=="NN") modal branches across autoc.cc, minisim.cc — happy path NN only
+- [X] T017 Rewrite autoc/autoc.h: remove `#include "gp.h"`, remove MyGP/MyGene/MyPopulation classes, ExtraConfig, Operators enum — NN-only header with fitness defines and scenario types
+- [X] T018 Rewrite autoc/autoc.cc: remove MyPopulation class, MyGP::evaluate/evalTask, GP evolution loop, bytecode evaluation mode, GP initialization — NN-only with runNNEvolution/runNNEvaluation
+- [X] T019 Delete autoc/autoc-eval.cc (GP tree evaluation — entirely replaced by nn_evaluator_portable)
+- [X] T020 [P] Delete autoc/gp_bytecode.h and autoc/gp_bytecode.cc (bytecode interpreter)
+- [X] T021 [P] Delete autoc/gp_evaluator_portable.h and autoc/gp_evaluator_portable.cc (GP portable evaluator). Sensor math (executeGetDPhi, executeGetDTheta, getInterpolatedTargetPosition) extracted to new sensor_math.h/cc with fastAtan2 LUT preserved for embedded platform compatibility.
+- [X] T022 Remove GP tree deserialization from autoc/minisim.cc — complete rewrite, NN-only, uses sensor_math.h for temporal history
+- [X] T023 Remove GP tree deserialization from autoc/renderer.cc — remove `#include "gp.h"`, NN-only fitness extraction
+- [X] T024 Remove `#include "gp.h"` from autoc/nnextractor.cc, remove dummy MyGP implementations
+- [X] T025 Delete autoc/gpextractor.cc, bytecode2cpp.cc, gp_evaluator_desktop.h/cc, gp_evaluator_embedded.h/cc, gp_evaluator_tests.cc
+- [X] T026 Strip all GP/NN modal branches — NN is the only path in autoc.cc and minisim.cc
 
 ### 2d: Sever CMake dependency on parent repo
 
-- [ ] T027 Update autoc/CMakeLists.txt: remove `include_directories(../include)`, `link_directories(../lib)`, remove `gp` from all target_link_libraries
-- [ ] T028 Remove references to deleted source files (autoc-eval.cc, gp_bytecode.cc, gp_evaluator_portable.cc, gpextractor.cc) from autoc/CMakeLists.txt
-- [ ] T029 Full rebuild: `cd ~/GP/autoc && bash rebuild.sh` — verify zero GP references remain
-- [ ] T030 Run all tests: `cd ~/GP/build && ctest --output-on-failure` — all contract + existing tests pass
+- [X] T027 Update autoc/CMakeLists.txt: remove `include_directories(../include)`, `link_directories(../lib)`, remove `gp` from all target_link_libraries
+- [X] T028 Remove references to deleted source files from autoc/CMakeLists.txt, add sensor_math.cc/h, remove autoc_tests (GP-only)
+- [X] T029 Full rebuild: clean build succeeds with zero GP references
+- [X] T030 Run all tests: `cd ~/GP/build && ctest --output-on-failure` — 8/8 tests pass
 - [ ] T030a Integration smoke test: run `./build/autoc` for 3 generations with NN config, verify data.dat and data.stc are produced and fitness values are present in console output
 
 **Checkpoint**: autoc builds with zero dependency on libgp.a or parent GP repo. All `#include "gp.h"` removed.

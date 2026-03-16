@@ -19,16 +19,9 @@
 #include <boost/archive/binary_iarchive.hpp>
 #include <boost/serialization/vector.hpp>
 
-#include "../include/gp.h"
 #include "minisim.h"
 #include "nn_serialization.h"
 #include "config_manager.h"
-#include "autoc.h"
-#include "threadpool.h"
-
-// Dummy implementations required by linker (real ones are in autoc.cc)
-void MyGP::evaluate() {}
-void MyGP::evalTask(WorkerContext& context) {}
 
 void printUsage(const char* progName) {
   std::cout << "Usage: " << progName << " [OPTIONS]\n";
@@ -208,7 +201,6 @@ int main(int argc, char** argv) {
   if (!nn_detect_format(reinterpret_cast<const uint8_t*>(evalResults.gp.data()),
                         evalResults.gp.size())) {
     std::cerr << "Error: S3 archive does not contain NN data (no NN01 magic bytes)." << std::endl;
-    std::cerr << "This may be a GP archive. Use gpextractor instead." << std::endl;
     return 1;
   }
 

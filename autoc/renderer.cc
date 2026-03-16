@@ -23,7 +23,6 @@
 #include <vtkTransformPolyDataFilter.h>
 #include <vtkPolygon.h>
 
-#include <gp.h>
 #include "nn_serialization.h"
 
 #include <aws/core/Aws.h>
@@ -1220,30 +1219,17 @@ gp_fitness Renderer::extractFitnessFromGP(const std::vector<char>& gpData) {
     return 0.0;
   }
 
-  // Check if this is an NN genome (NN01 magic bytes)
-  if (nn_detect_format(reinterpret_cast<const uint8_t*>(gpData.data()), gpData.size())) {
-    NNGenome genome;
-    if (nn_deserialize(reinterpret_cast<const uint8_t*>(gpData.data()), gpData.size(), genome)) {
-      return static_cast<gp_fitness>(genome.fitness);
-    }
-    std::cerr << "Error extracting fitness from NN genome" << std::endl;
+  // Extract fitness from NN genome (NN01 binary format)
+  if (!nn_detect_format(reinterpret_cast<const uint8_t*>(gpData.data()), gpData.size())) {
+    std::cerr << "Error: archive does not contain NN data (no NN01 magic bytes)" << std::endl;
     return 0.0;
   }
-
-  try {
-    // Create stream from the char vector (GP tree format)
-    boost::iostreams::stream<boost::iostreams::array_source> inStream(gpData.data(), gpData.size());
-
-    // Create and load a base GP object
-    GP gp;
-    gp.load(inStream);
-
-    return gp.getFitness();
+  NNGenome genome;
+  if (nn_deserialize(reinterpret_cast<const uint8_t*>(gpData.data()), gpData.size(), genome)) {
+    return static_cast<gp_fitness>(genome.fitness);
   }
-  catch (const std::exception& e) {
-    std::cerr << "Error extracting fitness from GP: " << e.what() << std::endl;
-    return 0.0;
-  }
+  std::cerr << "Error extracting fitness from NN genome" << std::endl;
+  return 0.0;
 }
 
 void Renderer::updateTextDisplay(int generation, gp_fitness fitness) {

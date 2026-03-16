@@ -4,9 +4,6 @@
 #include <array>
 #include <algorithm>
 
-#ifndef GP_TEST
-#include "gp_evaluator_portable.h"
-#endif
 
 // ============================================================
 // T036: Weight count
