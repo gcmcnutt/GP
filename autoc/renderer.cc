@@ -311,8 +311,8 @@ bool Renderer::updateGenerationDisplay(int newGen) {
     // Deserialize the data
     try {
       std::istringstream iss(retrievedData, std::ios::binary);
-      boost::archive::binary_iarchive ia(iss);
-      ia >> evalResults;
+      cereal::BinaryInputArchive ia(iss);
+      ia(evalResults);
     }
     catch (const std::exception& e) {
       std::cerr << "Error during deserialization: " << e.what() << std::endl;

@@ -7,34 +7,25 @@
 #include <cstdint>
 #include <arpa/inet.h>
 
-#include <boost/iostreams/stream.hpp>
-#include <boost/iostreams/device/back_inserter.hpp>
-#include <boost/iostreams/device/array.hpp>
-#include <boost/asio.hpp>
-#include <boost/process.hpp>
-#include <boost/format.hpp>
-#include <boost/serialization/serialization.hpp>
-#include <boost/serialization/array.hpp>
-#include <boost/serialization/split_free.hpp>
-#include <boost/serialization/vector.hpp>
-#include <boost/archive/binary_oarchive.hpp>
-#include <boost/archive/binary_iarchive.hpp>
+#include <cereal/cereal.hpp>
+#include <cereal/types/vector.hpp>
+#include <cereal/types/string.hpp>
+#include <cereal/archives/binary.hpp>
+
+#include <cstdio>
 
 // Cross-platform serialization notes:
-// - Boost binary_archive serializes primitives (int, float) in native format
+// - cereal binary archive serializes primitives in native format
 // - Works across x86/ARM if both are little-endian (typical for modern systems)
 // - IEEE 754 float representation is standard
 // - Custom Eigen serialization (gp_vec3, gp_quat) uses element-wise saves (portable)
-// - For true cross-endian support, consider eos::portable_oarchive
 // - Current implementation: deterministic within same architecture
 
 #include <cmath>
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
 
-using boost::asio::ip::tcp;
-using boost::format;
-
+#include "socket_wrapper.h"
 #include "aircraft_state.h"
 
 // FNV-1a hash for serialized GP programs/bytecode (matches dtest tracker)
@@ -59,54 +50,27 @@ inline uint64_t hashString(const std::string& str) {
   return hash;
 }
 
-namespace boost {
-  namespace serialization {
-
-    // Serialization for float-based Eigen vector/quaternion used by GP eval
-    // Serialize elements individually for cross-platform portability (avoiding
-    // binary serialization of raw float arrays which is not portable)
-    //
-    // Note: We use split save/load to ensure proper portable serialization.
-    // The save always writes in portable format, and load handles both old
-    // (binary array) and new (element-wise) formats for backward compatibility.
+namespace cereal {
     template<class Archive>
-    void save(Archive& ar, const gp_vec3& v, const unsigned int version)
-    {
-      ar & v[0] & v[1] & v[2];
+    void save(Archive& ar, const gp_vec3& v) {
+        ar(v[0], v[1], v[2]);
     }
-
     template<class Archive>
-    void load(Archive& ar, gp_vec3& v, const unsigned int version)
-    {
-      ar & v[0] & v[1] & v[2];
+    void load(Archive& ar, gp_vec3& v) {
+        ar(v[0], v[1], v[2]);
     }
-
-    // Serialization for Eigen::Quaternion<float>
-    // Serialize coefficients individually for cross-platform portability
     template<class Archive>
-    void save(Archive& ar, const gp_quat& q, const unsigned int version)
-    {
-      gp_scalar w = q.w();
-      gp_scalar x = q.x();
-      gp_scalar y = q.y();
-      gp_scalar z = q.z();
-      ar & w & x & y & z;
+    void save(Archive& ar, const gp_quat& q) {
+        gp_scalar w = q.w(), x = q.x(), y = q.y(), z = q.z();
+        ar(w, x, y, z);
     }
-
     template<class Archive>
-    void load(Archive& ar, gp_quat& q, const unsigned int version)
-    {
-      gp_scalar w, x, y, z;
-      ar & w & x & y & z;
-      q = gp_quat(w, x, y, z);
+    void load(Archive& ar, gp_quat& q) {
+        gp_scalar w, x, y, z;
+        ar(w, x, y, z);
+        q = gp_quat(w, x, y, z);
     }
-
-  } // namespace serialization
-} // namespace boost
-
-// These macros tell boost to use the save/load functions we just defined
-BOOST_SERIALIZATION_SPLIT_FREE(gp_vec3)
-BOOST_SERIALIZATION_SPLIT_FREE(gp_quat)
+}
 
 
 /*
@@ -128,66 +92,26 @@ struct ScenarioMetadata {
   double entrySpeedFactor = 1.0;     // multiplier on reference speed
   double windDirectionOffset = 0.0;  // radians, offset from base wind direction
 
-  // Entry position offsets (version 6+, see specs/005-entry-fitness-ramp)
+  // Entry position offsets (see specs/005-entry-fitness-ramp)
   double entryNorthOffset = 0.0;     // meters, NED North
   double entryEastOffset = 0.0;      // meters, NED East
   double entryAltOffset = 0.0;       // meters, NED Down (negative=up)
 
-  friend class boost::serialization::access;
-
   template<class Archive>
-  void serialize(Archive& ar, const unsigned int version) {
-    ar& pathVariantIndex;
-    ar& windVariantIndex;
-    ar& windSeed;
-    if (version > 2) {
-      ar& scenarioSequence;
-      ar& bakeoffSequence;
-    }
-    if (version > 3) {
-      ar& enableDeterministicLogging;
-    } else if (version > 1) {
-      ar& scenarioSequence;
-      if (Archive::is_loading::value) {
-        bakeoffSequence = 0;
-      }
-    } else if (Archive::is_loading::value) {
-      scenarioSequence = 0;
-      bakeoffSequence = 0;
-    }
-    // VARIATIONS1 fields (version 5+)
-    if (version > 4) {
-      ar& entryHeadingOffset;
-      ar& entryRollOffset;
-      ar& entryPitchOffset;
-      ar& entrySpeedFactor;
-      ar& windDirectionOffset;
-    } else if (Archive::is_loading::value) {
-      // Defaults for older archives
-      entryHeadingOffset = 0.0;
-      entryRollOffset = 0.0;
-      entryPitchOffset = 0.0;
-      entrySpeedFactor = 1.0;
-      windDirectionOffset = 0.0;
-    }
-    // Entry position offset fields (version 6+)
-    if (version > 5) {
-      ar& entryNorthOffset;
-      ar& entryEastOffset;
-      ar& entryAltOffset;
-    } else if (Archive::is_loading::value) {
-      entryNorthOffset = 0.0;
-      entryEastOffset = 0.0;
-      entryAltOffset = 0.0;
-    }
+  void serialize(Archive& ar, const std::uint32_t version) {
+    ar(pathVariantIndex, windVariantIndex, windSeed, scenarioSequence,
+       bakeoffSequence, enableDeterministicLogging, entryHeadingOffset,
+       entryRollOffset, entryPitchOffset, entrySpeedFactor,
+       windDirectionOffset, entryNorthOffset, entryEastOffset, entryAltOffset);
   }
 };
-BOOST_CLASS_VERSION(ScenarioMetadata, 6)
+CEREAL_CLASS_VERSION(ScenarioMetadata, 1)
 
 // Controller type tag for RPC wire format
 enum class ControllerType : int {
   NEURAL_NET = 2   // NNGenome weight vector
 };
+// cereal doesn't serialize enum class directly - use int wrapper
 
 struct EvalData {
   std::vector<char> gp;
@@ -198,52 +122,13 @@ struct EvalData {
   ScenarioMetadata scenario;
   std::vector<ScenarioMetadata> scenarioList;
 
-  friend class boost::serialization::access;
-
   template<class Archive>
-  void serialize(Archive& ar, const unsigned int version) {
-    ar& gp;
-    if (version > 3) {
-      ar& gpHash;
-      if (version > 4) {
-        ar& isEliteReeval;
-      } else if (Archive::is_loading::value) {
-        isEliteReeval = false;
-      }
-    } else if (Archive::is_loading::value) {
-      gpHash = 0;
-      isEliteReeval = false;
-    }
-    // ControllerType field (version 6+)
-    if (version > 5) {
-      int ct = static_cast<int>(controllerType);
-      ar& ct;
-      if (Archive::is_loading::value) {
-        controllerType = static_cast<ControllerType>(ct);
-      }
-    } else if (Archive::is_loading::value) {
-      controllerType = ControllerType::NEURAL_NET;
-    }
-    ar& pathList;
-    if (version > 1) {
-      ar& scenario;
-      if (version > 2) {
-        ar& scenarioList;
-      } else if (Archive::is_loading::value) {
-        scenarioList.assign(pathList.size(), scenario);
-        for (size_t idx = 0; idx < scenarioList.size(); ++idx) {
-          if (scenarioList[idx].pathVariantIndex < 0) {
-            scenarioList[idx].pathVariantIndex = static_cast<int>(idx);
-          }
-        }
-      }
-    } else if (Archive::is_loading::value) {
-      scenario = ScenarioMetadata();
-      scenarioList.assign(pathList.size(), scenario);
-      for (size_t idx = 0; idx < scenarioList.size(); ++idx) {
-        scenarioList[idx].pathVariantIndex = static_cast<int>(idx);
-      }
-    }
+  void serialize(Archive& ar, const std::uint32_t version) {
+    ar(gp, gpHash, isEliteReeval);
+    int ct = static_cast<int>(controllerType);
+    ar(ct);
+    controllerType = static_cast<ControllerType>(ct);
+    ar(pathList, scenario, scenarioList);
   }
 
   void sanitizePaths() {
@@ -254,7 +139,7 @@ struct EvalData {
     }
   }
 };
-BOOST_CLASS_VERSION(EvalData, 6)  // Bumped for ControllerType field
+CEREAL_CLASS_VERSION(EvalData, 1)
 
 enum class CrashReason {
   None,
@@ -314,51 +199,16 @@ struct DebugSample {
   uint32_t rngState32 = 0;
 
   template<class Archive>
-  void serialize(Archive& ar, const unsigned int /*version*/) {
-    ar& pathIndex;
-    ar& stepIndex;
-    ar& simTimeMsec;
-    ar& dtSec;
-    ar& simSteps;
-    ar& velRelGround;
-    ar& velRelAirmass;
-    ar& position;
-    ar& velocity;
-    ar& acceleration;
-    ar& accelPast;
-    ar& angularRates;
-    ar& angularAccelPast;
-    ar& quatDotPast;
-    ar& windBody;
-    ar& orientation;
-    ar& pitchCommand;
-    ar& rollCommand;
-    ar& throttleCommand;
-    ar& elevatorSim;
-    ar& aileronSim;
-    ar& throttleSim;
-    ar& massKg;
-    ar& density;
-    ar& gravity;
-    ar& alpha;
-    ar& beta;
-    ar& vRelWind;
-    ar& localAirmass;
-    ar& gustBody;
-    ar& forceBody;
-    ar& momentBody;
-    ar& vLocal;
-    ar& vLocalDot;
-    ar& omegaBody;
-    ar& omegaDotBody;
-    ar& latGeoc;
-    ar& lonGeoc;
-    ar& radiusToVehicle;
-    ar& latDotPast;
-    ar& lonDotPast;
-    ar& radiusDotPast;
-    ar& rngState16;
-    ar& rngState32;
+  void serialize(Archive& ar, const std::uint32_t /*version*/) {
+    ar(pathIndex, stepIndex, simTimeMsec, dtSec, simSteps,
+       velRelGround, velRelAirmass, position, velocity, acceleration,
+       accelPast, angularRates, angularAccelPast, quatDotPast, windBody,
+       orientation, pitchCommand, rollCommand, throttleCommand,
+       elevatorSim, aileronSim, throttleSim, massKg, density, gravity,
+       alpha, beta, vRelWind, localAirmass, gustBody, forceBody,
+       momentBody, vLocal, vLocalDot, omegaBody, omegaDotBody,
+       latGeoc, lonGeoc, radiusToVehicle, latDotPast, lonDotPast,
+       radiusDotPast, rngState16, rngState32);
   }
 };
 
@@ -376,50 +226,11 @@ struct EvalResults {
   int workerPid = 0;
   int workerEvalCounter = 0;  // Incremented per evaluation on the worker
 
-  friend class boost::serialization::access;
-
   template<class Archive>
-  void serialize(Archive& ar, const unsigned int version) {
-    ar& gp;
-    if (version > 7) {
-      ar& gpHash;
-    } else if (Archive::is_loading::value) {
-      gpHash = 0;
-    }
-    ar& crashReasonList;
-    ar& pathList;
-    ar& aircraftStateList;
-    if (version > 1) {
-      ar& scenario;
-      if (version > 2) {
-        ar& scenarioList;
-        if (version > 3) {
-          ar& debugSamples;
-          if (version > 8) {
-            ar& physicsTrace;
-          }
-          ar& workerId;
-          ar& workerPid;
-          ar& workerEvalCounter;
-        }
-      } else if (Archive::is_loading::value) {
-        scenarioList.assign(pathList.size(), scenario);
-        for (size_t idx = 0; idx < scenarioList.size(); ++idx) {
-          scenarioList[idx].pathVariantIndex = static_cast<int>(idx);
-        }
-      }
-    } else if (Archive::is_loading::value) {
-      scenario = ScenarioMetadata();
-      scenarioList.assign(pathList.size(), scenario);
-      for (size_t idx = 0; idx < scenarioList.size(); ++idx) {
-        scenarioList[idx].pathVariantIndex = static_cast<int>(idx);
-      }
-      debugSamples.clear();
-      physicsTrace.clear();
-      workerId = -1;
-      workerPid = 0;
-      workerEvalCounter = 0;
-    }
+  void serialize(Archive& ar, const std::uint32_t version) {
+    ar(gp, gpHash, crashReasonList, pathList, aircraftStateList,
+       scenario, scenarioList, debugSamples, physicsTrace,
+       workerId, workerPid, workerEvalCounter);
   }
 
   void clear() {
@@ -438,39 +249,43 @@ struct EvalResults {
   }
 
   void dump(std::ostream& os) {
-    os << format("EvalResults: crash[%d] paths[%d] states[%d]\n Paths:\n")
-      % crashReasonList.size() % pathList.size() % aircraftStateList.size();
+    char buf[512];
+    snprintf(buf, sizeof(buf), "EvalResults: crash[%zu] paths[%zu] states[%zu]\n Paths:\n",
+      crashReasonList.size(), pathList.size(), aircraftStateList.size());
+    os << buf;
 
-    os << format("GP: %s\n") % "TODO";
-    os << format("Scenario: pathVariant=%d windVariant=%d windSeed=%u seq=%llu bake=%llu\n")
-      % scenario.pathVariantIndex % scenario.windVariantIndex % scenario.windSeed
-      % static_cast<unsigned long long>(scenario.scenarioSequence)
-      % static_cast<unsigned long long>(scenario.bakeoffSequence);
+    snprintf(buf, sizeof(buf), "Scenario: pathVariant=%d windVariant=%d windSeed=%u seq=%llu bake=%llu\n",
+      scenario.pathVariantIndex, scenario.windVariantIndex, scenario.windSeed,
+      static_cast<unsigned long long>(scenario.scenarioSequence),
+      static_cast<unsigned long long>(scenario.bakeoffSequence));
+    os << buf;
     for (size_t i = 0; i < scenarioList.size(); ++i) {
-      os << format("  Scenario[%zu]: pathVariant=%d windVariant=%d windSeed=%u seq=%llu bake=%llu\n")
-        % i % scenarioList[i].pathVariantIndex % scenarioList[i].windVariantIndex % scenarioList[i].windSeed
-        % static_cast<unsigned long long>(scenarioList[i].scenarioSequence)
-        % static_cast<unsigned long long>(scenarioList[i].bakeoffSequence);
+      snprintf(buf, sizeof(buf), "  Scenario[%zu]: pathVariant=%d windVariant=%d windSeed=%u seq=%llu bake=%llu\n",
+        i, scenarioList[i].pathVariantIndex, scenarioList[i].windVariantIndex, scenarioList[i].windSeed,
+        static_cast<unsigned long long>(scenarioList[i].scenarioSequence),
+        static_cast<unsigned long long>(scenarioList[i].bakeoffSequence));
+      os << buf;
     }
 
-    for (int i = 0; i < crashReasonList.size(); i++) {
-      os << format("  Crash %3d: %s\n") % i % crashReasonToString(crashReasonList.at(i));
+    for (size_t i = 0; i < crashReasonList.size(); i++) {
+      snprintf(buf, sizeof(buf), "  Crash %3zu: %s\n", i, crashReasonToString(crashReasonList.at(i)).c_str());
+      os << buf;
     }
 
-    for (int i = 0; i < pathList.size(); i++) {
-      for (int j = 0; j < pathList.at(i).size(); j++) {
+    for (size_t i = 0; i < pathList.size(); i++) {
+      for (size_t j = 0; j < pathList.at(i).size(); j++) {
         Path path = pathList.at(i).at(j);
-        os << format("  Path %3d:%3d: start[%8.2f %8.2f %8.2f] orient[%8.2f %8.2f %8.2f] dist[%8.2f] rad[%8.2f]\n")
-          % i
-          % j
-          % path.start[0] % path.start[1] % path.start[2]
-          % path.orientation.x() % path.orientation.y() % path.orientation.z()
-          % path.distanceFromStart % path.radiansFromStart;
+        snprintf(buf, sizeof(buf), "  Path %3zu:%3zu: start[%8.2f %8.2f %8.2f] orient[%8.2f %8.2f %8.2f] dist[%8.2f] rad[%8.2f]\n",
+          i, j,
+          path.start[0], path.start[1], path.start[2],
+          path.orientation.x(), path.orientation.y(), path.orientation.z(),
+          path.distanceFromStart, path.radiansFromStart);
+        os << buf;
       }
     }
     os << " Aircraft States:\n";
-    for (int i = 0; i < aircraftStateList.size(); i++) {
-      for (int j = 0; j < aircraftStateList.at(i).size(); j++) {
+    for (size_t i = 0; i < aircraftStateList.size(); i++) {
+      for (size_t j = 0; j < aircraftStateList.at(i).size(); j++) {
         AircraftState aircraftState = aircraftStateList.at(i).at(j);
         gp_quat orientQuatF = aircraftState.getOrientation();
         if (!std::isnan(orientQuatF.norm()) && std::abs(orientQuatF.norm() - 1.0f) > 1e-6f) {
@@ -482,67 +297,61 @@ struct EvalResults {
         for (int axis = 0; axis < 3; ++axis) {
           eulerWrapped[axis] = std::atan2(std::sin(euler[axis]), std::cos(euler[axis]));
         }
-        // TODO distance from start
-        os << format("  Path %3d:%3d: Time %5d Index %3d: pos[%8.2f %8.2f %8.2f] orientRPY[%8.2f %8.2f %8.2f] quat[%+7.4f %+7.4f %+7.4f %+7.4f] vel[%8.2f] pitch[%5.2f] roll[%5.2f] throttle[%5.2f]\n")
-          % i
-          % j
-          % aircraftState.getSimTimeMsec()
-          % aircraftState.getThisPathIndex()
-          % aircraftState.getPosition()[0] % aircraftState.getPosition()[1] % aircraftState.getPosition()[2]
-          % eulerWrapped.x() % eulerWrapped.y() % eulerWrapped.z()
-          % orientQuatF.w() % orientQuatF.x() % orientQuatF.y() % orientQuatF.z()
-          % aircraftState.getRelVel()
-          % aircraftState.getPitchCommand()
-          % aircraftState.getRollCommand()
-          % aircraftState.getThrottleCommand();
+        snprintf(buf, sizeof(buf),
+          "  Path %3zu:%3zu: Time %5ld Index %3d: pos[%8.2f %8.2f %8.2f] orientRPY[%8.2f %8.2f %8.2f] quat[%+7.4f %+7.4f %+7.4f %+7.4f] vel[%8.2f] pitch[%5.2f] roll[%5.2f] throttle[%5.2f]\n",
+          i, j,
+          aircraftState.getSimTimeMsec(),
+          aircraftState.getThisPathIndex(),
+          aircraftState.getPosition()[0], aircraftState.getPosition()[1], aircraftState.getPosition()[2],
+          eulerWrapped.x(), eulerWrapped.y(), eulerWrapped.z(),
+          orientQuatF.w(), orientQuatF.x(), orientQuatF.y(), orientQuatF.z(),
+          aircraftState.getRelVel(),
+          aircraftState.getPitchCommand(),
+          aircraftState.getRollCommand(),
+          aircraftState.getThrottleCommand());
+        os << buf;
       }
     }
   }
 };
-BOOST_CLASS_VERSION(EvalResults, 9)
+CEREAL_CLASS_VERSION(EvalResults, 1)
 
 struct WorkerContext {
-  std::unique_ptr<boost::asio::ip::tcp::socket> socket;
-  boost::process::child child_process;
+  std::unique_ptr<TcpSocket> socket;
+  pid_t childPid = 0;
   EvalResults evalResults;
-  int workerId = -1;  // set by thread pool
+  int workerId = -1;
 };
 
 /*
  * generic RPC wrappers
  */
 template<typename T>
-void sendRPC(tcp::socket& socket, const T& data) {
-  std::ostringstream archive_stream(std::ios::binary);
-  boost::archive::binary_oarchive archive(archive_stream);
-  archive << data;
-  std::string outbound_data = archive_stream.str();
-
-  // Send size header (4 bytes, network byte order)
+void sendRPC(TcpSocket& socket, const T& data) {
+  std::ostringstream os(std::ios::binary);
+  {
+    cereal::BinaryOutputArchive archive(os);
+    archive(data);
+  }
+  std::string outbound_data = os.str();
   uint32_t size = htonl(static_cast<uint32_t>(outbound_data.size()));
-  boost::asio::write(socket, boost::asio::buffer(&size, sizeof(size)));
-
-  // Send binary data
-  boost::asio::write(socket, boost::asio::buffer(outbound_data));
-};
+  socket.write(&size, sizeof(size));
+  socket.write(outbound_data.data(), outbound_data.size());
+}
 
 template<typename T>
-T receiveRPC(tcp::socket& socket) {
-  // Read size header (4 bytes, network byte order)
+T receiveRPC(TcpSocket& socket) {
   uint32_t size;
-  boost::asio::read(socket, boost::asio::buffer(&size, sizeof(size)));
+  socket.read(&size, sizeof(size));
   size = ntohl(size);
-
-  // Read binary data
   std::vector<char> buffer(size);
-  boost::asio::read(socket, boost::asio::buffer(buffer));
-
-  std::istringstream archive_stream(std::string(buffer.begin(), buffer.end()), std::ios::binary);
-  boost::archive::binary_iarchive archive(archive_stream);
+  socket.read(buffer.data(), buffer.size());
+  std::istringstream is(std::string(buffer.begin(), buffer.end()), std::ios::binary);
+  cereal::BinaryInputArchive archive(is);
   T data;
-  archive >> data;
+  archive(data);
   return data;
-};
+}
 
 
 #endif

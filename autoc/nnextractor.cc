@@ -16,8 +16,7 @@
 #include <aws/core/auth/AWSCredentialsProvider.h>
 #include <aws/core/client/ClientConfiguration.h>
 
-#include <boost/archive/binary_iarchive.hpp>
-#include <boost/serialization/vector.hpp>
+#include <cereal/archives/binary.hpp>
 
 #include "minisim.h"
 #include "nn_serialization.h"
@@ -33,7 +32,7 @@ void printUsage(const char* progName) {
   std::cout << "  -h, --help               Show this help message\n";
   std::cout << "\n";
   std::cout << "Extracts the best NN genome from an S3 evolution archive.\n";
-  std::cout << "The archive contains Boost-serialized EvalResults with the NN genome\n";
+  std::cout << "The archive contains cereal-serialized EvalResults with the NN genome\n";
   std::cout << "embedded in the .gp field (NN01 binary format).\n";
   std::cout << "\n";
   std::cout << "Examples:\n";
@@ -182,8 +181,8 @@ int main(int argc, char** argv) {
 
     try {
       std::istringstream iss(retrievedData, std::ios::binary);
-      boost::archive::binary_iarchive ia(iss);
-      ia >> evalResults;
+      cereal::BinaryInputArchive ia(iss);
+      ia(evalResults);
     }
     catch (const std::exception& e) {
       std::cerr << "Error deserializing EvalResults: " << e.what() << std::endl;

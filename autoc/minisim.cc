@@ -1,5 +1,4 @@
 /* minisim — lightweight simulator for NN controller evaluation */
-#include <boost/asio.hpp>
 #include <vector>
 #include <cstdlib>
 #include <cmath>
@@ -15,7 +14,6 @@
 #include "nn_evaluator_portable.h"
 
 using namespace std;
-using boost::asio::ip::tcp;
 
 // Global aircraft state (declared extern in autoc.h)
 AircraftState aircraftState;
@@ -61,10 +59,8 @@ ScenarioMetadata scenarioForPathIndex(const EvalData& evalData, size_t idx) {
 
 class SimProcess {
 public:
-  SimProcess(boost::asio::io_context& io_context, int id, unsigned short port) : socket_(io_context) {
-    tcp::resolver resolver(io_context);
-    auto endpoints = resolver.resolve("localhost", std::to_string(port));
-    boost::asio::connect(socket_, endpoints);
+  SimProcess(int id, unsigned short port) {
+    socket_.connect("localhost", port);
     workerPid = static_cast<int>(getpid());
     workerId = id;
   }
@@ -214,7 +210,7 @@ public:
   }
 
 private:
-  tcp::socket socket_;
+  TcpSocket socket_;
   int workerPid = 0;
   int workerId = 0;
   int evalCounter = 0;
@@ -228,8 +224,7 @@ int main(int argc, char* argv[]) {
 
   int id = std::atoi(argv[2]);
   unsigned short port = std::atoi(argv[3]);
-  boost::asio::io_context io_context;
-  SimProcess sim_process(io_context, id, port);
+  SimProcess sim_process(id, port);
   sim_process.run();
 
   return 0;

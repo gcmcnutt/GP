@@ -5,7 +5,6 @@
 From skeleton/skeleton.cc
 ------------------------------------------------------------------- */
 
-#include <boost/asio.hpp>
 #include <iostream>
 #include <vector>
 #include <stdlib.h>
@@ -44,23 +43,9 @@ From skeleton/skeleton.cc
 #include <aws/core/auth/AWSCredentialsProvider.h>
 #include <aws/core/client/ClientConfiguration.h>
 
-#include <boost/log/trivial.hpp>
-#include <boost/log/sources/severity_logger.hpp>
-#include <boost/log/expressions.hpp>
-#include <boost/log/utility/setup/console.hpp>
-#include <boost/log/utility/setup/common_attributes.hpp>
-#include <boost/log/utility/setup/formatter_parser.hpp>
-#include <boost/date_time/posix_time/posix_time.hpp>
-#include <boost/log/core.hpp>
-#include <boost/log/support/date_time.hpp>
-#include <boost/iostreams/stream.hpp>
-#include <boost/iostreams/device/back_inserter.hpp>
-#include <boost/archive/binary_oarchive.hpp>
+#include <cereal/archives/binary.hpp>
 
 using namespace std;
-namespace logging = boost::log;
-
-Logger logger;
 
 std::vector<std::vector<Path>> generationPaths;
 std::vector<ScenarioDescriptor> generationScenarios;
@@ -1233,14 +1218,13 @@ static void runNNEvolution(
                             reinterpret_cast<const char*>(nnData.data() + nnData.size()));
       bestResults.gpHash = hashByteVector(bestResults.gp);
 
-      // Save to S3 as Boost-serialized EvalResults (same format as GP)
+      // Save to S3 as cereal-serialized EvalResults
       {
         std::string keyName = startTime + "/gen" + std::to_string(10000 - gen) + ".dmp";
         auto s3Client = ConfigManager::getS3Client();
         if (s3Client) {
           std::ostringstream oss(std::ios::binary);
-          boost::archive::binary_oarchive oa(oss);
-          oa << bestResults;
+          { cereal::BinaryOutputArchive oa(oss); oa(bestResults); }
 
           auto stream = Aws::MakeShared<Aws::StringStream>("PutObject");
           *stream << oss.str();
@@ -1316,22 +1300,7 @@ int main(int argc, char** argv)
     }
   }
 
-  logging::add_console_log(
-    std::cout,
-    boost::log::keywords::format = (
-      boost::log::expressions::stream
-      << boost::log::expressions::format_date_time<boost::posix_time::ptime>("TimeStamp", "%Y-%m-%d %H:%M:%S")
-      << ": <" << logging::trivial::severity
-      << "> " << boost::log::expressions::smessage
-      )
-  );
-  logging::core::get()->set_filter(
-    logging::trivial::severity >= logging::trivial::info
-  );
-
-  logging::add_common_attributes();
-
-  logger = Logger();
+  // Logger is initialized globally via logger.h — no setup needed
 
   // Set up a new-handler, because we might need a lot of memory, and
   // we don't know it's there.

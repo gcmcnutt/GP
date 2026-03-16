@@ -1,35 +1,37 @@
 /**
- * This threadpool spawns child processes corresponding to a task thread, and uses sockets for communication
+ * Thread pool that spawns minisim child processes and communicates via TCP sockets.
  */
 #pragma once
 
-#include <boost/asio.hpp>
-#include <boost/process.hpp>
-#include <boost/thread.hpp>
 #include <vector>
 #include <queue>
 #include <functional>
 #include <memory>
 #include <atomic>
-#include <unistd.h>
-#include <chrono>
+#include <mutex>
+#include <condition_variable>
 #include <thread>
+#include <chrono>
+#include <cstdlib>
+#include <cstring>
+#include <unistd.h>
+#include <sys/wait.h>
 
 #include "autoc.h"
 #include "config_manager.h"
 #include "logger.h"
+#include "socket_wrapper.h"
 
 using namespace std;
 
 class ThreadPool {
 private:
-  std::vector<boost::thread> threads;
+  std::vector<std::thread> threads;
   std::vector<std::unique_ptr<WorkerContext>> worker_contexts;
   std::queue<std::function<void(WorkerContext&)>> tasks;
-  boost::mutex queue_mutex;
-  boost::condition_variable condition;
+  std::mutex queue_mutex;
+  std::condition_variable condition;
   bool stop;
-  boost::asio::io_service io_service;
   std::atomic<int> active_tasks{ 0 };
   std::atomic<int> tasks_in_queue{ 0 };
 
@@ -37,44 +39,52 @@ private:
     auto& context = *worker_contexts[id];
     context.workerId = id;
 
-    // Launch subprocess with port as argument
-    tcp::acceptor acceptor_(io_service, tcp::endpoint(tcp::v4(), extraCfg.minisimPortOverride));
-    unsigned short port_ = acceptor_.local_endpoint().port();
+    // Bind a listening socket (port=0 for ephemeral)
+    TcpAcceptor acceptor(extraCfg.minisimPortOverride);
+    unsigned short port_ = acceptor.port();
+
     if (extraCfg.minisimPortOverride > 0) {
       *logger.info() << "Now manually launch sim on port " << port_ << endl;
     }
     else {
       std::string subprocess_path = extraCfg.minisimProgram;
-      std::vector<std::string> args = { std::to_string(getpid()), std::to_string(id), std::to_string(port_) };
       *logger.info() << "Launching: [" << id << "] " << subprocess_path << " " << port_ << endl;
 
-      // Add deterministic stagger to avoid simultaneous launches
+      // Deterministic stagger to avoid simultaneous launches
       unsigned int delayMs = static_cast<unsigned int>((id * 431) % 2000);
       if (delayMs > 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
       }
 
-      boost::process::environment env = boost::this_process::environment();
-      env["AUTOC_DETERMINISTIC"] = "1";
-
-      context.child_process = boost::process::child(
-        subprocess_path,
-        boost::process::args(args),
-        boost::process::env = env
-        // bp::std_out > bp::null,
-        // bp::std_err > bp::null,
-      );
-      context.child_process.detach();
+      // Fork + exec the minisim process
+      pid_t pid = fork();
+      if (pid < 0) {
+        *logger.error() << "fork() failed for worker " << id << ": " << strerror(errno) << endl;
+        return;
+      }
+      if (pid == 0) {
+        // Child process
+        setenv("AUTOC_DETERMINISTIC", "1", 1);
+        std::string pidStr = std::to_string(getppid());
+        std::string idStr = std::to_string(id);
+        std::string portStr = std::to_string(port_);
+        execl(subprocess_path.c_str(), subprocess_path.c_str(),
+              pidStr.c_str(), idStr.c_str(), portStr.c_str(), nullptr);
+        // execl only returns on error
+        std::cerr << "execl failed for worker " << id << ": " << strerror(errno) << std::endl;
+        _exit(1);
+      }
+      // Parent: child is running, we don't wait on it (it'll exit when socket closes)
+      context.childPid = pid;
     }
 
-    // Set up socket connection
-    context.socket = std::make_unique<boost::asio::ip::tcp::socket>(io_service);
-    acceptor_.accept(*context.socket);
+    // Accept connection from minisim
+    context.socket = acceptor.accept();
 
     while (true) {
       std::function<void(WorkerContext&)> task;
       {
-        boost::unique_lock<boost::mutex> lock(queue_mutex);
+        std::unique_lock<std::mutex> lock(queue_mutex);
         condition.wait(lock, [this] { return stop || !tasks.empty(); });
         if (stop && tasks.empty()) return;
         task = std::move(tasks.front());
@@ -82,7 +92,7 @@ private:
         tasks_in_queue--;
         active_tasks++;
       }
-      task(context);  // Pass the context to the task
+      task(context);
     }
   }
 
@@ -91,13 +101,13 @@ public:
     worker_contexts.reserve(extraCfg.evalThreads);
     for (int i = 0; i < extraCfg.evalThreads; ++i) {
       worker_contexts.push_back(std::make_unique<WorkerContext>());
-      threads.emplace_back(&ThreadPool::worker, this, i, extraCfg);
+      threads.emplace_back(&ThreadPool::worker, this, i, std::ref(extraCfg));
     }
   }
 
   ~ThreadPool() {
     {
-      boost::unique_lock<boost::mutex> lock(queue_mutex);
+      std::unique_lock<std::mutex> lock(queue_mutex);
       stop = true;
     }
     condition.notify_all();
@@ -109,7 +119,7 @@ public:
   template<class F>
   void enqueue(F&& f) {
     {
-      boost::unique_lock<boost::mutex> lock(queue_mutex);
+      std::unique_lock<std::mutex> lock(queue_mutex);
       tasks.emplace([this, f = std::forward<F>(f)](WorkerContext& context) {
         f(context);
         active_tasks--;
@@ -121,7 +131,7 @@ public:
   }
 
   void wait_for_tasks() {
-    boost::unique_lock<boost::mutex> lock(queue_mutex);
+    std::unique_lock<std::mutex> lock(queue_mutex);
     condition.wait(lock, [this] {
       return (tasks_in_queue == 0) && (active_tasks == 0);
       });

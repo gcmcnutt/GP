@@ -1,6 +1,5 @@
-/* test sim for aircraft */
-#ifndef AIRCRAFT_STATE_H
-#define AIRCRAFT_STATE_H
+/* aircraft state and path types — shared between desktop and embedded */
+#pragma once
 
 #include <algorithm>
 #include <cmath>
@@ -10,25 +9,17 @@
 #include "gp_types.h"
 #include "nn_topology.h"
 
-#ifdef GP_BUILD
-#include <boost/format.hpp>
-#include <boost/serialization/access.hpp>
-#include <boost/serialization/version.hpp>
+#ifndef ARDUINO
+#include <cereal/cereal.hpp>
+#endif
 #include <vector>
-#define CLAMP_DEF(v, min, max) std::clamp(v, min, max) 
+// Portable math macros — work on desktop (std::) and embedded (Arduino)
+#define CLAMP_DEF(v, lo, hi) ((v) < (lo) ? (lo) : ((v) > (hi) ? (hi) : (v)))
 #define ATAN2_DEF(y, x) std::atan2f(y, x)
 #define ABS_DEF(v) std::fabs(v)
 #define SQRT_DEF(v) std::sqrt(v)
-#define MIN_DEF(a, b) std::min(a, b)
-#define MAX_DEF(a, b) std::max(a, b)
-#else
-#define CLAMP_DEF(v, min, max) ((v) < (min) ? (min) : ((v) > (max) ? (max) : (v)))
-#define ATAN2_DEF(y, x) atan2f(y, x)
-#define ABS_DEF(v) ((v) < 0 ? -(v) : (v))
-#define SQRT_DEF(v) sqrt(v)
 #define MIN_DEF(a, b) ((a) < (b) ? (a) : (b))
 #define MAX_DEF(a, b) ((a) > (b) ? (a) : (b))
-#endif
 
 #define SIM_MAX_ROLL_RATE_RADSEC (static_cast<gp_scalar>(M_PI))
 #define SIM_MAX_PITCH_RATE_RADSEC (static_cast<gp_scalar>(M_PI))
@@ -93,29 +84,22 @@ public:
     if (simTimeMsec < 0) simTimeMsec = 0;
   }
 
-#ifdef GP_BUILD
   void dump(std::ostream& os) {
-    os << boost::format("Path: (%f, %f, %f), Odometer: %f, Turnmeter: %f, Time: %d")
-      % start[0] % start[1] % start[2]
-      % distanceFromStart
-      % radiansFromStart
-      % simTimeMsec;
+    char buf[256];
+    snprintf(buf, sizeof(buf), "Path: (%f, %f, %f), Odometer: %f, Turnmeter: %f, Time: %d",
+      start[0], start[1], start[2], distanceFromStart, radiansFromStart, simTimeMsec);
+    os << buf;
   }
 
-  friend class boost::serialization::access;
-
+#ifndef ARDUINO
   template<class Archive>
-  void serialize(Archive& ar, const unsigned int version) {
-    ar& start;
-    ar& orientation;
-    ar& distanceFromStart;
-    ar& radiansFromStart;
-    ar& simTimeMsec;
+  void serialize(Archive& ar, const std::uint32_t /*version*/) {
+    ar(start, orientation, distanceFromStart, radiansFromStart, simTimeMsec);
   }
 #endif
 };
-#ifdef GP_BUILD
-BOOST_CLASS_VERSION(Path, 2)
+#ifndef ARDUINO
+CEREAL_CLASS_VERSION(Path, 1)
 #endif
 
 // Maximum offset steps for path interpolation (±1 second at 100ms/step)
@@ -138,8 +122,7 @@ public:
     }
 };
 
-#if defined(GP_BUILD) || defined(GP_TEST)
-// Full GP build: Vector-based path provider
+// Vector-based path provider
 class VectorPathProvider : public PathProvider {
 private:
     const std::vector<Path>& paths;
@@ -159,9 +142,8 @@ public:
     int getPathSize() const override { return (int)paths.size(); }
     void setCurrentIndex(int index) { currentIndex = index; }
 };
-#endif
 
-// Embedded build: Single path provider
+// Single path provider
 class SinglePathProvider : public PathProvider {
 private:
     const Path& singlePath;
@@ -385,33 +367,22 @@ struct AircraftState {
     int historyIndex_ = 0;   // Next write position (ring buffer)
     int historyCount_ = 0;   // Valid samples (0 to HISTORY_SIZE)
 
-#ifdef GP_BUILD
-    friend class boost::serialization::access;
-
+#ifndef ARDUINO
+    friend class cereal::access;
     template<class Archive>
-    void serialize(Archive& ar, const unsigned int version) {
-      ar& thisPathIndex;
-      ar& dRelVel;
-      ar& velocity;
-      ar& aircraft_orientation;
-      ar& position;
-      ar& pitchCommand;
-      ar& rollCommand;
-      ar& throttleCommand;
-      ar& simTimeMsec;
-      ar& wind_velocity;
-      if (version >= 3) {
-        ar& hasNNData_;
-        if (hasNNData_) {
-          for (int i = 0; i < NN_INPUT_COUNT; i++) ar& nnInputs_[i];
-          for (int i = 0; i < NN_OUTPUT_COUNT; i++) ar& nnOutputs_[i];
-        }
+    void serialize(Archive& ar, const std::uint32_t /*version*/) {
+      ar(thisPathIndex, dRelVel, velocity, aircraft_orientation, position,
+         pitchCommand, rollCommand, throttleCommand, simTimeMsec, wind_velocity,
+         hasNNData_);
+      if (hasNNData_) {
+        for (int i = 0; i < NN_INPUT_COUNT; i++) ar(nnInputs_[i]);
+        for (int i = 0; i < NN_OUTPUT_COUNT; i++) ar(nnOutputs_[i]);
       }
     }
 #endif
 };
-#ifdef GP_BUILD
-BOOST_CLASS_VERSION(AircraftState, 3)
+#ifndef ARDUINO
+CEREAL_CLASS_VERSION(AircraftState, 1)
 #endif
 
 // Physics trace entry - captures complete FDM state at a single timestep
@@ -489,24 +460,37 @@ struct PhysicsTraceEntry {
 
   PhysicsTraceEntry() { memset(this, 0, sizeof(*this)); }
 
-#ifdef GP_BUILD
+#ifndef ARDUINO
   template <class Archive>
-  void serialize(Archive& ar, const unsigned int version) {
-    ar& step & simTimeMsec & dtSec;
-    ar& workerId & workerPid & evalCounter;
-    ar& pos & vel & acc & accPast;
-    ar& quat & quatDotPast & omegaBody & omegaDotBody & rate & ratePast;
-    ar& alpha & beta & vRelWind & velRelGround & velRelAir & vLocal & vLocalDot;
-    ar& cosAlpha & sinAlpha & cosBeta;
-    ar& CL & CD & CL_left & CL_cent & CL_right & CL_wing & Cl & Cm & Cn & QS;
-    ar& forceBody & momentBody;
-    ar& wind & localAirmass & gustBody & density & gravity;
-    ar& geocentricLat & geocentricLon & geocentricR;
-    ar& pitchCommand & rollCommand & throttleCommand;
-    ar& elevator & aileron & rudder & throttle;
-    ar& rngState16 & rngState32 & pathIndex;
+  void serialize(Archive& ar) {
+    ar(step, simTimeMsec, dtSec);
+    ar(workerId, workerPid, evalCounter);
+    ar(cereal::binary_data(pos, sizeof(pos)));
+    ar(cereal::binary_data(vel, sizeof(vel)));
+    ar(cereal::binary_data(acc, sizeof(acc)));
+    ar(cereal::binary_data(accPast, sizeof(accPast)));
+    ar(cereal::binary_data(quat, sizeof(quat)));
+    ar(cereal::binary_data(quatDotPast, sizeof(quatDotPast)));
+    ar(cereal::binary_data(omegaBody, sizeof(omegaBody)));
+    ar(cereal::binary_data(omegaDotBody, sizeof(omegaDotBody)));
+    ar(cereal::binary_data(rate, sizeof(rate)));
+    ar(cereal::binary_data(ratePast, sizeof(ratePast)));
+    ar(alpha, beta, vRelWind);
+    ar(cereal::binary_data(velRelGround, sizeof(velRelGround)));
+    ar(cereal::binary_data(velRelAir, sizeof(velRelAir)));
+    ar(cereal::binary_data(vLocal, sizeof(vLocal)));
+    ar(cereal::binary_data(vLocalDot, sizeof(vLocalDot)));
+    ar(cosAlpha, sinAlpha, cosBeta);
+    ar(CL, CD, CL_left, CL_cent, CL_right, CL_wing, Cl, Cm, Cn, QS);
+    ar(cereal::binary_data(forceBody, sizeof(forceBody)));
+    ar(cereal::binary_data(momentBody, sizeof(momentBody)));
+    ar(cereal::binary_data(wind, sizeof(wind)));
+    ar(cereal::binary_data(localAirmass, sizeof(localAirmass)));
+    ar(cereal::binary_data(gustBody, sizeof(gustBody)));
+    ar(density, gravity, geocentricLat, geocentricLon, geocentricR);
+    ar(pitchCommand, rollCommand, throttleCommand);
+    ar(elevator, aileron, rudder, throttle);
+    ar(rngState16, rngState32, pathIndex);
   }
 #endif
 };
-
-#endif

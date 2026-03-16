@@ -42,7 +42,6 @@ void nn_xavier_init(NNGenome& genome);
 void nn_gather_inputs(PathProvider& pathProvider, AircraftState& aircraftState,
                       float* inputs);
 
-#ifdef GP_BUILD
 #include "eval_backend.h"
 
 // NN controller backend — plugs into unified eval pipeline
@@ -56,11 +55,8 @@ public:
 private:
     const NNGenome& genome_;
 };
-#endif
 
 // Expose LUT functions for testing
-#ifdef GP_TEST
 gp_scalar testFastTanh(gp_scalar x);
-#endif
 
 #endif

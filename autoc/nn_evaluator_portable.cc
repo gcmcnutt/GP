@@ -162,10 +162,6 @@ static const int HIST_INDICES[] = {0, 1, 3, 9};
 
 void nn_gather_inputs(PathProvider& pathProvider, AircraftState& aircraftState,
                       float* inputs) {
-#ifdef GP_TEST
-    // In test builds, zero-fill (sensor functions not available)
-    for (int i = 0; i < NN_INPUT_COUNT; i++) inputs[i] = 0.0f;
-#else
     // 0-3: dPhi temporal history (0=now, 1=0.1s ago, 3=0.3s ago, 9=0.9s ago)
     for (int i = 0; i < 4; i++)
         inputs[i] = static_cast<float>(aircraftState.getHistoricalDPhi(HIST_INDICES[i]) / NORM_ANGLE);
@@ -203,14 +199,12 @@ void nn_gather_inputs(PathProvider& pathProvider, AircraftState& aircraftState,
     inputs[19] = static_cast<float>(aircraftState.getPitchCommand());
     inputs[20] = static_cast<float>(aircraftState.getRollCommand());
     inputs[21] = static_cast<float>(aircraftState.getThrottleCommand());
-#endif
 }
 
 // ============================================================
 // T039: NNControllerBackend
 // ============================================================
 
-#ifdef GP_BUILD
 NNControllerBackend::NNControllerBackend(const NNGenome& genome)
     : genome_(genome) {}
 
@@ -229,14 +223,11 @@ void NNControllerBackend::evaluate(AircraftState& aircraftState, PathProvider& p
     // Capture actual NN I/O for diagnostics
     aircraftState.setNNData(inputs, NN_INPUT_COUNT, outputs, NN_OUTPUT_COUNT);
 }
-#endif
 
 // ============================================================
 // Test helpers
 // ============================================================
 
-#ifdef GP_TEST
 gp_scalar testFastTanh(gp_scalar x) {
     return fast_tanh(x);
 }
-#endif
